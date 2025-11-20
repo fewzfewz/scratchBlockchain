@@ -1,0 +1,61 @@
+version: '3.8'
+
+services:
+  node1:
+    build: .
+    container_name: blockchain-node1
+    ports:
+      - "30333:30333"
+      - "9933:9933"
+      - "9944:9944"
+    volumes:
+      - node1-data:/data
+    environment:
+      - NODE_NAME=node1
+      - NODE_ID=1
+    networks:
+      - blockchain-net
+
+  node2:
+    build: .
+    container_name: blockchain-node2
+    ports:
+      - "30334:30333"
+      - "9935:9933"
+      - "9946:9944"
+    volumes:
+      - node2-data:/data
+    environment:
+      - NODE_NAME=node2
+      - NODE_ID=2
+    networks:
+      - blockchain-net
+    depends_on:
+      - node1
+
+  node3:
+    build: .
+    container_name: blockchain-node3
+    ports:
+      - "30335:30333"
+      - "9937:9933"
+      - "9948:9944"
+    volumes:
+      - node3-data:/data
+    environment:
+      - NODE_NAME=node3
+      - NODE_ID=3
+    networks:
+      - blockchain-net
+    depends_on:
+      - node1
+      - node2
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+
+networks:
+  blockchain-net:
+    driver: bridge

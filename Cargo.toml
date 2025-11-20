@@ -1,0 +1,15 @@
+[workspace]
+members = [
+    "common",
+    "network",
+    "consensus",
+    "storage",
+    "node",
+    "execution",
+    "zk",
+    "rollup",
+    "interop",
+    "governance",
+    "integration-tests",
+]
+resolver = "2"

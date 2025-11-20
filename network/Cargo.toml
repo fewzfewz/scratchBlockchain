@@ -1,0 +1,11 @@
+[package]
+name = "network"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+libp2p = { version = "0.52", features = ["gossipsub", "kad", "noise", "tcp", "yamux", "dns", "macros", "tokio"] }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+void = "1"

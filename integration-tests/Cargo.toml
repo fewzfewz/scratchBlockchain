@@ -1,0 +1,13 @@
+[package]
+name = "integration-tests"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+consensus = { path = "../consensus" }
+storage = { path = "../storage" }
+governance = { path = "../governance" }
+rollup = { path = "../rollup" }
+interop = { path = "../interop" }
+execution = { path = "../execution" }

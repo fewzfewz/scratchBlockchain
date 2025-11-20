@@ -1,0 +1,13 @@
+[package]
+name = "execution"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+wasmtime = "14.0"
+anyhow = "1.0"
+rayon = "1.7"
+revm = { version = "3.5", default-features = false, features = ["std", "secp256k1"] }
+bytes = "1.4"
+hex = "0.4"

@@ -1,0 +1,2 @@
+# Clippy configuration
+warn-on-all-wildcard-imports = true

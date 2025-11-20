@@ -1,0 +1,9 @@
+[package]
+name = "consensus"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+ed25519-dalek = "2"
+serde = { version = "1.0", features = ["derive"] }
