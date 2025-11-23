@@ -9,5 +9,15 @@ consensus = { path = "../consensus" }
 storage = { path = "../storage" }
 governance = { path = "../governance" }
 rollup = { path = "../rollup" }
+da = { path = "../da" }
 interop = { path = "../interop" }
 execution = { path = "../execution" }
+network = { path = "../network" }
+mempool = { path = "../mempool" }
+node = { path = "../node" }
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+libp2p = { version = "0.52", features = ["request-response", "cbor"] }
+ed25519-dalek = "2.0"
+tempfile = "3.8"
+rand = "0.8"

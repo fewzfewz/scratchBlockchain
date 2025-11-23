@@ -1,141 +1,119 @@
-# Modular Blockchain Architecture
+# Nebula: High-Performance Modular Blockchain
 
-A comprehensive, modular blockchain implementation in Rust featuring multi-VM execution, ZK proofs, optimistic rollups, and cross-chain messaging.
+[![Rust](https://img.shields.io/badge/built_with-Rust-dca282.svg)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docker](https://img.shields.io/badge/docker-ready-blue)](docker-compose.yml)
 
-## 🏗️ Architecture Overview
+**Nebula** is a next-generation blockchain built for high-performance enterprise applications. It combines the security of a validator-based network with the flexibility of a modular architecture, supporting both EVM and WASM smart contracts.
 
-This project implements a layered blockchain architecture with clear separation of concerns:
+## 🚀 Why Nebula?
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Node (CLI)                           │
-├─────────────────────────────────────────────────────────┤
-│  Governance  │  Interop  │  Rollup  │  ZK Prover       │
-├─────────────────────────────────────────────────────────┤
-│           Execution (WASM + EVM + Parallel)             │
-├─────────────────────────────────────────────────────────┤
-│    Consensus (PoA)    │    Storage (KV)                 │
-├─────────────────────────────────────────────────────────┤
-│              Network (libp2p)                           │
-├─────────────────────────────────────────────────────────┤
-│              Common (Types & Traits)                    │
-└─────────────────────────────────────────────────────────┘
-```
+- **⚡ Unmatched Speed**: Parallel transaction execution engine (via `rayon`) processes thousands of transactions per second (TPS), unlike serial execution in legacy chains.
+- **🛡️ Instant Finality**: Powered by a GRANDPA-style finality gadget, ensuring that once a block is finalized, it is irreversible. No waiting for confirmations.
+- **🧩 Modular Design**: Plug-and-play components for Consensus, Execution, and Data Availability. Customize the chain to your needs.
+- **🔐 Enterprise Security**: Built-in TLS for RPC, API rate limiting, and a robust peer reputation system to prevent abuse.
+- **🌐 Multi-VM Support**: Deploy existing Solidity contracts (EVM) or write high-performance modules in Rust (WASM).
 
-## 📦 Crates
+---
 
-### Core Layer
-- **`common`**: Shared types (`Block`, `Transaction`, `Header`) and traits (`Consensus`, `Storage`, `Executor`)
-- **`network`**: P2P networking using libp2p with Gossipsub and Kademlia DHT
-- **`consensus`**: Proof of Authority (PoA) consensus mechanism
-- **`storage`**: In-memory key-value store implementing generic `Storage` trait
-- **`node`**: Main binary with CLI for node management
+## 🛠️ Features
 
-### Execution Layer
-- **`execution`**: Multi-VM execution environment
-  - WASM runtime (wasmtime)
-  - EVM compatibility (revm)
-  - Parallel execution engine (rayon)
+| Feature | Description | Status |
+|---------|-------------|--------|
+| **Consensus** | Validator-based with Ed25519 signatures & GRANDPA finality | ✅ Ready |
+| **Networking** | P2P discovery via libp2p + Gossipsub | ✅ Ready |
+| **Execution** | Multi-VM (EVM + WASM) with Parallel Processing | ✅ Ready |
+| **Storage** | High-performance persistent storage using Sled | ✅ Ready |
+| **Monitoring** | Real-time metrics via Prometheus & Grafana | ✅ Ready |
+| **Security** | TLS, Rate Limiting, DDoS Protection | ✅ Ready |
+| **L2 Support** | Built-in Optimistic Rollup & ZK Prover infrastructure | 🚧 Beta |
 
-### L2 & ZK Layer
-- **`zk`**: Zero-knowledge prover infrastructure using halo2
-- **`rollup`**: Optimistic rollup with batch management and fraud proofs
+---
 
-### Interoperability & Governance
-- **`interop`**: Cross-chain message router with ed25519 signatures
-- **`governance`**: On-chain governance with proposals and voting
-
-## 🚀 Quick Start
+## 🏁 Quick Start
 
 ### Prerequisites
-- Rust (latest stable)
-- `protoc` (Protocol Buffers compiler for libp2p)
+- **Docker** & **Docker Compose**
+- **Rust** (latest stable) - *Optional, for development*
 
-### Build
+### 1. Launch the Network
+Deploy a fully configured 3-node validator network with monitoring in one command:
+
 ```bash
-cargo build --release
+./scripts/deploy.sh
 ```
 
-### Run Node
-```bash
-# Start the node
-cargo run --bin node -- start
+This will start:
+- **3 Validator Nodes** (Ports 9933, 9934, 9935)
+- **Prometheus** (Metrics Scraper)
+- **Grafana** (Dashboard)
 
-# Generate a keypair
-cargo run --bin node -- key-gen
+### 2. Access the Dashboard
+Open your browser to view the real-time network status:
+- **Grafana Dashboard**: [http://localhost:3000](http://localhost:3000) (User: `admin`, Pass: `blockchain2024`)
+
+### 3. Use the Tools
+We provide a built-in Block Explorer and Wallet for interacting with the chain.
+
+- **Block Explorer**: Open `explorer/index.html` in your browser.
+  - View live blocks, transactions, and network stats.
+- **Web Wallet**: Open `wallet/index.html` in your browser.
+  - Generate a secure Ed25519 keypair.
+  - Send transactions to the network.
+
+---
+
+## 💻 Developer Guide
+
+### API Reference
+Interact with the node via JSON-RPC on `http://localhost:9933`.
+
+**Get Status**
+```bash
+curl http://localhost:9933/status
 ```
 
-### Run Tests
+**Submit Transaction**
 ```bash
-cargo test --workspace
+curl -X POST http://localhost:9933/submit_tx -H "Content-Type: application/json" -d '{
+  "sender": "...",
+  "to": "...",
+  "value": 100,
+  "nonce": 1,
+  "signature": "..."
+}'
 ```
 
-## 🔧 Development
+### Running Tests
+Ensure the system is stable by running the integration test suite:
 
-### Project Structure
+```bash
+# Run multi-node consensus tests
+cargo test --test multi_node_consensus
+
+# Run load tests
+cargo test --test load_test
+```
+
+---
+
+## 📂 Project Structure
+
 ```
 .
-├── common/          # Shared types and traits
-├── network/         # P2P networking
-├── consensus/       # Consensus mechanism
-├── storage/         # Data storage
-├── execution/       # Multi-VM execution
-├── zk/             # ZK prover
-├── rollup/         # L2 rollup
-├── interop/        # Cross-chain messaging
-├── governance/     # On-chain governance
-└── node/           # Main binary
+├── common/          # Shared types (Block, Tx) and traits
+├── consensus/       # Consensus logic (GRANDPA, Slashing)
+├── execution/       # VM implementation (EVM, WASM, Parallel)
+├── network/         # P2P networking (libp2p)
+├── node/            # Main node binary & RPC server
+├── storage/         # Database layer (Sled)
+├── explorer/        # Web-based Block Explorer
+├── wallet/          # Web-based Wallet
+└── scripts/         # Deployment & Operation scripts
 ```
 
-### Key Design Decisions
-
-1. **Modularity**: Each component is a separate crate with well-defined interfaces
-2. **Trait-based**: Core functionality defined through traits for easy swapping
-3. **Multi-VM**: Support for both WASM and EVM execution environments
-4. **L2-Ready**: Built-in support for optimistic rollups and ZK proofs
-5. **Interoperable**: Cross-chain message routing with cryptographic verification
-
-## 🎯 Features
-
-### Implemented
-- ✅ P2P networking with peer discovery
-- ✅ Proof of Authority consensus
-- ✅ In-memory storage (ready for persistent DB)
-- ✅ WASM runtime integration
-- ✅ EVM compatibility
-- ✅ Parallel transaction execution
-- ✅ ZK prover infrastructure
-- ✅ Optimistic rollup support
-- ✅ Cross-chain messaging
-- ✅ On-chain governance
-
-### Roadmap
-- 🔲 Persistent storage (RocksDB integration)
-- 🔲 Advanced consensus (GRANDPA/BABE)
-- 🔲 Full ZK rollup implementation
-- 🔲 Light client support
-- 🔲 Multi-node testnet
-- 🔲 Production hardening & audits
-
-## 📚 Documentation
-
-- [Walkthrough](../brain/05a0e82e-975f-40cf-8a31-b0ead6bdb8d9/walkthrough.md): Detailed feature overview
-- [Task Roadmap](../brain/05a0e82e-975f-40cf-8a31-b0ead6bdb8d9/task.md): Development progress
-
 ## 🤝 Contributing
-
-This is a reference implementation demonstrating modular blockchain architecture. Contributions are welcome!
+Contributions are welcome! Please check out the `docs/` directory for detailed architecture documentation.
 
 ## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🔗 Key Dependencies
-
-- **libp2p**: P2P networking
-- **wasmtime**: WASM runtime
-- **revm**: Rust EVM implementation
-- **halo2**: ZK proof system
-- **ed25519-dalek**: Cryptographic signatures
-- **serde**: Serialization
-- **tokio**: Async runtime
+MIT License

@@ -1,0 +1,53 @@
+groups:
+  - name: blockchain_alerts
+    interval: 30s
+    rules:
+      # Node down alert
+      - alert: NodeDown
+        expr: up{job=~"blockchain-node.*"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Blockchain node {{ $labels.instance }} is down"
+          description: "Node {{ $labels.instance }} has been down for more than 1 minute"
+
+      # High block production latency
+      - alert: HighBlockLatency
+        expr: rate(blockchain_blocks_total[5m]) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low block production rate on {{ $labels.instance }}"
+          description: "Block production rate is {{ $value }} blocks/sec"
+
+      # Mempool size growing
+      - alert: MempoolGrowing
+        expr: blockchain_mempool_size > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool size growing on {{ $labels.instance }}"
+          description: "Mempool has {{ $value }} transactions"
+
+      # No peers connected
+      - alert: NoPeersConnected
+        expr: blockchain_peer_count == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No peers connected on {{ $labels.instance }}"
+          description: "Node {{ $labels.instance }} has no peer connections"
+
+      # Finality stalled
+      - alert: FinalityStalled
+        expr: changes(blockchain_finalized_height[10m]) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Finality stalled on {{ $labels.instance }}"
+          description: "No finality progress for 10 minutes"

@@ -1,0 +1,33 @@
+[package]
+name = "benchmarks"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+common = { path = "../common" }
+consensus = { path = "../consensus" }
+storage = { path = "../storage" }
+mempool = { path = "../mempool" }
+execution = { path = "../execution" }
+ed25519-dalek = "2.0"
+rand = "0.8"
+tempfile = "3.8"
+
+[dev-dependencies]
+criterion = "0.5"
+
+[[bench]]
+name = "consensus_bench"
+harness = false
+
+[[bench]]
+name = "mempool_bench"
+harness = false
+
+[[bench]]
+name = "storage_bench"
+harness = false
+
+[[bench]]
+name = "throughput"
+harness = false

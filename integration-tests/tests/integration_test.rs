@@ -5,6 +5,8 @@ use consensus::SimpleConsensus;
 use storage::MemStore;
 use governance::Governance;
 use rollup::{Batch, RollupNode};
+use da::DataAvailability;
+use std::sync::{Arc, Mutex};
 
 #[test]
 fn test_storage_consensus_integration() {
@@ -51,12 +53,15 @@ fn test_governance_full_lifecycle() {
 #[test]
 fn test_rollup_batch_submission() {
     // Test rollup batch lifecycle
-    let mut rollup = RollupNode::new();
+    let da_layer = Arc::new(Mutex::new(DataAvailability::new(4, 2, 10)));
+    let mut rollup = RollupNode::new(rollup::RollupType::Optimistic, da_layer);
     
     let batch = Batch {
         transactions: vec![],
         prev_state_root: vec![0; 32],
         new_state_root: vec![1; 32],
+        zk_proof: None,
+        da_commitment: None,
     };
     
     rollup.submit_batch(batch);

@@ -1,0 +1,78 @@
+# Testnet Configuration
+
+[network]
+chain_id = "modular-testnet-1"
+network_name = "Modular Blockchain Testnet"
+
+[genesis]
+# Genesis timestamp (Unix timestamp)
+timestamp = 1700000000
+
+# Genesis accounts with initial balances
+[[genesis.accounts]]
+address = "0x1111111111111111111111111111111111111111"
+balance = 1000000000000000000
+
+[[genesis.accounts]]
+address = "0x2222222222222222222222222222222222222222"
+balance = 1000000000000000000
+
+[[genesis.accounts]]
+address = "0x3333333333333333333333333333333333333333"
+balance = 1000000000000000000
+
+[consensus]
+# Block time in seconds
+block_time = 6
+
+# Finality threshold (2/3 of validators)
+finality_threshold = 0.67
+
+# Validator set
+[[consensus.validators]]
+name = "validator-1"
+public_key = "validator1_pubkey_placeholder"
+stake = 100
+
+[[consensus.validators]]
+name = "validator-2"
+public_key = "validator2_pubkey_placeholder"
+stake = 100
+
+[[consensus.validators]]
+name = "validator-3"
+public_key = "validator3_pubkey_placeholder"
+stake = 100
+
+[network_config]
+# Bootstrap nodes for peer discovery
+bootstrap_nodes = [
+    "/ip4/127.0.0.1/tcp/30333/p2p/12D3KooWBootstrap1",
+    "/ip4/127.0.0.1/tcp/30334/p2p/12D3KooWBootstrap2"
+]
+
+# Maximum number of peers
+max_peers = 50
+
+# Network listen address
+listen_addr = "/ip4/0.0.0.0/tcp/30333"
+
+[rpc]
+# RPC server port
+port = 9933
+
+# Enable metrics endpoint
+enable_metrics = true
+
+[mempool]
+# Maximum transactions in mempool
+max_size = 10000
+
+# MEV protection enabled
+mev_protection = true
+
+# Minimum reveal delay (seconds)
+min_reveal_delay = 2
+
+# Maximum reveal delay (seconds)
+max_reveal_delay = 30

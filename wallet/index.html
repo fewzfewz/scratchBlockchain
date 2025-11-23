@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nebula Wallet | Modular Blockchain</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../explorer/style.css"> <!-- Reuse explorer styles -->
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tweetnacl/1.0.3/nacl-fast.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tweetnacl-util/0.15.1/nacl-util.min.js"></script>
+</head>
+<body>
+    <div class="background-glow"></div>
+    
+    <nav class="navbar">
+        <div class="logo">
+            <i data-lucide="wallet"></i>
+            <span>Nebula Wallet</span>
+        </div>
+        <div class="nav-links">
+            <a href="../explorer/index.html">Explorer</a>
+            <a href="#" class="active">Wallet</a>
+        </div>
+    </nav>
+
+    <main class="container">
+        <div class="wallet-grid">
+            <!-- Account Section -->
+            <div class="panel account-panel">
+                <div class="panel-header">
+                    <h2><i data-lucide="user"></i> Account</h2>
+                    <button id="generateBtn" class="btn-primary">
+                        <i data-lucide="refresh-cw"></i> Generate New
+                    </button>
+                </div>
+                <div class="panel-body">
+                    <div class="info-group">
+                        <label>Public Address</label>
+                        <div class="copy-field">
+                            <input type="text" id="addressDisplay" readonly placeholder="Not connected">
+                            <button class="btn-icon" id="copyAddress"><i data-lucide="copy"></i></button>
+                        </div>
+                    </div>
+                    <div class="info-group">
+                        <label>Private Key (Save this!)</label>
+                        <div class="copy-field">
+                            <input type="password" id="privateKeyDisplay" readonly placeholder="Not connected">
+                            <button class="btn-icon" id="toggleKey"><i data-lucide="eye"></i></button>
+                            <button class="btn-icon" id="copyKey"><i data-lucide="copy"></i></button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Balance Section -->
+            <div class="panel balance-panel">
+                <div class="panel-header">
+                    <h2><i data-lucide="coins"></i> Balance</h2>
+                    <button id="refreshBalanceBtn" class="btn-secondary">
+                        <i data-lucide="refresh-ccw"></i>
+                    </button>
+                </div>
+                <div class="panel-body centered">
+                    <h1 id="balanceDisplay">0.00</h1>
+                    <span class="currency">NBL</span>
+                </div>
+            </div>
+
+            <!-- Send Transaction Section -->
+            <div class="panel send-panel">
+                <div class="panel-header">
+                    <h2><i data-lucide="send"></i> Send Funds</h2>
+                </div>
+                <div class="panel-body">
+                    <form id="sendForm">
+                        <div class="form-group">
+                            <label>Recipient Address</label>
+                            <input type="text" id="recipientInput" placeholder="Enter address..." required>
+                        </div>
+                        <div class="form-group">
+                            <label>Amount</label>
+                            <input type="number" id="amountInput" placeholder="0.00" min="0" step="any" required>
+                        </div>
+                        <button type="submit" class="btn-primary full-width">
+                            Send Transaction
+                        </button>
+                    </form>
+                    <div id="txStatus" class="status-message hidden"></div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="app.js"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>

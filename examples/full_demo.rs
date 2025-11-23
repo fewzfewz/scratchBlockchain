@@ -45,7 +45,7 @@ fn main() {
 
     // 5. Rollup Layer
     println!("5. Rollup Layer");
-    let mut rollup = RollupNode::new();
+    let mut rollup = RollupNode::new(rollup::RollupType::Optimistic);
     let batch = Batch {
         transactions: vec![],
         prev_state_root: vec![0; 32],

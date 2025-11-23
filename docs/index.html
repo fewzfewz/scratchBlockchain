@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nebula Docs | Modular Blockchain</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="../explorer/style.css"> <!-- Reuse explorer styles -->
+    <link rel="stylesheet" href="style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+</head>
+<body>
+    <div class="background-glow"></div>
+    
+    <nav class="navbar">
+        <div class="logo">
+            <i data-lucide="book"></i>
+            <span>Nebula Docs</span>
+        </div>
+        <div class="nav-links">
+            <a href="../explorer/index.html">Explorer</a>
+            <a href="../wallet/index.html">Wallet</a>
+            <a href="#" class="active">Docs</a>
+        </div>
+    </nav>
+
+    <main class="docs-container">
+        <aside class="sidebar">
+            <div class="sidebar-group">
+                <h3>Getting Started</h3>
+                <a href="#intro" class="active">Introduction</a>
+                <a href="#install">Installation</a>
+                <a href="#quickstart">Quick Start</a>
+            </div>
+            <div class="sidebar-group">
+                <h3>Architecture</h3>
+                <a href="#consensus">Consensus</a>
+                <a href="#networking">Networking</a>
+                <a href="#storage">Storage</a>
+            </div>
+            <div class="sidebar-group">
+                <h3>API Reference</h3>
+                <a href="#rpc">RPC Endpoints</a>
+                <a href="#types">Data Types</a>
+            </div>
+        </aside>
+
+        <div class="content">
+            <section id="intro">
+                <h1>Introduction to Nebula</h1>
+                <p class="lead">A high-performance, modular blockchain built in Rust.</p>
+                <p>Nebula is designed for scalability and flexibility, featuring a multi-VM execution environment, validator-based consensus with instant finality, and built-in Layer 2 support.</p>
+                
+                <div class="feature-grid">
+                    <div class="feature-card">
+                        <i data-lucide="zap"></i>
+                        <h4>High Performance</h4>
+                        <p>Parallel transaction execution and high-throughput mempool.</p>
+                    </div>
+                    <div class="feature-card">
+                        <i data-lucide="shield"></i>
+                        <h4>Secure</h4>
+                        <p>Ed25519 signatures and GRANDPA-style finality gadget.</p>
+                    </div>
+                    <div class="feature-card">
+                        <i data-lucide="layers"></i>
+                        <h4>Modular</h4>
+                        <p>Pluggable consensus, execution, and data availability layers.</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="install">
+                <h2>Installation</h2>
+                <p>Prerequisites: Rust (latest stable) and Docker.</p>
+                <pre><code class="language-bash"># Clone the repository
+git clone https://github.com/your-org/nebula.git
+cd nebula
+
+# Build release binary
+cargo build --release</code></pre>
+            </section>
+
+            <section id="quickstart">
+                <h2>Quick Start</h2>
+                <p>Deploy a local 3-node testnet using Docker Compose.</p>
+                <pre><code class="language-bash"># Run deployment script
+./scripts/deploy.sh
+
+# Check status
+curl http://localhost:9933/status</code></pre>
+            </section>
+
+            <section id="rpc">
+                <h2>RPC API</h2>
+                <p>Interact with the node via HTTP JSON-RPC.</p>
+                
+                <div class="endpoint">
+                    <span class="method get">GET</span>
+                    <span class="path">/status</span>
+                </div>
+                <p>Returns current node status including block height and peer count.</p>
+                
+                <div class="endpoint">
+                    <span class="method post">POST</span>
+                    <span class="path">/submit_tx</span>
+                </div>
+                <p>Submit a signed transaction to the mempool.</p>
+                <pre><code class="language-json">{
+  "sender": "0x...",
+  "to": "0x...",
+  "value": 100,
+  "nonce": 1,
+  "signature": "..."
+}</code></pre>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        lucide.createIcons();
+        hljs.highlightAll();
+
+        // Simple scroll spy
+        const links = document.querySelectorAll('.sidebar a');
+        links.forEach(link => {
+            link.addEventListener('click', (e) => {
+                links.forEach(l => l.classList.remove('active'));
+                e.target.classList.add('active');
+            });
+        });
+    </script>
+</body>
+</html>

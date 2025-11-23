@@ -11,5 +11,8 @@ members = [
     "interop",
     "governance",
     "integration-tests",
+    "da",
+    "mempool",
+    "mev", "benchmarks",
 ]
 resolver = "2"

@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nebula Explorer | Modular Blockchain</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.4/moment.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+    <div class="background-glow"></div>
+    
+    <nav class="navbar">
+        <div class="logo">
+            <i data-lucide="box"></i>
+            <span>Nebula Explorer</span>
+        </div>
+        <div class="nav-links">
+            <a href="#" class="active">Dashboard</a>
+            <a href="#">Blocks</a>
+            <a href="#">Transactions</a>
+            <a href="#">Validators</a>
+        </div>
+        <div class="search-bar">
+            <i data-lucide="search"></i>
+            <input type="text" id="searchInput" placeholder="Search by Block / Tx Hash / Address...">
+        </div>
+    </nav>
+
+    <main class="container">
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-icon"><i data-lucide="layers"></i></div>
+                <div class="stat-info">
+                    <h3>Block Height</h3>
+                    <p id="blockHeight" class="animate-value">Loading...</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><i data-lucide="activity"></i></div>
+                <div class="stat-info">
+                    <h3>TPS (Live)</h3>
+                    <p id="tps" class="animate-value">Loading...</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><i data-lucide="users"></i></div>
+                <div class="stat-info">
+                    <h3>Active Peers</h3>
+                    <p id="peerCount" class="animate-value">Loading...</p>
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon"><i data-lucide="clock"></i></div>
+                <div class="stat-info">
+                    <h3>Last Block</h3>
+                    <p id="lastBlockTime">Loading...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Grid -->
+        <div class="content-grid">
+            <!-- Latest Blocks -->
+            <div class="panel">
+                <div class="panel-header">
+                    <h2><i data-lucide="box"></i> Latest Blocks</h2>
+                    <button class="btn-secondary">View All</button>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Height</th>
+                                <th>Hash</th>
+                                <th>Txns</th>
+                                <th>Time</th>
+                            </tr>
+                        </thead>
+                        <tbody id="blocksTable">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Latest Transactions -->
+            <div class="panel">
+                <div class="panel-header">
+                    <h2><i data-lucide="file-text"></i> Latest Transactions</h2>
+                    <button class="btn-secondary">View All</button>
+                </div>
+                <div class="table-container">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Hash</th>
+                                <th>From</th>
+                                <th>To</th>
+                                <th>Value</th>
+                            </tr>
+                        </thead>
+                        <tbody id="txTable">
+                            <!-- Populated by JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="app.js"></script>
+    <script>
+        lucide.createIcons();
+    </script>
+</body>
+</html>
