@@ -9,6 +9,12 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy)]
 pub struct ReputationScore(i32);
 
+impl Default for ReputationScore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ReputationScore {
     pub fn new() -> Self {
         Self(0)
@@ -31,6 +37,12 @@ pub struct PeerReputation {
     scores: HashMap<PeerId, ReputationScore>,
     last_update: HashMap<PeerId, Instant>,
     banned_peers: HashMap<PeerId, Instant>, // PeerId -> Ban expiration
+}
+
+impl Default for PeerReputation {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PeerReputation {
@@ -56,13 +68,13 @@ impl PeerReputation {
     }
 
     pub fn report_good_behavior(&mut self, peer: PeerId) {
-        let score = self.scores.entry(peer).or_insert(ReputationScore::new());
+        let score = self.scores.entry(peer).or_default();
         score.update(1);
         self.last_update.insert(peer, Instant::now());
     }
 
     pub fn report_bad_behavior(&mut self, peer: PeerId, severity: i32) {
-        let score = self.scores.entry(peer).or_insert(ReputationScore::new());
+        let score = self.scores.entry(peer).or_default();
         score.update(-severity);
         self.last_update.insert(peer, Instant::now());
 

@@ -1,4 +1,4 @@
-use common::types::{Block, Transaction};
+use common::types::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::error::Error;
@@ -48,6 +48,7 @@ pub struct EncryptedTransaction {
 
 pub struct ThresholdEncryption {
     threshold: usize,
+    #[allow(dead_code)]
     total_shards: usize,
     decryption_shares: HashMap<u64, Vec<Vec<u8>>>, // tx_hash -> shares
 }
@@ -81,7 +82,7 @@ impl ThresholdEncryption {
     pub fn submit_share(&mut self, tx_hash: u64, share: Vec<u8>) {
         self.decryption_shares
             .entry(tx_hash)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(share);
     }
 
@@ -113,6 +114,12 @@ impl ThresholdEncryption {
 
 pub struct MEVAuction {
     bids: Vec<BuilderBid>,
+}
+
+impl Default for MEVAuction {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MEVAuction {

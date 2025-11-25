@@ -23,6 +23,7 @@ fn bytes_to_nibbles(bytes: &[u8]) -> NibblePath {
 }
 
 /// Convert nibble path back to bytes (assumes even length)
+#[allow(dead_code)]
 fn nibbles_to_bytes(nibbles: &[Nibble]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(nibbles.len() / 2);
     for chunk in nibbles.chunks(2) {
@@ -40,6 +41,7 @@ fn common_prefix_len(a: &[Nibble], b: &[Nibble]) -> usize {
 
 /// Trie node types
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(clippy::large_enum_variant)]
 pub enum TrieNode {
     /// Empty node
     Empty,
@@ -156,7 +158,7 @@ impl PatriciaTrie {
         }
         
         // Load from persistent storage
-        if let Some(data) = self.db.get(&hash)? {
+        if let Some(data) = self.db.get(hash)? {
             let node = TrieNode::decode(&data)?;
             return Ok(node);
         }
@@ -167,7 +169,7 @@ impl PatriciaTrie {
     fn persist_node(&mut self, hash: NodeHash) -> Result<(), Box<dyn Error>> {
         if let Some(node) = self.nodes.get(&hash) {
             let encoded = node.encode();
-            self.db.insert(&hash, encoded.as_slice())?;
+            self.db.insert(hash, encoded.as_slice())?;
             self.db.flush()?;
         }
         Ok(())

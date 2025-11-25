@@ -1,79 +1,103 @@
-use anyhow::Result;
-use ed25519_dalek::{Signer, SigningKey};
+use common::types::{Address, Transaction};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+
+pub mod ethereum_bridge;
+pub mod relayer;
+pub mod token_registry;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CrossChainMessage {
-    pub source_chain: u64,
-    pub target_chain: u64,
+    pub source_chain: String,
+    pub dest_chain: String,
     pub nonce: u64,
+    pub sender: Address,
+    pub recipient: Address,
+    pub amount: u64,
     pub payload: Vec<u8>,
-    pub signature: Option<Vec<u8>>, // Signature over the message content
 }
 
-pub struct Router {
-    pub chain_id: u64,
-    pub inbox: Vec<CrossChainMessage>,
-    pub outbox: Vec<CrossChainMessage>,
-    // In a real implementation, we would manage keys securely
-    pub signing_key: SigningKey,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeContract {
+    pub chain_id: String,
+    pub locked_assets: HashMap<Address, u64>, // User -> Amount
+    pub processed_nonces: HashMap<String, u64>, // SourceChain -> LastNonce
+    pub relayers: Vec<Vec<u8>>, // Public keys of authorized relayers
 }
 
-impl Router {
-    pub fn new(chain_id: u64) -> Self {
-        let mut csprng = rand::rngs::OsRng;
-        let signing_key = SigningKey::generate(&mut csprng);
-
+impl BridgeContract {
+    pub fn new(chain_id: String, relayers: Vec<Vec<u8>>) -> Self {
         Self {
             chain_id,
-            inbox: Vec::new(),
-            outbox: Vec::new(),
-            signing_key,
+            locked_assets: HashMap::new(),
+            processed_nonces: HashMap::new(),
+            relayers,
         }
     }
 
-    pub fn send_message(&mut self, target_chain: u64, payload: Vec<u8>) -> Result<()> {
-        let mut msg = CrossChainMessage {
-            source_chain: self.chain_id,
-            target_chain,
-            nonce: self.outbox.len() as u64,
-            payload,
-            signature: None,
+    /// Lock assets to be sent to another chain
+    pub fn lock_assets(
+        &mut self,
+        sender: Address,
+        dest_chain: String,
+        recipient: Address,
+        amount: u64,
+    ) -> Result<CrossChainMessage, String> {
+        // In a real system, we would transfer funds from sender to bridge account here.
+        // For this simulation, we just track the locked amount.
+        
+        let current_locked = self.locked_assets.entry(sender).or_insert(0);
+        *current_locked += amount;
+
+        let _nonce = self.processed_nonces.get(&dest_chain).unwrap_or(&0) + 1; // This logic is slightly wrong for outbound, but ok for MVP
+        // Actually, nonce should be per sender or global outbound nonce.
+        // Let's use a simple global nonce for now.
+        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+
+        let message = CrossChainMessage {
+            source_chain: self.chain_id.clone(),
+            dest_chain,
+            nonce,
+            sender,
+            recipient,
+            amount,
+            payload: vec![],
         };
 
-        // Sign the message (simplified: signing the payload for now)
-        // Real implementation should sign the hash of the entire struct
-        let signature = self.signing_key.sign(&msg.payload);
-        msg.signature = Some(signature.to_vec());
-
-        self.outbox.push(msg);
-        println!("Message added to outbox for chain {}", target_chain);
-        Ok(())
+        Ok(message)
     }
 
-    pub fn receive_message(&mut self, msg: CrossChainMessage) -> Result<()> {
-        if msg.target_chain != self.chain_id {
-            return Err(anyhow::anyhow!("Message not for this chain"));
+    /// Unlock assets (Mint/Release) based on proof from another chain
+    pub fn unlock_assets(
+        &mut self,
+        message: CrossChainMessage,
+        _relayer_sig: Vec<u8>,
+        relayer_pubkey: Vec<u8>,
+    ) -> Result<(), String> {
+        if message.dest_chain != self.chain_id {
+            return Err("Wrong destination chain".into());
         }
 
-        // Verify signature (simplified: assuming we know the sender's public key)
-        // In reality, we'd look up the validator set for source_chain
-        if let Some(sig_bytes) = &msg.signature {
-            if sig_bytes.len() != 64 {
-                return Err(anyhow::anyhow!("Invalid signature length"));
-            }
-            // Mock verification: we can't verify without the sender's public key here
-            // For this MVP, we just check presence
-        } else {
-            return Err(anyhow::anyhow!("Missing signature"));
+        // Verify relayer is authorized
+        if !self.relayers.contains(&relayer_pubkey) {
+            return Err("Unauthorized relayer".into());
         }
 
-        println!("Message received from chain {}", msg.source_chain);
-        self.inbox.push(msg);
+        // Verify signature (Mocked for now)
+        // verify_signature(&message, &relayer_sig, &relayer_pubkey)?;
+
+        // Check replay
+        let last_nonce = self.processed_nonces.entry(message.source_chain.clone()).or_insert(0);
+        if message.nonce <= *last_nonce {
+            return Err("Message already processed".into());
+        }
+        *last_nonce = message.nonce;
+
+        // Release assets
+        // In real system: Mint wrapped tokens or release native tokens
+        // Here we just log it
+        println!("Releasing {} to {:?}", message.amount, message.recipient);
+
         Ok(())
     }
-}
-
-pub fn init() {
-    println!("Interop Router initialized (use Router::new)");
 }

@@ -6,7 +6,7 @@ pub mod rate_limiter;
 pub mod reputation;
 
 use behaviour::NodeBehaviour;
-use common::types::{Block, Hash, Transaction};
+use common::types::{Block, Transaction};
 use common::consensus_types::ConsensusMessage;
 use rate_limiter::{RateLimiter, RateLimitConfig, MessageType};
 use futures::StreamExt;
@@ -19,12 +19,12 @@ use libp2p::{
     swarm::{Config, SwarmEvent},
     Multiaddr, PeerId, Swarm,
 };
-use protocol::{BlockExchangeCodec, BlockExchangeProtocol, BlockRequest, BlockResponse};
+use protocol::{BlockExchangeProtocol, BlockRequest, BlockResponse};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::iter;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
 // Gossipsub topics
@@ -73,6 +73,7 @@ pub struct NetworkService {
     event_sender: mpsc::Sender<NetworkEvent>,
     pending_requests: HashSet<request_response::RequestId>,
     rate_limiter: std::sync::Arc<std::sync::Mutex<RateLimiter>>,
+    reputation: reputation::PeerReputation,
 }
 
 #[derive(Debug)]
@@ -94,8 +95,10 @@ pub enum NetworkCommand {
     SavePeers,
 }
 
+pub type NetworkServiceInit = (NetworkService, mpsc::Sender<NetworkCommand>, mpsc::Receiver<NetworkEvent>);
+
 impl NetworkService {
-    pub fn new() -> Result<(Self, mpsc::Sender<NetworkCommand>, mpsc::Receiver<NetworkEvent>), Box<dyn Error>> {
+    pub fn new() -> Result<NetworkServiceInit, Box<dyn Error>> {
         let local_key = identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
         info!("Local peer id: {:?}", local_peer_id);
@@ -172,6 +175,7 @@ impl NetworkService {
             event_sender,
             pending_requests: HashSet::new(),
             rate_limiter,
+            reputation: reputation::PeerReputation::new(),
         };
 
         // Load peers from disk

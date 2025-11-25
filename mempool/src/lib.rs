@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use common::types::Transaction;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use tracing::{info, warn};
+use tracing::info;
 
 /// Mempool configuration
 #[derive(Debug, Clone)]

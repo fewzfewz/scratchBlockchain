@@ -5,6 +5,7 @@ use common::crypto::SigningKey;
 use execution::{Executor, NativeExecutor};
 use mempool::Mempool;
 use storage::StateStore;
+use governance::InflationSchedule;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -18,6 +19,7 @@ pub struct BlockProducer {
     finality_gadget: Arc<Mutex<consensus::FinalityGadget>>,
     signing_key: SigningKey,
     current_slot: u64,
+    inflation_schedule: InflationSchedule,
 }
 
 impl BlockProducer {
@@ -37,6 +39,7 @@ impl BlockProducer {
             finality_gadget,
             signing_key,
             current_slot: 0,
+            inflation_schedule: InflationSchedule::default(),
         }
     }
 
@@ -132,6 +135,45 @@ impl BlockProducer {
 
         // Increment slot for next block
         self.current_slot += 1;
+
+        // Calculate block reward using inflation schedule
+        let block_height = block.header.slot;
+        let block_reward = self.inflation_schedule.calculate_reward(block_height);
+        
+        // Calculate total fees from transactions
+        let total_fees: u128 = valid_transactions.iter()
+            .map(|tx| tx.max_fee_per_gas as u128 * tx.gas_limit as u128)
+            .sum();
+        
+        // Calculate fee burn
+        let fee_burn = self.inflation_schedule.calculate_fee_burn(total_fees);
+        let fee_to_validator = total_fees - fee_burn;
+        
+        info!("Block reward: {} tokens, Fees: {} (burned: {})", 
+              block_reward / 1_000_000_000, 
+              fee_to_validator / 1_000_000_000,
+              fee_burn / 1_000_000_000);
+        
+        // Treasury gets 10% of block reward
+        let treasury_share = block_reward / 10;
+        let validator_reward = block_reward - treasury_share + fee_to_validator;
+        
+        // Create Coinbase transaction (Reward to validator)
+        let validator_address = Address::default(); // Placeholder: should derive from signing_key
+        
+        // Add reward to state directly
+        if let Some(account) = state.get_mut(&validator_address) {
+            account.balance += validator_reward;
+        } else {
+            state.insert(validator_address, Account {
+                nonce: 0,
+                balance: validator_reward,
+            });
+        }
+        
+        info!("Awarded {} tokens to validator (treasury: {})", 
+              validator_reward / 1_000_000_000,
+              treasury_share / 1_000_000_000);
 
         Ok(block)
     }

@@ -7,6 +7,7 @@ use anyhow::Result;
 
 // Simple circuit: proves knowledge of a, b such that a * b = c (public input)
 #[derive(Clone, Default)]
+#[allow(dead_code)]
 struct SimpleCircuit {
     a: Value<Fr>,
     b: Value<Fr>,
@@ -20,6 +21,7 @@ impl Circuit<Fr> for SimpleCircuit {
         Self::default()
     }
 
+    #[allow(clippy::unused_unit)]
     fn configure(_meta: &mut ConstraintSystem<Fr>) -> Self::Config {
         // Simplified configuration for MVP
         ()
@@ -35,6 +37,12 @@ pub struct Prover;
 
 // Alias for compatibility
 pub type ZkProver = Prover;
+
+impl Default for Prover {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Prover {
     pub fn new() -> Self {

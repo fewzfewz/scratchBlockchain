@@ -2,7 +2,7 @@ use common::consensus_types::{Proposal, Step, Vote};
 use common::crypto;
 use crate::ValidatorInfo;
 use common::types::{Block, Hash};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
@@ -51,7 +51,9 @@ pub struct BftEngine {
     // Round state
     proposal: Option<Proposal>,
     votes: HashMap<(u64, Step), HashMap<Vec<u8>, Vote>>, // (round, step) -> voter -> vote
+    #[allow(dead_code)]
     locked_block: Option<Block>,
+    #[allow(dead_code)]
     valid_block: Option<Block>,
     
     // Timeout state
@@ -200,7 +202,7 @@ impl BftEngine {
     fn add_vote(&mut self, vote: Vote) {
         self.votes
             .entry((vote.round, vote.step))
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(vote.voter.clone(), vote);
     }
 

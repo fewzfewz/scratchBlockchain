@@ -4,7 +4,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 /// Persistent storage for peer multiaddrs
 #[derive(Debug, Clone, Serialize, Deserialize)]

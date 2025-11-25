@@ -1,0 +1,57 @@
+[chain]
+chain_id = "modular-blockchain-mainnet"
+timestamp = 1735689600  # 2025-01-01 00:00:00 UTC
+initial_height = 0
+
+[consensus]
+block_time_ms = 3000
+max_validators = 100
+min_stake = "1000000"
+
+[governance]
+proposal_deposit = "10000"
+voting_period_blocks = 100800  # ~7 days at 3s blocks
+quorum_threshold = "0.334"
+
+# Initial validator set
+[[validators]]
+address = "0x1111111111111111111111111111111111111111"
+stake = "10000000"
+commission_rate = "0.10"
+
+[[validators]]
+address = "0x2222222222222222222222222222222222222222"
+stake = "8000000"
+commission_rate = "0.08"
+
+[[validators]]
+address = "0x3333333333333333333333333333333333333333"
+stake = "6000000"
+commission_rate = "0.05"
+
+[[validators]]
+address = "0x4444444444444444444444444444444444444444"
+stake = "5000000"
+commission_rate = "0.07"
+
+[[validators]]
+address = "0x5555555555555555555555555555555555555555"
+stake = "4000000"
+commission_rate = "0.06"
+
+# Initial token distribution
+[[accounts]]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+balance = "100000000000"
+
+[[accounts]]
+address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+balance = "50000000000"
+
+[[accounts]]
+address = "0xcccccccccccccccccccccccccccccccccccccccc"
+balance = "25000000000"
+
+[[accounts]]
+address = "0xdddddddddddddddddddddddddddddddddddddddd"
+balance = "10000000000"

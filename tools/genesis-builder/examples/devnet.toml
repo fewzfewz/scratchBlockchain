@@ -1,0 +1,25 @@
+[chain]
+chain_id = "modular-blockchain-devnet"
+timestamp = 1600000000
+initial_height = 0
+
+[consensus]
+block_time_ms = 500  # Very fast for development
+max_validators = 10
+min_stake = "1000"
+
+[governance]
+proposal_deposit = "100"
+voting_period_blocks = 100  # ~50 seconds
+quorum_threshold = "0.1"
+
+# Single validator for dev
+[[validators]]
+address = "0x1111111111111111111111111111111111111111"
+stake = "10000"
+commission_rate = "0.0"
+
+# Dev account with large balance
+[[accounts]]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+balance = "1000000000000"

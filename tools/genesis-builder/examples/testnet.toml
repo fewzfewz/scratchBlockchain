@@ -1,0 +1,39 @@
+[chain]
+chain_id = "modular-blockchain-testnet"
+timestamp = 1700000000
+initial_height = 0
+
+[consensus]
+block_time_ms = 1000  # Faster for testing
+max_validators = 50
+min_stake = "100000"
+
+[governance]
+proposal_deposit = "1000"
+voting_period_blocks = 1000  # ~16 minutes
+quorum_threshold = "0.25"
+
+# Test validators
+[[validators]]
+address = "0x1111111111111111111111111111111111111111"
+stake = "1000000"
+commission_rate = "0.05"
+
+[[validators]]
+address = "0x2222222222222222222222222222222222222222"
+stake = "800000"
+commission_rate = "0.05"
+
+[[validators]]
+address = "0x3333333333333333333333333333333333333333"
+stake = "600000"
+commission_rate = "0.05"
+
+# Test accounts
+[[accounts]]
+address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+balance = "10000000000"
+
+[[accounts]]
+address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+balance = "5000000000"

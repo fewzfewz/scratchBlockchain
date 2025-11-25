@@ -1,0 +1,8 @@
+[network]
+listen_addr = "/ip4/0.0.0.0/tcp/30333"
+
+[rpc]
+port = 9933
+
+[storage]
+data_dir = "testnet/node1/data"

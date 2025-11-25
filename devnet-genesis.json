@@ -1,0 +1,34 @@
+{
+  "chain_id": "modular-blockchain-devnet",
+  "timestamp": 1600000000,
+  "initial_height": 0,
+  "consensus_params": {
+    "block_time_ms": 500,
+    "max_validators": 10,
+    "min_stake": 1000
+  },
+  "governance_params": {
+    "proposal_deposit": 100,
+    "voting_period_blocks": 100,
+    "quorum_threshold": 0.1
+  },
+  "validators": [
+    {
+      "address": "0x1111111111111111111111111111111111111111",
+      "stake": 10000,
+      "commission_rate": 0.0,
+      "public_key": "pubkey_0x1111111111111111111111111111111111111111"
+    }
+  ],
+  "accounts": [
+    {
+      "address": "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "balance": 1000000000000,
+      "nonce": 0
+    }
+  ],
+  "app_state": {
+    "total_supply": 1000000000000,
+    "total_stake": 10000
+  }
+}

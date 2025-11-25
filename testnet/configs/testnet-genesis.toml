@@ -1,0 +1,57 @@
+# Testnet Genesis Configuration
+chain_id = "modular-testnet-1"
+timestamp = 1732500000
+initial_height = 0
+
+[consensus]
+block_time_ms = 3000
+max_validators = 100
+min_stake = "1000000000000000000000"  # 1000 tokens
+
+[governance]
+proposal_deposit = "10000000000000000000000"  # 10000 tokens
+voting_period_blocks = 28800  # ~24 hours at 3s blocks
+quorum_threshold = 0.334
+approval_threshold = 0.667
+
+# Bootstrap validators
+[[validators]]
+address = "0x1234567890123456789012345678901234567890"
+stake = "10000000000000000000000"  # 10000 tokens
+commission_rate = 0.10
+name = "Genesis Validator 1"
+
+[[validators]]
+address = "0x2345678901234567890123456789012345678901"
+stake = "10000000000000000000000"
+commission_rate = 0.10
+name = "Genesis Validator 2"
+
+[[validators]]
+address = "0x3456789012345678901234567890123456789012"
+stake = "10000000000000000000000"
+commission_rate = 0.10
+name = "Genesis Validator 3"
+
+# Initial token distribution
+[[accounts]]
+address = "0x1234567890123456789012345678901234567890"
+balance = "100000000000000000000000"  # 100k tokens
+
+[[accounts]]
+address = "0x2345678901234567890123456789012345678901"
+balance = "100000000000000000000000"
+
+[[accounts]]
+address = "0x3456789012345678901234567890123456789012"
+balance = "100000000000000000000000"
+
+# Faucet account
+[[accounts]]
+address = "0xFAUCET0000000000000000000000000000000000"
+balance = "10000000000000000000000000"  # 10M tokens for faucet
+
+# Treasury
+[[accounts]]
+address = "0xTREASURY000000000000000000000000000000"
+balance = "100000000000000000000000000"  # 100M tokens

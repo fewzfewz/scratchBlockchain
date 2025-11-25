@@ -14,5 +14,9 @@ members = [
     "da",
     "mempool",
     "mev", "benchmarks",
+    "interop/fuzz",
+    "consensus/fuzz",
+    "tools/genesis-builder",
+    "runtime",
 ]
 resolver = "2"

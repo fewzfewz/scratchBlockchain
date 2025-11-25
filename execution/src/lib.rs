@@ -38,6 +38,12 @@ use rayon::prelude::*;
 
 pub struct ParallelExecutor;
 
+impl Default for ParallelExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ParallelExecutor {
     pub fn new() -> Self {
         Self
@@ -68,6 +74,12 @@ pub trait Executor {
 }
 
 pub struct NativeExecutor;
+
+impl Default for NativeExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NativeExecutor {
     pub fn new() -> Self {
@@ -147,7 +159,7 @@ impl NativeExecutor {
         if let Some(to) = tx.to {
             if tx.value > 0 {
                 state.entry(to)
-                    .or_insert_with(Account::default)
+                    .or_default()
                     .balance += tx.value as u128;
             }
         }

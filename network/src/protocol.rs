@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use common::types::{Block, Hash};
+use common::types::Block;
 use futures::prelude::*;
 use libp2p::request_response::Codec;
 use serde::{Deserialize, Serialize};

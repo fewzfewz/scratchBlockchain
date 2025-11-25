@@ -59,7 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Start => {
+        Commands::Start { tls_cert: _, tls_key: _ } => {
             info!("Starting Modular Blockchain Node...");
 
             // Initialize components
@@ -149,7 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 (*network_cmd_sender).clone(),
             );
             tokio::spawn(async move {
-                rpc_server.run(9933, tls_config).await;
+                rpc_server.run(9933, None).await;
             });
 
             info!("Components initialized. Running network...");

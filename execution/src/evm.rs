@@ -12,6 +12,12 @@ pub struct EvmExecutor {
     db: CacheDB<EmptyDB>,
 }
 
+impl Default for EvmExecutor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EvmExecutor {
     pub fn new() -> Self {
         Self {

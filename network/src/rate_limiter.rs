@@ -69,6 +69,7 @@ impl TokenBucket {
         }
     }
 
+    #[allow(dead_code)]
     fn available_tokens(&self) -> f64 {
         self.tokens
     }
@@ -169,7 +170,7 @@ impl RateLimiter {
     pub fn is_banned(&mut self, peer: &PeerId) -> bool {
         if let Some(ban_info) = self.banned_peers.get(peer) {
             if Instant::now() < ban_info.until {
-                return true;
+                true
             } else {
                 // Ban expired
                 self.banned_peers.remove(peer);

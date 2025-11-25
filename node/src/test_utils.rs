@@ -1,4 +1,4 @@
-use crate::rpc::RpcServer;
+
 use common::types::{Block, Transaction};
 use consensus::FinalityGadget;
 use libp2p::{Multiaddr, PeerId};
@@ -68,11 +68,22 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     let db_path = temp_dir.path().join("db");
 
     // Initialize components
-    let block_store = Arc::new(BlockStore::new(db_path.join("blocks")).unwrap());
-    let state_store = Arc::new(StateStore::new(db_path.join("state")).unwrap());
-    let receipt_store = Arc::new(ReceiptStore::new(db_path.join("receipts")).unwrap());
-    let mempool = Arc::new(Mempool::new());
-    let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(block_store.clone())));
+    let block_store = Arc::new(BlockStore::new(db_path.join("blocks").to_str().unwrap()).unwrap());
+    let state_store = Arc::new(StateStore::new(db_path.join("state").to_str().unwrap()).unwrap());
+    let receipt_store = Arc::new(ReceiptStore::new(db_path.join("receipts").to_str().unwrap()).unwrap());
+    let mempool = Arc::new(Mempool::new(mempool::MempoolConfig::default()));
+    
+    // Create test validators
+    use common::crypto::SigningKey;
+    use consensus::ValidatorInfo;
+    let signing_key = SigningKey::generate();
+    let validators = vec![ValidatorInfo {
+        public_key: signing_key.public_key(),
+        stake: 100,
+        slashed: false,
+    }];
+    
+    let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators)));
     let metrics = Arc::new(crate::metrics::Metrics::new());
 
     // Initialize network
@@ -88,8 +99,9 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
         network_service.run().await;
     });
 
-    // Start RPC server
-    let rpc_server = RpcServer::new(
+    // Note: RPC server setup commented out for now
+    /*
+    let rpc_server = crate::rpc::RpcServer::new(
         mempool.clone(),
         block_store.clone(),
         state_store.clone(),
@@ -102,18 +114,29 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     tokio::spawn(async move {
         rpc_server.run(rpc_port, None).await;
     });
+    */
+
 
     // Start block producer (simplified for test)
+    use consensus::EnhancedConsensus;
+    let signing_key = common::crypto::SigningKey::generate();
+    let consensus = Arc::new(Mutex::new(EnhancedConsensus::new(vec![consensus::ValidatorInfo {
+        public_key: signing_key.public_key(),
+        stake: 100,
+        slashed: false,
+    }])));
+    
     let block_producer = crate::block_producer::BlockProducer::new(
-        block_store.clone(),
         mempool.clone(),
-        network_cmd_sender.clone(),
-        metrics.clone(),
+        consensus.clone(),
+        state_store.clone(),
+        block_store.clone(),
+        finality_gadget.clone(),
+        signing_key.clone(),
     );
     
-    tokio::spawn(async move {
-        block_producer.start().await;
-    });
+    // Note: BlockProducer doesn't have a start() method, 
+    // it's meant to be called via produce_block() when needed
 
     (
         TestNode {
@@ -155,11 +178,22 @@ pub fn create_mock_components() -> (
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path();
     
-    let block_store = Arc::new(BlockStore::new(db_path.join("blocks")).unwrap());
-    let state_store = Arc::new(StateStore::new(db_path.join("state")).unwrap());
-    let receipt_store = Arc::new(ReceiptStore::new(db_path.join("receipts")).unwrap());
-    let mempool = Arc::new(Mempool::new());
-    let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(block_store.clone())));
+    let block_store = Arc::new(BlockStore::new(db_path.join("blocks").to_str().unwrap()).unwrap());
+    let state_store = Arc::new(StateStore::new(db_path.join("state").to_str().unwrap()).unwrap());
+    let receipt_store = Arc::new(ReceiptStore::new(db_path.join("receipts").to_str().unwrap()).unwrap());
+    let mempool = Arc::new(Mempool::new(mempool::MempoolConfig::default()));
+    
+    // Create test validators
+    use common::crypto::SigningKey;
+    use consensus::ValidatorInfo;
+    let signing_key = SigningKey::generate();
+    let validators = vec![ValidatorInfo {
+        public_key: signing_key.public_key(),
+        stake: 100,
+        slashed: false,
+    }];
+    
+    let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators)));
     let metrics = Arc::new(crate::metrics::Metrics::new());
     let (tx, _) = mpsc::channel(100);
 

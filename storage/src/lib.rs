@@ -11,6 +11,12 @@ pub struct MemStore {
     db: Box<dyn KeyValueStore>,
 }
 
+impl Default for MemStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemStore {
     pub fn new() -> Self {
         Self {
@@ -43,12 +49,15 @@ impl PersistentStore {
         let db = sled::open(path)?;
         Ok(Self { db })
     }
-    pub fn default() -> Result<Self, Box<dyn Error>> {
-        Self::new("node_db")
-    }
 
     pub fn iter(&self) -> sled::Iter {
         self.db.iter()
+    }
+}
+
+impl Default for PersistentStore {
+    fn default() -> Self {
+        Self::new("node_db").unwrap()
     }
 }
 
@@ -74,15 +83,17 @@ pub struct StateStore {
     store: PersistentStore,
 }
 
+impl Default for StateStore {
+    fn default() -> Self {
+        Self::new("state_db").unwrap()
+    }
+}
+
 impl StateStore {
     pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
         Ok(Self {
             store: PersistentStore::new(path)?,
         })
-    }
-
-    pub fn default() -> Result<Self, Box<dyn Error>> {
-        Self::new("state_db")
     }
 
     pub fn get_account(&self, address: &[u8; 20]) -> Result<Option<common::types::Account>, Box<dyn Error>> {
@@ -128,9 +139,9 @@ impl StateStore {
             if let Some(account) = self.get_account(&genesis_account.address)? {
                 // Hash the account data: address + nonce + balance
                 let mut hasher = Sha256::new();
-                hasher.update(&genesis_account.address);
-                hasher.update(&account.nonce.to_le_bytes());
-                hasher.update(&account.balance.to_le_bytes());
+                hasher.update(genesis_account.address);
+                hasher.update(account.nonce.to_le_bytes());
+                hasher.update(account.balance.to_le_bytes());
                 leaves.push(hasher.finalize().into());
             }
         }
@@ -158,8 +169,8 @@ impl StateStore {
         for (address, account) in state {
             let mut hasher = Sha256::new();
             hasher.update(address);
-            hasher.update(&account.nonce.to_le_bytes());
-            hasher.update(&account.balance.to_le_bytes());
+            hasher.update(account.nonce.to_le_bytes());
+            hasher.update(account.balance.to_le_bytes());
             leaves.push(hasher.finalize().into());
         }
         
@@ -197,11 +208,15 @@ impl TrieStateStore {
             trie: std::sync::Arc::new(std::sync::Mutex::new(trie)),
         })
     }
+}
 
-    pub fn default() -> Result<Self, Box<dyn Error>> {
-        Self::new("state_trie_db")
+impl Default for TrieStateStore {
+    fn default() -> Self {
+        Self::new("state_trie_db").unwrap()
     }
+}
 
+impl TrieStateStore {
     pub fn get_account(&self, address: &[u8; 20]) -> Result<Option<common::types::Account>, Box<dyn Error>> {
         let trie = self.trie.lock().unwrap();
         match trie.get(address)? {
@@ -371,7 +386,7 @@ impl BlockStore {
     /// Check if a block is finalized
     pub fn is_finalized(&self, height: u64) -> Result<bool, Box<dyn Error>> {
         let key = format!("finalized_{}", height);
-        Ok(self.store.contains(key.as_bytes())?)
+        self.store.contains(key.as_bytes())
     }
 
     /// Get the latest finalized block height

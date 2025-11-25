@@ -21,6 +21,14 @@ pub struct Metrics {
     pub mev_protected_txs: Arc<AtomicU64>,
     /// Total account abstraction operations
     pub aa_operations: Arc<AtomicU64>,
+    /// Current consensus round
+    pub consensus_round: Arc<AtomicU64>,
+    /// Network bytes received
+    pub network_bytes_rx: Arc<AtomicU64>,
+    /// Network bytes transmitted
+    pub network_bytes_tx: Arc<AtomicU64>,
+    /// Block production latency (ms)
+    pub block_latency: Arc<AtomicU64>,
 }
 
 impl Metrics {

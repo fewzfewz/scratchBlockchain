@@ -38,12 +38,12 @@ impl Header {
 
     pub fn hash(&self) -> Hash {
         let mut hasher = Sha256::new();
-        hasher.update(&self.parent_hash);
-        hasher.update(&self.state_root);
-        hasher.update(&self.extrinsics_root);
-        hasher.update(&self.slot.to_le_bytes());
-        hasher.update(&self.epoch.to_le_bytes());
-        hasher.update(&self.validator_set_id.to_le_bytes());
+        hasher.update(self.parent_hash);
+        hasher.update(self.state_root);
+        hasher.update(self.extrinsics_root);
+        hasher.update(self.slot.to_le_bytes());
+        hasher.update(self.epoch.to_le_bytes());
+        hasher.update(self.validator_set_id.to_le_bytes());
         hasher.finalize().into()
     }
 }
@@ -71,19 +71,19 @@ impl Transaction {
     /// Compute transaction hash
     pub fn hash(&self) -> Hash {
         let mut hasher = Sha256::new();
-        hasher.update(&self.sender);
-        hasher.update(&self.nonce.to_le_bytes());
+        hasher.update(self.sender);
+        hasher.update(self.nonce.to_le_bytes());
         hasher.update(&self.payload);
-        hasher.update(&self.gas_limit.to_le_bytes());
-        hasher.update(&self.max_fee_per_gas.to_le_bytes());
-        hasher.update(&self.max_priority_fee_per_gas.to_le_bytes());
+        hasher.update(self.gas_limit.to_le_bytes());
+        hasher.update(self.max_fee_per_gas.to_le_bytes());
+        hasher.update(self.max_priority_fee_per_gas.to_le_bytes());
         if let Some(chain_id) = self.chain_id {
-            hasher.update(&chain_id.to_le_bytes());
+            hasher.update(chain_id.to_le_bytes());
         }
         if let Some(to) = self.to {
-            hasher.update(&to);
+            hasher.update(to);
         }
-        hasher.update(&self.value.to_le_bytes());
+        hasher.update(self.value.to_le_bytes());
         hasher.finalize().into()
     }
 
@@ -168,7 +168,7 @@ impl Block {
 }
 
 // State Management Types
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct Account {
     pub nonce: u64,
     pub balance: u128,
@@ -177,10 +177,6 @@ pub struct Account {
 impl Account {
     pub fn new(balance: u128) -> Self {
         Self { nonce: 0, balance }
-    }
-
-    pub fn default() -> Self {
-        Self { nonce: 0, balance: 0 }
     }
 }
 
@@ -205,7 +201,10 @@ impl GenesisConfig {
         Ok(config)
     }
 
-    pub fn default() -> Self {
+}
+
+impl Default for GenesisConfig {
+    fn default() -> Self {
         Self {
             chain_id: "modular-blockchain".to_string(),
             timestamp: 0,
@@ -245,6 +244,7 @@ pub struct TransactionReceipt {
 }
 
 impl TransactionReceipt {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tx_hash: Hash,
         block_hash: Hash,

@@ -1,0 +1,19 @@
+[package]
+name = "consensus-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+consensus = { path = ".." }
+common = { path = "../../common" }
+arbitrary = { version = "1.3", features = ["derive"] }
+proptest = "1.4"
+
+[[bin]]
+name = "finality_votes_fuzz"
+path = "fuzz_targets/finality_votes.rs"
+
+[[bin]]
+name = "bft_rounds_fuzz"
+path = "fuzz_targets/bft_rounds.rs"

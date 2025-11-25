@@ -33,14 +33,14 @@ pub struct UserOperation {
 impl UserOperation {
     pub fn hash(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.sender);
-        hasher.update(&self.nonce.to_le_bytes());
+        hasher.update(self.sender);
+        hasher.update(self.nonce.to_le_bytes());
         hasher.update(&self.init_code);
         hasher.update(&self.call_data);
-        hasher.update(&self.verification_gas_limit.to_le_bytes());
-        hasher.update(&self.call_gas_limit.to_le_bytes());
-        hasher.update(&self.max_fee_per_gas.to_le_bytes());
-        hasher.update(&self.max_priority_fee_per_gas.to_le_bytes());
+        hasher.update(self.verification_gas_limit.to_le_bytes());
+        hasher.update(self.call_gas_limit.to_le_bytes());
+        hasher.update(self.max_fee_per_gas.to_le_bytes());
+        hasher.update(self.max_priority_fee_per_gas.to_le_bytes());
         if let Some(paymaster) = &self.paymaster {
             hasher.update(paymaster);
         }

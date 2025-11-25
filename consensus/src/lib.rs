@@ -53,6 +53,7 @@ pub struct FinalityGadget {
     // Finalized blocks
     finalized_blocks: HashMap<u64, [u8; 32]>,
     // Current round
+    #[allow(dead_code)]
     current_round: u64,
 }
 
@@ -88,7 +89,7 @@ impl FinalityGadget {
         // Add to prevotes
         self.prevotes
             .entry(vote.block_number)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(vote);
 
         Ok(())
@@ -112,7 +113,7 @@ impl FinalityGadget {
         // Add to precommits
         self.precommits
             .entry(vote.block_number)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(vote);
 
         // Check if we can finalize
@@ -141,7 +142,7 @@ impl FinalityGadget {
                 if !validator.slashed {
                     stake_precommitted += validator.stake;
                     if block_hash.is_none() {
-                        block_hash = Some(vote.block_hash.clone());
+                        block_hash = Some(vote.block_hash);
                     }
                 }
             }
@@ -150,7 +151,7 @@ impl FinalityGadget {
         // If we have 2/3+ stake, finalize
         if stake_precommitted >= threshold {
             if let Some(hash) = block_hash {
-                self.finalized_blocks.insert(block_number, hash.clone());
+                self.finalized_blocks.insert(block_number, hash);
                 println!("✓ Block {} finalized with hash {:?}", block_number, hash);
             }
         }
@@ -216,7 +217,7 @@ impl EnhancedConsensus {
         let height = header.slot; // Use slot as height
 
         // Check for double-signing
-        let blocks_at_height = self.seen_blocks.entry(height).or_insert_with(Vec::new);
+        let blocks_at_height = self.seen_blocks.entry(height).or_default();
 
         // If we've seen a different block at this height from the same validator, slash
         if !blocks_at_height.is_empty() {
@@ -627,7 +628,7 @@ impl ViewChange {
         // Add vote
         self.view_change_votes
             .entry(view)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(msg);
 
         // Check if we have enough votes to change view

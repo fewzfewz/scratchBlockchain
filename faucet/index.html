@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Testnet Faucet - Modular Blockchain</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 24px;
+            padding: 48px;
+            max-width: 600px;
+            width: 100%;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        h1 {
+            font-size: 32px;
+            font-weight: 700;
+            color: #1a202c;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: #718096;
+            margin-bottom: 32px;
+            font-size: 16px;
+        }
+
+        .info-box {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 16px;
+            margin-bottom: 32px;
+        }
+
+        .info-box h3 {
+            font-size: 18px;
+            margin-bottom: 8px;
+        }
+
+        .info-box p {
+            font-size: 14px;
+            opacity: 0.9;
+            line-height: 1.6;
+        }
+
+        .form-group {
+            margin-bottom: 24px;
+        }
+
+        label {
+            display: block;
+            font-weight: 600;
+            color: #2d3748;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        input {
+            width: 100%;
+            padding: 14px 16px;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: all 0.3s;
+            font-family: 'Monaco', 'Courier New', monospace;
+        }
+
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        button {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        button:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .status {
+            margin-top: 24px;
+            padding: 16px;
+            border-radius: 12px;
+            font-size: 14px;
+            display: none;
+        }
+
+        .status.success {
+            background: #c6f6d5;
+            color: #22543d;
+            border: 2px solid #9ae6b4;
+        }
+
+        .status.error {
+            background: #fed7d7;
+            color: #742a2a;
+            border: 2px solid #fc8181;
+        }
+
+        .status.info {
+            background: #bee3f8;
+            color: #2c5282;
+            border: 2px solid #90cdf4;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 16px;
+            margin-top: 32px;
+        }
+
+        .stat-card {
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #667eea;
+            margin-bottom: 4px;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .cooldown-timer {
+            text-align: center;
+            margin-top: 16px;
+            font-size: 14px;
+            color: #718096;
+        }
+
+        @media (max-width: 640px) {
+            .container {
+                padding: 32px 24px;
+            }
+
+            h1 {
+                font-size: 24px;
+            }
+
+            .stats {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🚰 Testnet Faucet</h1>
+        <p class="subtitle">Get free testnet tokens for development</p>
+
+        <div class="info-box">
+            <h3>💧 Faucet Rules</h3>
+            <p>
+                • Receive <strong>100 tokens</strong> per request<br>
+                • <strong>24 hour</strong> cooldown between requests<br>
+                • Maximum <strong>10 requests</strong> per address<br>
+                • Testnet tokens have no real value
+            </p>
+        </div>
+
+        <form id="faucetForm">
+            <div class="form-group">
+                <label for="address">Your Wallet Address</label>
+                <input 
+                    type="text" 
+                    id="address" 
+                    placeholder="0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb" 
+                    required
+                    pattern="0x[a-fA-F0-9]{40}"
+                    title="Please enter a valid Ethereum-style address"
+                >
+            </div>
+
+            <button type="submit" id="submitBtn">
+                Request Tokens
+            </button>
+        </form>
+
+        <div id="status" class="status"></div>
+
+        <div class="cooldown-timer" id="cooldownTimer"></div>
+
+        <div class="stats">
+            <div class="stat-card">
+                <div class="stat-value" id="remainingRequests">10</div>
+                <div class="stat-label">Remaining Requests</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="totalDistributed">0</div>
+                <div class="stat-label">Tokens Received</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const RPC_URL = 'http://localhost:9933';
+        const DRIP_AMOUNT = 100;
+
+        const form = document.getElementById('faucetForm');
+        const addressInput = document.getElementById('address');
+        const submitBtn = document.getElementById('submitBtn');
+        const statusDiv = document.getElementById('status');
+        const cooldownTimer = document.getElementById('cooldownTimer');
+        const remainingRequestsEl = document.getElementById('remainingRequests');
+        const totalDistributedEl = document.getElementById('totalDistributed');
+
+        // Load saved data from localStorage
+        function loadSavedData() {
+            const address = addressInput.value;
+            if (!address) return;
+
+            const saved = JSON.parse(localStorage.getItem(`faucet_${address}`) || '{}');
+            if (saved.remaining !== undefined) {
+                remainingRequestsEl.textContent = saved.remaining;
+            }
+            if (saved.total !== undefined) {
+                totalDistributedEl.textContent = saved.total;
+            }
+            if (saved.lastRequest) {
+                updateCooldownTimer(saved.lastRequest);
+            }
+        }
+
+        // Save data to localStorage
+        function saveData(address, data) {
+            localStorage.setItem(`faucet_${address}`, JSON.stringify(data));
+        }
+
+        // Show status message
+        function showStatus(message, type) {
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+            statusDiv.style.display = 'block';
+        }
+
+        // Update cooldown timer
+        function updateCooldownTimer(lastRequestTime) {
+            const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
+            const now = Date.now();
+            const elapsed = now - lastRequestTime;
+            const remaining = COOLDOWN_MS - elapsed;
+
+            if (remaining <= 0) {
+                cooldownTimer.textContent = '';
+                submitBtn.disabled = false;
+                return;
+            }
+
+            const hours = Math.floor(remaining / (60 * 60 * 1000));
+            const minutes = Math.floor((remaining % (60 * 60 * 1000)) / (60 * 1000));
+            
+            cooldownTimer.textContent = `⏳ Next request available in ${hours}h ${minutes}m`;
+            submitBtn.disabled = true;
+
+            setTimeout(() => updateCooldownTimer(lastRequestTime), 60000); // Update every minute
+        }
+
+        // Request tokens from faucet
+        async function requestTokens(address) {
+            try {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Processing...';
+
+                // Call faucet RPC endpoint
+                const response = await fetch(`${RPC_URL}/faucet/request`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ address }),
+                });
+
+                const data = await response.json();
+
+                if (response.ok && data.success) {
+                    const now = Date.now();
+                    const currentTotal = parseInt(totalDistributedEl.textContent) + DRIP_AMOUNT;
+                    const currentRemaining = parseInt(remainingRequestsEl.textContent) - 1;
+
+                    // Update UI
+                    totalDistributedEl.textContent = currentTotal;
+                    remainingRequestsEl.textContent = currentRemaining;
+                    
+                    // Save to localStorage
+                    saveData(address, {
+                        remaining: currentRemaining,
+                        total: currentTotal,
+                        lastRequest: now,
+                    });
+
+                    // Update cooldown
+                    updateCooldownTimer(now);
+
+                    showStatus(
+                        `✅ Success! ${DRIP_AMOUNT} tokens sent to ${address}. Transaction hash: ${data.txHash || 'pending'}`,
+                        'success'
+                    );
+                } else {
+                    throw new Error(data.error || 'Request failed');
+                }
+            } catch (error) {
+                showStatus(`❌ Error: ${error.message}`, 'error');
+                submitBtn.disabled = false;
+            } finally {
+                submitBtn.textContent = 'Request Tokens';
+            }
+        }
+
+        // Form submission
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const address = addressInput.value.trim();
+
+            if (!address.match(/^0x[a-fA-F0-9]{40}$/)) {
+                showStatus('❌ Please enter a valid address', 'error');
+                return;
+            }
+
+            await requestTokens(address);
+        });
+
+        // Load data when address changes
+        addressInput.addEventListener('blur', loadSavedData);
+
+        // Check if address is in URL params
+        const urlParams = new URLSearchParams(window.location.search);
+        const addressParam = urlParams.get('address');
+        if (addressParam) {
+            addressInput.value = addressParam;
+            loadSavedData();
+        }
+    </script>
+</body>
+</html>

@@ -91,7 +91,7 @@ impl ErasureCoder {
     /// Encode data into erasure-coded chunks
     /// Simplified: In production, use reed-solomon or similar
     pub fn encode(&self, data: &[u8]) -> Result<Vec<ErasureChunk>> {
-        let chunk_size = (data.len() + self.data_chunks - 1) / self.data_chunks;
+        let chunk_size = data.len().div_ceil(self.data_chunks);
         let mut chunks = Vec::new();
 
         // Create data chunks
@@ -160,6 +160,7 @@ impl ErasureCoder {
 /// Availability sampler for light clients
 pub struct AvailabilitySampler {
     /// Number of samples to take
+    #[allow(dead_code)]
     sample_count: usize,
 }
 
@@ -178,10 +179,10 @@ impl AvailabilitySampler {
     }
 
     /// Verify a chunk's inclusion proof
-    pub fn verify_chunk(&self, chunk: &ErasureChunk, root: &[u8; 32]) -> bool {
+    pub fn verify_chunk(&self, chunk: &ErasureChunk, _root: &[u8; 32]) -> bool {
         // Simplified verification
         // In production, would verify Merkle proof against root
-        !chunk.proof.is_empty() || chunk.data.len() > 0
+        !chunk.proof.is_empty() || !chunk.data.is_empty()
     }
 }
 
