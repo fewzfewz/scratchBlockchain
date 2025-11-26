@@ -87,7 +87,7 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     let metrics = Arc::new(crate::metrics::Metrics::new());
 
     // Initialize network
-    let (mut network_service, network_cmd_sender, network_event_receiver) = NetworkService::new().unwrap();
+    let (mut network_service, network_cmd_sender, network_event_receiver) = NetworkService::new(vec![]).unwrap();
     let peer_id = network_service.swarm.local_peer_id().clone();
     
     // Listen on localhost

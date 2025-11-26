@@ -7,16 +7,15 @@ members = [
     "node",
     "execution",
     "zk",
-    "rollup",
     "interop",
     "governance",
-    "integration-tests",
     "da",
     "mempool",
-    "mev", "benchmarks",
+    "mev",
     "interop/fuzz",
     "consensus/fuzz",
     "tools/genesis-builder",
     "runtime",
+    "monitoring",
 ]
 resolver = "2"

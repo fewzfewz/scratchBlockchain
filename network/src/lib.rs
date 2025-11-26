@@ -98,7 +98,7 @@ pub enum NetworkCommand {
 pub type NetworkServiceInit = (NetworkService, mpsc::Sender<NetworkCommand>, mpsc::Receiver<NetworkEvent>);
 
 impl NetworkService {
-    pub fn new() -> Result<NetworkServiceInit, Box<dyn Error>> {
+    pub fn new(bootstrap_nodes: Vec<String>) -> Result<NetworkServiceInit, Box<dyn Error>> {
         let local_key = identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
         info!("Local peer id: {:?}", local_peer_id);
@@ -180,6 +180,18 @@ impl NetworkService {
 
         // Load peers from disk
         service.load_peers();
+
+        // Dial bootstrap nodes
+        for addr_str in bootstrap_nodes {
+            if let Ok(addr) = addr_str.parse::<Multiaddr>() {
+                info!("Dialing bootstrap node: {}", addr);
+                if let Err(e) = service.swarm.dial(addr) {
+                    warn!("Failed to dial bootstrap node: {}", e);
+                }
+            } else {
+                warn!("Invalid bootstrap node address: {}", addr_str);
+            }
+        }
 
         Ok((
             service,
@@ -275,6 +287,12 @@ impl NetworkService {
             SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::RequestResponse(request_response::Event::OutboundFailure { request_id, error, .. })) => {
                 warn!("Request {:?} failed: {:?}", request_id, error);
                 self.pending_requests.remove(&request_id);
+            }
+            SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
+                warn!("Outgoing connection error to peer {:?}: {:?}", peer_id, error);
+            }
+            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
+                warn!("Incoming connection error from {:?} to {:?}: {:?}", send_back_addr, local_addr, error);
             }
             _ => {}
         }

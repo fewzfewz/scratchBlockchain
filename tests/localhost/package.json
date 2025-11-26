@@ -1,0 +1,17 @@
+{
+  "name": "localhost-tests",
+  "version": "1.0.0",
+  "description": "Localhost testing suite for Modular Blockchain",
+  "scripts": {
+    "test": "node scripts/30-sdk-connect.js",
+    "test:all": "./run-all-tests.sh",
+    "test:core": "node scripts/02-state-queries.js",
+    "test:sdk": "node scripts/30-sdk-connect.js && node scripts/31-sdk-wallet.js",
+    "test:blocks": "./scripts/check-blocks.sh",
+    "test:metrics": "./scripts/check-metrics.sh"
+  },
+  "dependencies": {
+    "@modular-blockchain/sdk": "file:../../sdk/javascript"
+  },
+  "devDependencies": {}
+}

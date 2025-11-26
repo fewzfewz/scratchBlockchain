@@ -30,7 +30,7 @@ pub struct GovernanceParams {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ValidatorOutput {
-    pub address: String,
+    pub address: [u8; 20],
     pub stake: u128,
     pub commission_rate: f64,
     pub public_key: String,
@@ -38,7 +38,7 @@ pub struct ValidatorOutput {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AccountOutput {
-    pub address: String,
+    pub address: [u8; 20],
     pub balance: u128,
     pub nonce: u64,
 }
@@ -51,20 +51,31 @@ pub struct AppState {
 
 pub struct GenesisBuilder;
 
+fn parse_address(addr_str: &str) -> Result<[u8; 20]> {
+    let addr_str = addr_str.strip_prefix("0x").unwrap_or(addr_str);
+    let bytes = hex::decode(addr_str)?;
+    if bytes.len() != 20 {
+        anyhow::bail!("Address must be 20 bytes, got {}", bytes.len());
+    }
+    let mut arr = [0u8; 20];
+    arr.copy_from_slice(&bytes);
+    Ok(arr)
+}
+
 impl GenesisBuilder {
     pub fn build(config: GenesisConfig) -> Result<GenesisOutput> {
         let validators = config.validators.iter().map(|v| {
             Ok(ValidatorOutput {
-                address: v.address.clone(),
+                address: parse_address(&v.address)?,
                 stake: v.stake.parse()?,
                 commission_rate: v.commission_rate.parse().unwrap_or(0.0),
-                public_key: format!("pubkey_{}", v.address), // Placeholder
+                public_key: v.public_key.clone(),
             })
         }).collect::<Result<Vec<_>>>()?;
 
         let accounts = config.accounts.iter().map(|a| {
             Ok(AccountOutput {
-                address: a.address.clone(),
+                address: parse_address(&a.address)?,
                 balance: a.balance.parse()?,
                 nonce: 0,
             })

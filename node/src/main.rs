@@ -1,4 +1,8 @@
 use clap::{Parser, Subcommand};
+mod config;
+use config::NodeConfig;
+use std::path::PathBuf;
+use std::fs;
 use common::traits::Consensus;
 use common::types::{Block, Transaction};
 use consensus::EnhancedConsensus;
@@ -11,6 +15,9 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 use common::consensus_types::{ConsensusMessage, Vote, Proposal};
 use consensus::bft::BftEvent;
+use warp::Filter;
+use std::env;
+
 
 #[derive(Parser)]
 #[command(name = "modular-node")]
@@ -25,9 +32,9 @@ enum Commands {
     /// Start the node
     Start {
         #[arg(long)]
-        tls_cert: Option<String>,
-        #[arg(long)]
-        tls_key: Option<String>,
+        config: PathBuf,
+        #[arg(long, default_value = "/genesis.json")]
+        genesis: PathBuf,
     },
     /// Generate a new keypair
     KeyGen,
@@ -51,6 +58,8 @@ enum Commands {
         #[arg(long)]
         multiaddr: String,
     },
+    /// Start the faucet service
+    Faucet,
 }
 
 #[tokio::main]
@@ -59,8 +68,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
-        Commands::Start { tls_cert: _, tls_key: _ } => {
+        Commands::Start { config, genesis } => {
             info!("Starting Modular Blockchain Node...");
+            
+            // Load configuration
+            let node_config = NodeConfig::load(&config)?;
+            info!("Loaded configuration from {:?}", config);
 
             // Initialize components
             use node::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
@@ -68,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Circuit breaker initialized");
             
             use storage::PersistentStore;
-            let _store = PersistentStore::default().expect("Failed to initialize persistent storage");
+            let _store = PersistentStore::default();
             info!("Persistent storage initialized");
             
             // Initialize mempool
@@ -77,45 +90,73 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             info!("Mempool initialized");
             
             // Initialize state store
-            let state_store = Arc::new(storage::StateStore::new("./data/state_db")?);
+            let state_store = Arc::new(storage::StateStore::new(&format!("{}/state_db", node_config.storage.data_dir))?);
             info!("State store initialized");
             
-            // Initialize genesis state if needed
-            let genesis_config = common::types::GenesisConfig::default();
+            // Load genesis
+            let genesis_content = fs::read_to_string(&genesis)?;
+            let genesis_config: common::types::GenesisConfig = serde_json::from_str(&genesis_content)?;
+            
             if state_store.get_account(&genesis_config.accounts[0].address)?.is_none() {
                 info!("Initializing genesis state...");
                 state_store.initialize_genesis(&genesis_config)?;
             }
 
             // Initialize block store
-            let block_store = Arc::new(storage::BlockStore::new("./data/block_db")?);
+            let block_store = Arc::new(storage::BlockStore::new(&format!("{}/block_db", node_config.storage.data_dir))?);
             info!("Block store initialized");
 
             // Initialize peer store
-            let _peer_store = Arc::new(network::peer_store::PeerStore::new("./data/peers.json")?);
+            let _peer_store = Arc::new(network::peer_store::PeerStore::new(&format!("{}/peers.json", node_config.storage.data_dir))?);
             info!("Peer store initialized");
             
-            // Setup validators (for now, just generate a random one for this node)
+            // Setup validators
             use common::crypto::SigningKey;
             use consensus::{EnhancedConsensus, ValidatorInfo, FinalityGadget};
             
-            // Generate or load key
-            let signing_key = SigningKey::generate();
-            let pubkey_bytes = signing_key.public_key();
+            // Load or generate key
+            let key_path = PathBuf::from(&node_config.storage.data_dir).join("node_key.json");
+            let signing_key = if key_path.exists() {
+                let content = fs::read_to_string(&key_path)?;
+                let secret_bytes = hex::decode(content.trim())?;
+                let secret_array: [u8; 32] = secret_bytes.try_into().map_err(|_| anyhow::anyhow!("Invalid key length"))?;
+                SigningKey::from_bytes(&secret_array)
+            } else {
+                let key = SigningKey::generate();
+                fs::create_dir_all(&node_config.storage.data_dir)?;
+                fs::write(&key_path, hex::encode(key.to_bytes()))?;
+                Ok(key)
+            };
+            let signing_key = signing_key?;
             
+            let pubkey_bytes = signing_key.public_key();
             info!("Node Public Key: {:?}", hex::encode(&pubkey_bytes));
             
-            let validators = vec![ValidatorInfo {
-                public_key: pubkey_bytes.clone(),
-                stake: 100,
+            // Use validators from genesis
+            let validators: Vec<ValidatorInfo> = genesis_config.validators.iter().map(|v| ValidatorInfo {
+                public_key: hex::decode(v.public_key.strip_prefix("pubkey_").unwrap_or(&v.public_key)).unwrap_or_default(), // Handle format
+                stake: v.stake as u64,
                 slashed: false,
-            }];
+            }).collect();
+            
+            // If genesis validators are empty or malformed, fallback (should not happen in prod)
+            let validators = if validators.is_empty() {
+                warn!("No validators found in genesis, using self as validator");
+                vec![ValidatorInfo {
+                    public_key: pubkey_bytes.clone(),
+                    stake: 100,
+                    slashed: false,
+                }]
+            } else {
+                validators
+            };
             
             let consensus = Arc::new(Mutex::new(EnhancedConsensus::new(validators.clone())));
             let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators.clone())));
             
             // Initialize network
-            let (network, network_cmd_sender, mut network_event_receiver) = NetworkService::new()?;
+            // We need to pass config to network service
+            let (network, network_cmd_sender, mut network_event_receiver) = NetworkService::new(node_config.network.bootstrap_nodes.clone())?;
             let network_cmd_sender = Arc::new(network_cmd_sender);
 
             // Initialize block producer
@@ -135,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let metrics = Arc::new(node::metrics::Metrics::new());
 
             // Initialize receipt store
-            let receipt_store = Arc::new(storage::receipt_store::ReceiptStore::new("./data/receipts_db")?);
+            let receipt_store = Arc::new(storage::receipt_store::ReceiptStore::new(&format!("{}/receipts_db", node_config.storage.data_dir))?);
             info!("Receipt store initialized");
 
             // Start RPC server
@@ -148,11 +189,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 metrics.clone(),
                 (*network_cmd_sender).clone(),
             );
+            
+            let rpc_port = node_config.network.rpc_port;
             tokio::spawn(async move {
-                rpc_server.run(9933, None).await;
+                rpc_server.run(rpc_port, None).await;
             });
 
             info!("Components initialized. Running network...");
+            
+            // Start listening on P2P port
+            let p2p_addr: libp2p::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", node_config.network.p2p_port)
+                .parse()
+                .expect("Invalid P2P address");
+            network_cmd_sender.send(NetworkCommand::StartListening(p2p_addr)).await?;
             
             // Spawn network task
             tokio::spawn(network.run());
@@ -604,9 +653,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::ConnectPeer { multiaddr } => {
             info!("Connecting to peer: {}", multiaddr);
-            println!("Peer connection via CLI not yet implemented.");
-            println!("You can connect peers by modifying the network configuration.");
-            println!("Multiaddr: {}", multiaddr);
+            let client = reqwest::Client::new();
+            // Default RPC port is 26657, but it might be different. 
+            // For CLI we assume default or user should provide it (TODO: add --rpc-port arg)
+            let rpc_url = "http://127.0.0.1:26657/connect_peer";
+            
+            let response = client.post(rpc_url)
+                .json(&serde_json::json!({
+                    "multiaddr": multiaddr
+                }))
+                .send()
+                .await;
+
+            match response {
+                Ok(res) => {
+                    if let Ok(text) = res.text().await {
+                        println!("Response: {}", text);
+                    } else {
+                        eprintln!("Failed to read response");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Failed to connect to peer: {}", e);
+                    eprintln!("Make sure the node is running and RPC is accessible.");
+                }
+            }
+        }
+        Commands::Faucet => {
+            info!("Starting Faucet Service...");
+            
+            // Load config from env
+            let private_key_hex = env::var("FAUCET_PRIVATE_KEY").expect("FAUCET_PRIVATE_KEY must be set");
+            let _rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
+            let drip_amount = env::var("DRIP_AMOUNT").unwrap_or_else(|_| "1000000000000000000000".to_string()).parse::<u128>().unwrap();
+            let cooldown = env::var("COOLDOWN_SECONDS").unwrap_or_else(|_| "86400".to_string()).parse::<u64>().unwrap();
+            
+            // Initialize faucet logic
+            use node::faucet::{Faucet, FaucetConfig};
+            let config = FaucetConfig {
+                drip_amount,
+                cooldown_seconds: cooldown,
+                max_requests_per_address: 10,
+            };
+            let faucet = Arc::new(Mutex::new(Faucet::new(config)));
+            
+            // Load private key
+            let private_key_clean = private_key_hex.trim().strip_prefix("0x").unwrap_or(&private_key_hex);
+            let secret_bytes = hex::decode(private_key_clean).expect("Invalid private key hex");
+            let secret_array: [u8; 32] = secret_bytes.try_into().expect("Invalid private key length");
+            let _signing_key = SigningKey::from_bytes(&secret_array);
+            
+            info!("Faucet initialized with drip amount: {}", drip_amount);
+            
+            let faucet_clone = faucet.clone();
+            let route = warp::post()
+                .and(warp::path("faucet"))
+                .and(warp::body::json())
+                .and_then(move |req: serde_json::Value| {
+                    let faucet = faucet_clone.clone();
+                    async move {
+                        let addr_str = match req.get("address").and_then(|v| v.as_str()) {
+                            Some(s) => s,
+                            None => return Ok::<_, warp::Rejection>(warp::reply::json(&serde_json::json!({ "error": "Missing address" }))),
+                        };
+                        
+                        let addr_bytes = match hex::decode(addr_str.strip_prefix("0x").unwrap_or(addr_str)) {
+                            Ok(b) => b,
+                            Err(_) => return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid hex address" }))),
+                        };
+                        
+                        let address: [u8; 20] = match addr_bytes.try_into() {
+                            Ok(a) => a,
+                            Err(_) => return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid address length" }))),
+                        };
+                        
+                        let mut faucet = faucet.lock().await;
+                        match faucet.request_tokens(address) {
+                            Ok(amount) => {
+                                info!("Dripping {} tokens to {:?}", amount, addr_str);
+                                // TODO: Implement transaction submission
+                                Ok(warp::reply::json(&serde_json::json!({ "status": "success", "amount": amount.to_string() })))
+                            }
+                            Err(e) => {
+                                Ok(warp::reply::json(&serde_json::json!({ "error": e })))
+                            }
+                        }
+                    }
+                });
+                
+            info!("Faucet listening on 0.0.0.0:3000");
+            warp::serve(route).run(([0, 0, 0, 0], 3000)).await;
         }
     }
 

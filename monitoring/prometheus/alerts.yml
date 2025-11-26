@@ -1,53 +1,99 @@
+# Alert rules for Modular Blockchain
 groups:
   - name: blockchain_alerts
     interval: 30s
     rules:
-      # Node down alert
-      - alert: NodeDown
-        expr: up{job=~"blockchain-node.*"} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Blockchain node {{ $labels.instance }} is down"
-          description: "Node {{ $labels.instance }} has been down for more than 1 minute"
-
-      # High block production latency
-      - alert: HighBlockLatency
-        expr: rate(blockchain_blocks_total[5m]) < 0.1
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Low block production rate on {{ $labels.instance }}"
-          description: "Block production rate is {{ $value }} blocks/sec"
-
-      # Mempool size growing
-      - alert: MempoolGrowing
-        expr: blockchain_mempool_size > 1000
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Mempool size growing on {{ $labels.instance }}"
-          description: "Mempool has {{ $value }} transactions"
-
-      # No peers connected
-      - alert: NoPeersConnected
-        expr: blockchain_peer_count == 0
+      # Validator alerts
+      - alert: ValidatorDown
+        expr: up{role="validator"} == 0
         for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "No peers connected on {{ $labels.instance }}"
-          description: "Node {{ $labels.instance }} has no peer connections"
-
-      # Finality stalled
-      - alert: FinalityStalled
-        expr: changes(blockchain_finalized_height[10m]) == 0
-        for: 10m
+          summary: "Validator {{ $labels.instance }} is down"
+          description: "Validator has been down for more than 2 minutes"
+      
+      - alert: HighMissedBlocks
+        expr: rate(chain_missed_blocks_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High missed block rate on {{ $labels.instance }}"
+          description: "Validator is missing blocks at rate {{ $value }}"
+      
+      # Consensus alerts
+      - alert: SlowConsensus
+        expr: chain_consensus_time_seconds > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow consensus on {{ $labels.instance }}"
+          description: "Consensus taking {{ $value }}s (threshold: 10s)"
+      
+      - alert: ConsensusStalled
+        expr: rate(chain_blocks_produced_total[5m]) == 0
+        for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "Finality stalled on {{ $labels.instance }}"
-          description: "No finality progress for 10 minutes"
+          summary: "Consensus stalled on {{ $labels.instance }}"
+          description: "No blocks produced in last 5 minutes"
+      
+      # Network alerts
+      - alert: LowPeerCount
+        expr: chain_peer_count < 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low peer count on {{ $labels.instance }}"
+          description: "Only {{ $value }} peers connected (minimum: 3)"
+      
+      - alert: HighNetworkLatency
+        expr: chain_network_latency_seconds > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High network latency on {{ $labels.instance }}"
+          description: "Network latency is {{ $value }}s"
+      
+      # Storage alerts
+      - alert: HighDiskUsage
+        expr: (chain_state_size_bytes / 1e9) > 80
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High disk usage on {{ $labels.instance }}"
+          description: "State size is {{ $value }}GB"
+      
+      - alert: SlowDatabaseWrites
+        expr: chain_db_write_seconds > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Slow database writes on {{ $labels.instance }}"
+          description: "DB writes taking {{ $value }}s"
+      
+      # Transaction alerts
+      - alert: HighPendingTransactions
+        expr: chain_transactions_pending > 10000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High pending transaction count on {{ $labels.instance }}"
+          description: "{{ $value }} transactions pending"
+      
+      - alert: LowTransactionRate
+        expr: rate(chain_transactions_total[5m]) < 1
+        for: 10m
+        labels:
+          severity: info
+        annotations:
+          summary: "Low transaction rate on {{ $labels.instance }}"
+          description: "Transaction rate is {{ $value }}/s"

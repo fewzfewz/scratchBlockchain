@@ -188,10 +188,19 @@ pub struct GenesisAccount {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisValidator {
+    pub address: Address,  // [u8; 20]
+    pub stake: u128,
+    pub commission_rate: f64,
+    pub public_key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisConfig {
     pub chain_id: String,
     pub timestamp: u64,
     pub accounts: Vec<GenesisAccount>,
+    pub validators: Vec<GenesisValidator>,
 }
 
 impl GenesisConfig {
@@ -218,6 +227,7 @@ impl Default for GenesisConfig {
                     balance: 50_000_000_000_000,
                 },
             ],
+            validators: vec![],
         }
     }
 }

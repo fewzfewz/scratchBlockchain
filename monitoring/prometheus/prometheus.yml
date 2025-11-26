@@ -1,53 +1,63 @@
+# Prometheus configuration for Modular Blockchain Testnet
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    cluster: 'blockchain-prod'
-    environment: 'production'
+    cluster: 'modular-testnet'
+    environment: 'testnet'
 
 # Alertmanager configuration
 alerting:
   alertmanagers:
     - static_configs:
-        - targets: []
+        - targets:
+            - 'alertmanager:9093'
 
 # Load rules
 rule_files:
-  - "alerts.yml"
+  - 'alerts.yml'
 
 # Scrape configurations
 scrape_configs:
-  # Blockchain Node 1
-  - job_name: 'blockchain-node1'
+  # Validator nodes
+  - job_name: 'validators'
     static_configs:
-      - targets: ['172.25.0.10:9933']
+      - targets:
+          - 'validator1:9090'
+          - 'validator2:9090'
+          - 'validator3:9090'
         labels:
-          instance: 'node1'
           role: 'validator'
-    metrics_path: '/metrics'
-    scrape_interval: 10s
-
-  # Blockchain Node 2
-  - job_name: 'blockchain-node2'
+    
+  # RPC nodes
+  - job_name: 'rpc-nodes'
     static_configs:
-      - targets: ['172.25.0.11:9933']
+      - targets:
+          - 'rpc1:9090'
+          - 'rpc2:9090'
         labels:
-          instance: 'node2'
-          role: 'validator'
-    metrics_path: '/metrics'
-    scrape_interval: 10s
-
-  # Blockchain Node 3
-  - job_name: 'blockchain-node3'
+          role: 'rpc'
+    
+  # Bridge relayers
+  - job_name: 'bridge-relayers'
     static_configs:
-      - targets: ['172.25.0.12:9933']
+      - targets:
+          - 'relayer1:9090'
+          - 'relayer2:9090'
+          - 'relayer3:9090'
         labels:
-          instance: 'node3'
-          role: 'validator'
-    metrics_path: '/metrics'
-    scrape_interval: 10s
-
-  # Prometheus self-monitoring
+          role: 'relayer'
+    
+  # Faucet service
+  - job_name: 'faucet'
+    static_configs:
+      - targets:
+          - 'faucet:9090'
+        labels:
+          role: 'service'
+    
+  # Prometheus itself
   - job_name: 'prometheus'
     static_configs:
-      - targets: ['localhost:9090']
+      - targets:
+          - 'localhost:9090'

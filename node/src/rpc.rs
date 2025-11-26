@@ -47,6 +47,16 @@ struct ReceiptResponse {
     receipt: Option<common::types::TransactionReceipt>,
 }
 
+#[derive(Debug, Deserialize)]
+struct ConnectPeerRequest {
+    multiaddr: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ConnectPeerResponse {
+    status: String,
+}
+
 pub struct RpcServer {
     mempool: Arc<Mempool>,
     block_store: Arc<BlockStore>,
@@ -186,6 +196,15 @@ impl RpcServer {
             .or(tx_receipt)
             .or(metrics_route)
             .or(health);
+
+        // POST /connect_peer
+        let connect_peer = warp::path("connect_peer")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and(with_state(network_cmd_sender.clone()))
+            .and_then(handle_connect_peer);
+
+        let routes = routes.or(connect_peer);
 
         // Note: TLS support requires additional setup with warp-tls crate
         // For now, running without TLS
@@ -398,6 +417,27 @@ async fn handle_get_receipt(
         Err(e) => {
             tracing::warn!("Failed to get receipt for {}: {}", tx_hash_str, e);
             let response = ReceiptResponse { receipt: None };
+            Ok(warp::reply::json(&response))
+        }
+    }
+}
+
+async fn handle_connect_peer(
+    request: ConnectPeerRequest,
+    network_cmd_sender: mpsc::Sender<NetworkCommand>,
+) -> Result<impl warp::Reply, Infallible> {
+    match request.multiaddr.parse::<libp2p::Multiaddr>() {
+        Ok(addr) => {
+            let _ = network_cmd_sender.send(NetworkCommand::Dial(addr)).await;
+            let response = ConnectPeerResponse {
+                status: "success".to_string(),
+            };
+            Ok(warp::reply::json(&response))
+        }
+        Err(e) => {
+            let response = ConnectPeerResponse {
+                status: format!("error: invalid multiaddr: {}", e),
+            };
             Ok(warp::reply::json(&response))
         }
     }

@@ -39,6 +39,7 @@ pub struct ValidatorConfig {
     pub address: String,
     pub stake: String, // Parse as u128
     pub commission_rate: String, // Stored as string, parsed to f64
+    pub public_key: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

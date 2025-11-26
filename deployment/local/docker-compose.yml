@@ -1,0 +1,269 @@
+version: '3.8'
+
+services:
+  # Validator 1 (Bootstrap node)
+  validator1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    # optional explicit container name (leave if you need it)
+    container_name: validator1
+    ports:
+      - "26656:26656"  # P2P
+      - "26657:26657"  # RPC
+      - "8545:8545"    # API
+      - "9090:9090"    # Metrics
+    volumes:
+      - validator1_data:/data
+      - ./configs/validator1.toml:/config.toml:ro
+      - ./configs/validator1_key.json:/data/node_key.json:ro
+      - ./configs/genesis.json:/genesis.json:ro
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    environment:
+      - VALIDATOR_NAME=validator1
+      - RUST_LOG=info
+    command: ["start", "--config", "/config.toml"]
+    networks:
+      testnet:
+        aliases:
+          - validator1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    restart: unless-stopped
+
+  # Validator 2
+  validator2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: validator2
+    ports:
+      - "26658:26656"  # host->container P2P (keeps host unique)
+      - "26659:26657"  # RPC
+      - "8546:8545"    # API
+      - "9091:9090"    # Metrics
+    volumes:
+      - validator2_data:/data
+      - ./configs/validator2.toml:/config.toml:ro
+      - ./configs/validator2_key.json:/data/node_key.json:ro
+      - ./configs/genesis.json:/genesis.json:ro
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    environment:
+      - VALIDATOR_NAME=validator2
+      - RUST_LOG=info
+    command: ["start", "--config", "/config.toml"]
+    networks:
+      testnet:
+        aliases:
+          - validator2
+    depends_on:
+      - validator1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    restart: unless-stopped
+
+  # Validator 3
+  validator3:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: validator3
+    ports:
+      - "26660:26656"
+      - "26661:26657"
+      - "8547:8545"
+      - "9096:9090"
+    volumes:
+      - validator3_data:/data
+      - ./configs/validator3.toml:/config.toml:ro
+      - ./configs/validator3_key.json:/data/node_key.json:ro
+      - ./configs/genesis.json:/genesis.json:ro
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    environment:
+      - VALIDATOR_NAME=validator3
+      - RUST_LOG=info
+    command: ["start", "--config", "/config.toml"]
+    networks:
+      testnet:
+        aliases:
+          - validator3
+    depends_on:
+      - validator1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    restart: unless-stopped
+
+  # RPC Node 1 (Public)
+  rpc1:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: rpc1
+    ports:
+      - "8548:8545"
+      - "26662:26657"
+      - "9093:9090"
+    volumes:
+      - rpc1_data:/data
+      - ./configs/rpc1.toml:/config.toml:ro
+      - ./configs/genesis.json:/genesis.json:ro
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    environment:
+      - NODE_NAME=rpc1
+      - RUST_LOG=info
+    command: ["start", "--config", "/config.toml"]
+    networks:
+      testnet:
+        aliases:
+          - rpc1
+    depends_on:
+      - validator1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
+      interval: 8s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # RPC Node 2 (Backup)
+  rpc2:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: rpc2
+    ports:
+      - "8549:8545"
+      - "26663:26657"
+      - "9094:9090"
+    volumes:
+      - rpc2_data:/data
+      - ./configs/rpc2.toml:/config.toml:ro
+      - ./configs/genesis.json:/genesis.json:ro
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    environment:
+      - NODE_NAME=rpc2
+      - RUST_LOG=info
+    command: ["start", "--config", "/config.toml"]
+    networks:
+      testnet:
+        aliases:
+          - rpc2
+    depends_on:
+      - validator1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
+      interval: 8s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  # Prometheus
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9095:9090"
+    volumes:
+      - ./configs/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./configs/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      testnet:
+        aliases:
+          - prometheus
+    restart: unless-stopped
+
+  # Grafana
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - grafana_data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    networks:
+      testnet:
+        aliases:
+          - grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+  # Faucet Service
+  faucet:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: faucet
+    ports:
+      - "3001:3000"
+    environment:
+      - FAUCET_PRIVATE_KEY=${FAUCET_PRIVATE_KEY}
+      - RPC_URL=http://rpc1:8545
+      - DRIP_AMOUNT=1000000000000000000000
+      - COOLDOWN_SECONDS=86400
+    volumes:
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    command: ["faucet"]
+    networks:
+      testnet:
+        aliases:
+          - faucet
+    depends_on:
+      - rpc1
+    restart: unless-stopped
+
+  # Nginx (Reverse Proxy)
+  nginx:
+    image: nginx:alpine
+    container_name: nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      testnet:
+        aliases:
+          - nginx
+    depends_on:
+      - rpc1
+      - rpc2
+      - faucet
+      - grafana
+    restart: unless-stopped
+
+networks:
+  testnet:
+    driver: bridge
+
+volumes:
+  validator1_data:
+  validator2_data:
+  validator3_data:
+  rpc1_data:
+  rpc2_data:
+  prometheus_data:
+  grafana_data:

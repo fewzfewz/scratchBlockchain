@@ -1,0 +1,10 @@
+groups:
+  - name: example
+    rules:
+    - alert: InstanceDown
+      expr: up == 0
+      for: 1m
+      labels:
+        severity: page
+      annotations:
+        summary: "Instance {{ $labels.instance }} down"
