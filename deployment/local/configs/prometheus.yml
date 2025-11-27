@@ -7,21 +7,26 @@ scrape_configs:
       - targets: ['localhost:9090']
 
   - job_name: 'validator1'
+    metrics_path: '/metrics'
     static_configs:
-      - targets: ['validator1:9090']
+      - targets: ['validator1:26657']
 
   - job_name: 'validator2'
+    metrics_path: '/metrics'
     static_configs:
-      - targets: ['validator2:9090']
+      - targets: ['validator2:26657']
 
   - job_name: 'validator3'
+    metrics_path: '/metrics'
     static_configs:
-      - targets: ['validator3:9090']
+      - targets: ['validator3:26657']
 
   - job_name: 'rpc1'
+    metrics_path: '/metrics'
     static_configs:
-      - targets: ['rpc1:9090']
+      - targets: ['rpc1:26657']
 
   - job_name: 'rpc2'
+    metrics_path: '/metrics'
     static_configs:
-      - targets: ['rpc2:9090']
+      - targets: ['rpc2:26657']

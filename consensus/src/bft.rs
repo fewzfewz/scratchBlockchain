@@ -35,7 +35,7 @@ pub enum BftEvent {
 
 pub struct BftEngine {
     // Identity
-    pub local_address: Vec<u8>,
+    pub public_key: Vec<u8>,  // Changed from local_address to public_key
     // Signing key for this validator
     pub signing_key: common::crypto::SigningKey,
     
@@ -63,7 +63,7 @@ pub struct BftEngine {
 }
 
 impl BftEngine {
-    pub fn new(local_address: Vec<u8>, validators: Vec<ValidatorInfo>, start_height: u64, signing_key: crypto::SigningKey) -> Self {
+    pub fn new(public_key: Vec<u8>, validators: Vec<ValidatorInfo>, start_height: u64, signing_key: crypto::SigningKey) -> Self {
         let mut val_map = HashMap::new();
         let mut total_stake = 0;
         for v in validators {
@@ -72,7 +72,7 @@ impl BftEngine {
         }
 
         Self {
-            local_address,
+            public_key,  // Changed from local_address
             signing_key,
             height: start_height,
             round: 0,
@@ -164,7 +164,7 @@ impl BftEngine {
             step: Step::Prevote,
             block_hash: Some(proposal.block.hash()),
             signature: vec![], 
-            voter: self.local_address.clone(),
+            voter: self.public_key.clone(),  // Use public_key instead of local_address
         };
         
         // Sign the vote
@@ -225,7 +225,7 @@ impl BftEngine {
                     step: Step::Precommit,
                     block_hash: hash,
                     signature: vec![], 
-                    voter: self.local_address.clone(),
+                    voter: self.public_key.clone(),  // Use public_key instead of local_address
                 };
                 
                 // Sign the vote
@@ -290,7 +290,7 @@ impl BftEngine {
         let index = (height + round) as usize % sorted_validators.len();
         let proposer = sorted_validators[index];
         
-        proposer == &self.local_address
+        proposer == &self.public_key  // Use public_key instead of local_address
     }
 
     pub fn create_proposal(&mut self, block: Block) -> Vec<BftEvent> {
@@ -303,7 +303,7 @@ impl BftEngine {
             round: self.round,
             block: block.clone(),
             signature: vec![], // TODO: Sign
-            proposer: self.local_address.clone(),
+            proposer: self.public_key.clone(),  // Use public_key instead of local_address
         };
         
         self.proposal = Some(proposal.clone());
@@ -316,7 +316,7 @@ impl BftEngine {
             step: Step::Prevote,
             block_hash: Some(block.hash()),
             signature: vec![], // TODO: Sign
-            voter: self.local_address.clone(),
+            voter: self.public_key.clone(),  // Use public_key instead of local_address
         };
         self.add_vote(vote.clone());
         
@@ -378,7 +378,7 @@ impl BftEngine {
         step: Step::Prevote,
         block_hash: None,  // Nil vote
         signature: vec![],
-        voter: self.local_address.clone(),
+        voter: self.public_key.clone(),  // Use public_key instead of local_address
     };
     
     // Sign the vote
@@ -402,7 +402,7 @@ pub fn handle_timeout_prevote(&mut self) -> Vec<BftEvent> {
         step: Step::Precommit,
         block_hash: None,  // Nil vote
         signature: vec![],
-        voter: self.local_address.clone(),
+        voter: self.public_key.clone(),  // Use public_key instead of local_address
     };
     
     // Sign the vote

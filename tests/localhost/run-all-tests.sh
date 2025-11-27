@@ -44,10 +44,10 @@ echo "Checking prerequisites..."
 echo ""
 
 # Check if testnet is running
-if ! docker-compose ps | grep -q "Up"; then
+if ! docker ps | grep -q "validator1"; then
     echo -e "${RED}❌ Testnet is not running!${NC}"
     echo "Please start testnet first:"
-    echo "  cd deployment/local && ./setup.sh"
+    echo "  cd deployment/local && docker-compose up -d"
     exit 1
 fi
 
