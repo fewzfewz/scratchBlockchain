@@ -19,6 +19,12 @@ const els = {
     txStatus: document.getElementById('txStatus')
 };
 
+function shortenAddress(value) {
+    if (!value) return '';
+    if (value.length <= 24) return value;
+    return `${value.slice(0, 12)}...${value.slice(-10)}`;
+}
+
 // Key Management
 function generateKeyPair() {
     const pair = nacl.sign.keyPair();
@@ -28,8 +34,6 @@ function generateKeyPair() {
     };
     
     // Convert to hex for display
-    const pubKeyHex = nacl.util.encodeBase64(keyPair.publicKey); // Using Base64 for shorter display, or Hex? 
-    // Let's use Hex as it's more standard for addresses usually
     const pubKeyHexStr = toHex(keyPair.publicKey);
     const privKeyHexStr = toHex(keyPair.secretKey);
 
@@ -61,6 +65,21 @@ function loadSavedKey() {
     }
 }
 
+async function copyToClipboard(value, successMessage) {
+    if (!value) {
+        showStatus('Nothing to copy yet', 'error');
+        return;
+    }
+
+    try {
+        await navigator.clipboard.writeText(value);
+        showStatus(successMessage, 'success');
+    } catch (error) {
+        console.error('Clipboard error:', error);
+        showStatus('Copy failed in this browser context', 'error');
+    }
+}
+
 // Utils
 function toHex(buffer) {
     return Array.prototype.map.call(buffer, x => ('00' + x.toString(16)).slice(-2)).join('');
@@ -83,7 +102,7 @@ async function updateBalance() {
         const response = await fetch(`${API_URL}/balance/${address}`);
         if (response.ok) {
             const data = await response.json();
-            els.balanceDisplay.textContent = data.balance.toFixed(2);
+            els.balanceDisplay.textContent = Number(data.balance).toFixed(2);
         } else {
             els.balanceDisplay.textContent = '0.00';
         }
@@ -153,7 +172,7 @@ async function sendTransaction(e) {
         });
 
         if (response.ok) {
-            showStatus(`Transaction Sent! Hash: ${await response.text()}`, 'success');
+            showStatus(`Transaction sent from ${shortenAddress(els.addressDisplay.value)}. Hash: ${await response.text()}`, 'success');
             els.amountInput.value = '';
             setTimeout(updateBalance, 2000);
         } else {
@@ -183,8 +202,11 @@ els.toggleKey.addEventListener('click', () => {
 });
 
 els.copyAddress.addEventListener('click', () => {
-    navigator.clipboard.writeText(els.addressDisplay.value);
-    // Could add tooltip "Copied!"
+    copyToClipboard(els.addressDisplay.value, 'Address copied to clipboard');
+});
+
+els.copyKey.addEventListener('click', () => {
+    copyToClipboard(els.privateKeyDisplay.value, 'Private key copied to clipboard');
 });
 
 // Init
