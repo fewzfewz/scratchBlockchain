@@ -3,6 +3,13 @@
 [network]
 chain_id = "modular-testnet-1"
 network_name = "Modular Blockchain Testnet"
+p2p_port = 30333
+rpc_port = 9933
+bootstrap_nodes = [
+    "/dns4/validator1/tcp/30333/p2p/12D3KooWBootstrap1",
+    "/dns4/validator2/tcp/30333/p2p/12D3KooWBootstrap2",
+    "/dns4/validator3/tcp/30333/p2p/12D3KooWBootstrap3"
+]
 
 [genesis]
 # Genesis timestamp (Unix timestamp)
