@@ -80,7 +80,8 @@ impl PeerReputation {
 
         if score.is_banned() {
             // Ban for 1 hour
-            self.banned_peers.insert(peer, Instant::now() + Duration::from_secs(3600));
+            self.banned_peers
+                .insert(peer, Instant::now() + Duration::from_secs(3600));
         }
     }
 
@@ -88,7 +89,7 @@ impl PeerReputation {
         // Remove expired bans
         let now = Instant::now();
         self.banned_peers.retain(|_, expiration| *expiration > now);
-        
+
         // Decay scores over time (normalize towards 0)
         for (peer, last_update) in &self.last_update {
             if now.duration_since(*last_update) > Duration::from_secs(3600) {

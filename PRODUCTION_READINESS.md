@@ -12,6 +12,8 @@
 - ✅ Network configuration (libp2p, gossipsub)
 - ✅ Monitoring stack (Prometheus + Grafana)
 - ✅ Faucet service for test tokens
+- ✅ Local bootstrap multiaddr configuration
+- ✅ Persisted peer reconnect behavior
 
 **What's Missing:**
 - ❌ Cloud deployment scripts (AWS/GCP/Azure)
@@ -49,6 +51,7 @@
 - ✅ Grafana dashboards (basic)
 - ✅ Health check endpoints
 - ✅ Validator set management in code
+- ✅ Local bootstrap and peer re-dial support
 
 **What's Missing:**
 - ❌ Validator onboarding documentation
@@ -79,8 +82,8 @@
 
 ---
 
-### ❌ 3. Governance UI
-**Status**: ❌ **NOT READY** (30%)
+### ⚠️ 3. Governance UI
+**Status**: ⚠️ **PARTIALLY READY** (45%)
 
 **What You Have:**
 - ✅ Governance module code (`governance/src/lib.rs`)
@@ -88,9 +91,10 @@
 - ✅ Voting mechanism (on-chain)
 - ✅ Treasury management
 - ✅ Parameter change proposals
+- ✅ React governance frontend shell (`frontend/governance/`)
 
 **What's Missing:**
-- ❌ Governance web interface
+- ⚠️ Governance web interface shell
 - ❌ Proposal creation UI
 - ❌ Voting interface
 - ❌ Proposal browsing/filtering
@@ -135,7 +139,7 @@
 - ❌ Smart contract templates (Solidity/WASM)
 - ❌ CLI tool for developers
 - ❌ Contract deployment wizard
-- ❌ Block explorer
+- ✅ Block explorer
 - ❌ Developer portal website
 - ❌ Video tutorials
 - ❌ Hackathon resources
@@ -428,7 +432,7 @@
 |----------|--------|------------|----------|
 | 1. Public Testnet | ⚠️ Partial | 70% | 🔴 Critical |
 | 2. Validators Onboarding | ⚠️ Partial | 60% | 🔴 Critical |
-| 3. Governance UI | ❌ Missing | 30% | 🟡 High |
+| 3. Governance UI | ⚠️ Partial | 45% | 🟡 High |
 | 4. Developer Ecosystem | ⚠️ Partial | 50% | 🔴 Critical |
 | 5. Tokenomics | ⚠️ Partial | 40% | 🔴 Critical |
 | 6. Security Audits | ❌ Missing | 10% | 🔴 Critical |

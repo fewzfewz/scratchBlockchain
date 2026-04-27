@@ -1,9 +1,8 @@
 use crate::protocol::BlockExchangeCodec;
 use libp2p::{
-    gossipsub,
+    connection_limits, gossipsub,
     kad::{store::MemoryStore, Behaviour as Kademlia},
     request_response::Behaviour as RequestResponse,
-    connection_limits,
     swarm::NetworkBehaviour,
 };
 

@@ -52,7 +52,7 @@ impl TokenBucket {
     fn refill(&mut self) {
         let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        
+
         // Add tokens based on elapsed time
         self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
         self.last_refill = now;
@@ -60,7 +60,7 @@ impl TokenBucket {
 
     fn try_consume(&mut self, cost: f64) -> bool {
         self.refill();
-        
+
         if self.tokens >= cost {
             self.tokens -= cost;
             true
@@ -102,7 +102,11 @@ impl RateLimiter {
     }
 
     /// Check if a peer can send a message and consume tokens if allowed
-    pub fn check_and_consume(&mut self, peer: &PeerId, msg_type: MessageType) -> Result<(), String> {
+    pub fn check_and_consume(
+        &mut self,
+        peer: &PeerId,
+        msg_type: MessageType,
+    ) -> Result<(), String> {
         // Check if peer is banned
         if let Some(ban_info) = self.banned_peers.get(peer) {
             if Instant::now() < ban_info.until {
@@ -119,8 +123,9 @@ impl RateLimiter {
         // Get or create token bucket for this peer and message type
         let capacity = self.get_capacity(msg_type);
         let refill_rate = self.get_refill_rate(msg_type);
-        
-        let bucket = self.buckets
+
+        let bucket = self
+            .buckets
             .entry((*peer, msg_type))
             .or_insert_with(|| TokenBucket::new(capacity, refill_rate));
 
@@ -152,17 +157,17 @@ impl RateLimiter {
     /// Manually ban a peer
     pub fn ban_peer(&mut self, peer: &PeerId, duration: Duration, reason: String) {
         let until = Instant::now() + duration;
-        
+
         let ban_info = self.banned_peers.entry(*peer).or_insert(BannedPeer {
             until,
             reason: reason.clone(),
             violation_count: 0,
         });
-        
+
         ban_info.until = until;
         ban_info.reason = reason;
         ban_info.violation_count += 1;
-        
+
         tracing::warn!("Banned peer {:?} until {:?}", peer, until);
     }
 
@@ -201,14 +206,13 @@ impl RateLimiter {
     /// Clean up expired bans and old buckets
     pub fn cleanup(&mut self) {
         let now = Instant::now();
-        
+
         // Remove expired bans
         self.banned_peers.retain(|_, ban| now < ban.until);
-        
+
         // Remove old token buckets (not used in last 5 minutes)
-        self.buckets.retain(|_, bucket| {
-            now.duration_since(bucket.last_refill) < Duration::from_secs(300)
-        });
+        self.buckets
+            .retain(|_, bucket| now.duration_since(bucket.last_refill) < Duration::from_secs(300));
     }
 
     /// Get statistics
@@ -254,12 +258,12 @@ mod tests {
     #[test]
     fn test_token_bucket_basic() {
         let mut bucket = TokenBucket::new(10, 5);
-        
+
         // Should be able to consume up to capacity
         for _ in 0..10 {
             assert!(bucket.try_consume(1.0));
         }
-        
+
         // Should fail when empty
         assert!(!bucket.try_consume(1.0));
     }
@@ -267,16 +271,16 @@ mod tests {
     #[test]
     fn test_token_bucket_refill() {
         let mut bucket = TokenBucket::new(10, 10); // 10 tokens/sec
-        
+
         // Consume all tokens
         for _ in 0..10 {
             assert!(bucket.try_consume(1.0));
         }
         assert!(!bucket.try_consume(1.0));
-        
+
         // Wait for refill
         thread::sleep(Duration::from_millis(500)); // 0.5 seconds = 5 tokens
-        
+
         // Should have ~5 tokens now
         assert!(bucket.try_consume(1.0));
         assert!(bucket.try_consume(1.0));
@@ -287,14 +291,19 @@ mod tests {
         let config = RateLimitConfig::default();
         let mut limiter = RateLimiter::new(config);
         let peer = PeerId::random();
-        
+
         // Should allow up to capacity
-        for _ in 0..20 { // 2x transactions_per_second
-            assert!(limiter.check_and_consume(&peer, MessageType::Transaction).is_ok());
+        for _ in 0..20 {
+            // 2x transactions_per_second
+            assert!(limiter
+                .check_and_consume(&peer, MessageType::Transaction)
+                .is_ok());
         }
-        
+
         // Should fail when limit exceeded
-        assert!(limiter.check_and_consume(&peer, MessageType::Transaction).is_err());
+        assert!(limiter
+            .check_and_consume(&peer, MessageType::Transaction)
+            .is_err());
     }
 
     #[test]
@@ -302,11 +311,17 @@ mod tests {
         let config = RateLimitConfig::default();
         let mut limiter = RateLimiter::new(config);
         let peer = PeerId::random();
-        
+
         // Each message type has independent limits
-        assert!(limiter.check_and_consume(&peer, MessageType::Transaction).is_ok());
-        assert!(limiter.check_and_consume(&peer, MessageType::BlockRequest).is_ok());
-        assert!(limiter.check_and_consume(&peer, MessageType::ConsensusMessage).is_ok());
+        assert!(limiter
+            .check_and_consume(&peer, MessageType::Transaction)
+            .is_ok());
+        assert!(limiter
+            .check_and_consume(&peer, MessageType::BlockRequest)
+            .is_ok());
+        assert!(limiter
+            .check_and_consume(&peer, MessageType::ConsensusMessage)
+            .is_ok());
     }
 
     #[test]
@@ -314,17 +329,19 @@ mod tests {
         let config = RateLimitConfig::default();
         let mut limiter = RateLimiter::new(config);
         let peer = PeerId::random();
-        
+
         // Ban the peer
         limiter.ban_peer(&peer, Duration::from_secs(1), "Test ban".to_string());
-        
+
         // Should be banned
         assert!(limiter.is_banned(&peer));
-        assert!(limiter.check_and_consume(&peer, MessageType::Transaction).is_err());
-        
+        assert!(limiter
+            .check_and_consume(&peer, MessageType::Transaction)
+            .is_err());
+
         // Wait for ban to expire
         thread::sleep(Duration::from_secs(2));
-        
+
         // Should no longer be banned
         assert!(!limiter.is_banned(&peer));
     }
@@ -334,17 +351,17 @@ mod tests {
         let config = RateLimitConfig::default();
         let mut limiter = RateLimiter::new(config);
         let peer = PeerId::random();
-        
+
         // Exhaust tokens
         for _ in 0..20 {
             let _ = limiter.check_and_consume(&peer, MessageType::Transaction);
         }
-        
+
         // Trigger violations
         for _ in 0..10 {
             let _ = limiter.check_and_consume(&peer, MessageType::Transaction);
         }
-        
+
         // Should be auto-banned after 10 violations
         assert!(limiter.is_banned(&peer));
     }
@@ -354,18 +371,18 @@ mod tests {
         let config = RateLimitConfig::default();
         let mut limiter = RateLimiter::new(config);
         let peer = PeerId::random();
-        
+
         // Create some buckets
         let _ = limiter.check_and_consume(&peer, MessageType::Transaction);
-        
+
         // Ban a peer temporarily
         limiter.ban_peer(&peer, Duration::from_millis(100), "Test".to_string());
-        
+
         assert_eq!(limiter.get_banned_peers().len(), 1);
-        
+
         // Wait for ban to expire
         thread::sleep(Duration::from_millis(200));
-        
+
         // Cleanup should remove expired ban
         limiter.cleanup();
         assert_eq!(limiter.get_banned_peers().len(), 0);

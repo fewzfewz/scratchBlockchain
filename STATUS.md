@@ -2,7 +2,7 @@
 
 ## 🎯 Current Status: FUNCTIONAL (with known limitations)
 
-**Last Updated**: November 27, 2024  
+**Last Updated**: April 27, 2026  
 **Environment**: Local Docker Testnet  
 **Services**: 9/9 Running
 
@@ -26,6 +26,8 @@
 - ✅ Manual peer connection
 - ✅ Gossipsub messaging
 - ✅ Connection established between validators
+- ✅ Bootstrap multiaddr configuration
+- ✅ Persisted peer reconnect on restart
 
 ### 3. RPC API (100%)
 All endpoints functional:
@@ -80,10 +82,10 @@ All endpoints functional:
 WARN consensus::bft: Invalid vote signature from [236, 119, 82, ...]: Invalid signature
 ```
 
-### Medium: Peer Persistence
-**Impact**: Manual reconnection needed after restart  
-**Cause**: Node keys regenerate  
-**Workaround**: Use connect_peer RPC
+### Medium: Continuous Empty-Block Production
+**Impact**: Idle networks may appear stalled when the mempool is empty  
+**Cause**: Block production currently depends on available transactions  
+**Workaround**: Submit a transaction or allow empty blocks in the block producer
 
 ### Low: Health Checks
 **Impact**: Containers show "unhealthy"  
@@ -130,7 +132,7 @@ WARN consensus::bft: Invalid vote signature from [236, 119, 82, ...]: Invalid si
 
 ## 🧪 VERIFIED TESTS
 
-### Passing Tests (12/15)
+### Passing Tests (13/16)
 1. ✅ Network connectivity
 2. ✅ RPC health checks
 3. ✅ Account queries
@@ -143,11 +145,12 @@ WARN consensus::bft: Invalid vote signature from [236, 119, 82, ...]: Invalid si
 10. ✅ Monitoring services
 11. ✅ Docker deployment
 12. ✅ Configuration management
+13. ✅ Bootstrap peer reconnect configuration
 
-### Failing Tests (3/15)
-1. ❌ Block production (consensus stuck)
-2. ❌ Block finalization (no blocks)
-3. ❌ Validator rewards (no blocks)
+### Failing / Pending Verification
+1. ⚠️ Re-verify block production on the latest local testnet
+2. ⚠️ Re-verify block finalization on the latest local testnet
+3. ⚠️ Re-verify validator rewards on the latest local testnet
 
 ---
 
@@ -170,16 +173,15 @@ curl -X POST http://localhost:3001/faucet \
 docker logs validator1 -f
 ```
 
-### Connect Peers
+### Peer Bootstrap
 ```bash
-# Get peer IDs
-docker logs validator1 | grep "Local peer id"
-docker logs validator2 | grep "Local peer id"
-docker logs validator3 | grep "Local peer id"
+# Bootstrap peers are configured in:
+deployment/local/configs/validator1.toml
+deployment/local/configs/validator2.toml
+deployment/local/configs/validator3.toml
 
-# Connect them
-docker exec validator1 modular-node connect-peer \
-  --multiaddr "/dns4/validator2/tcp/26656/p2p/<PEER_ID>"
+# Persisted peers are stored in each node data dir:
+/data/peers.json
 ```
 
 ### View Metrics
@@ -206,6 +208,7 @@ open http://localhost:3000
 8. Test RPC endpoints
 9. Inspect mempool
 10. View logs
+11. Restart nodes with peer bootstrap + reconnect enabled
 
 ### ❌ Currently Blocked
 1. Produce blocks (consensus issue)

@@ -69,8 +69,8 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&req)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         io.write_all(&data).await
     }
 
@@ -83,8 +83,8 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let data = serde_json::to_vec(&res)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let data =
+            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         io.write_all(&data).await
     }
 }

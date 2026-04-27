@@ -1,23 +1,22 @@
 use clap::{Parser, Subcommand};
 mod config;
-use config::NodeConfig;
-use std::path::PathBuf;
-use std::fs;
+use common::consensus_types::{ConsensusMessage, Proposal, Vote};
 use common::traits::Consensus;
 use common::types::{Block, Transaction};
+use config::NodeConfig;
+use consensus::bft::BftEvent;
 use consensus::EnhancedConsensus;
 use ed25519_dalek::{Signer, SigningKey};
 use execution::Executor;
 use network::{NetworkCommand, NetworkEvent, NetworkService};
 use node::block_producer::BlockProducer;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
-use common::consensus_types::{ConsensusMessage, Vote, Proposal};
-use consensus::bft::BftEvent;
 use warp::Filter;
-use std::env;
-
 
 #[derive(Parser)]
 #[command(name = "modular-node")]
@@ -70,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Commands::Start { config, genesis } => {
             info!("Starting Modular Blockchain Node...");
-            
+
             // Load configuration
             let node_config = NodeConfig::load(&config)?;
             info!("Loaded configuration from {:?}", config);
@@ -79,47 +78,62 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             use node::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
             let _circuit_breaker = CircuitBreaker::new(CircuitBreakerConfig::default());
             info!("Circuit breaker initialized");
-            
+
             use storage::PersistentStore;
             let _store = PersistentStore::default();
             info!("Persistent storage initialized");
-            
+
             // Initialize mempool
             use mempool::{Mempool, MempoolConfig};
             let mempool = Arc::new(Mempool::new(MempoolConfig::default()));
             info!("Mempool initialized");
-            
+
             // Initialize state store
-            let state_store = Arc::new(storage::StateStore::new(&format!("{}/state_db", node_config.storage.data_dir))?);
+            let state_store = Arc::new(storage::StateStore::new(&format!(
+                "{}/state_db",
+                node_config.storage.data_dir
+            ))?);
             info!("State store initialized");
-            
+
             // Load genesis
             let genesis_content = fs::read_to_string(&genesis)?;
-            let genesis_config: common::types::GenesisConfig = serde_json::from_str(&genesis_content)?;
-            
-            if state_store.get_account(&genesis_config.accounts[0].address)?.is_none() {
+            let genesis_config: common::types::GenesisConfig =
+                serde_json::from_str(&genesis_content)?;
+
+            if state_store
+                .get_account(&genesis_config.accounts[0].address)?
+                .is_none()
+            {
                 info!("Initializing genesis state...");
                 state_store.initialize_genesis(&genesis_config)?;
             }
 
             // Initialize block store
-            let block_store = Arc::new(storage::BlockStore::new(&format!("{}/block_db", node_config.storage.data_dir))?);
+            let block_store = Arc::new(storage::BlockStore::new(&format!(
+                "{}/block_db",
+                node_config.storage.data_dir
+            ))?);
             info!("Block store initialized");
 
             // Initialize peer store
-            let _peer_store = Arc::new(network::peer_store::PeerStore::new(&format!("{}/peers.json", node_config.storage.data_dir))?);
+            let _peer_store = Arc::new(network::peer_store::PeerStore::new(&format!(
+                "{}/peers.json",
+                node_config.storage.data_dir
+            ))?);
             info!("Peer store initialized");
-            
+
             // Setup validators
             use common::crypto::SigningKey;
-            use consensus::{EnhancedConsensus, ValidatorInfo, FinalityGadget};
-            
+            use consensus::{EnhancedConsensus, FinalityGadget, ValidatorInfo};
+
             // Load or generate key
             let key_path = PathBuf::from(&node_config.storage.data_dir).join("node_key.json");
             let signing_key = if key_path.exists() {
                 let content = fs::read_to_string(&key_path)?;
                 let secret_bytes = hex::decode(content.trim())?;
-                let secret_array: [u8; 32] = secret_bytes.try_into().map_err(|_| anyhow::anyhow!("Invalid key length"))?;
+                let secret_array: [u8; 32] = secret_bytes
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("Invalid key length"))?;
                 SigningKey::from_bytes(&secret_array)
             } else {
                 let key = SigningKey::generate();
@@ -128,17 +142,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Ok(key)
             };
             let signing_key = signing_key?;
-            
+
             let pubkey_bytes = signing_key.public_key();
             info!("Node Public Key: {:?}", hex::encode(&pubkey_bytes));
-            
+
             // Use validators from genesis
-            let validators: Vec<ValidatorInfo> = genesis_config.validators.iter().map(|v| ValidatorInfo {
-                public_key: hex::decode(v.public_key.strip_prefix("pubkey_").unwrap_or(&v.public_key)).unwrap_or_default(), // Handle format
-                stake: v.stake as u64,
-                slashed: false,
-            }).collect();
-            
+            let validators: Vec<ValidatorInfo> = genesis_config
+                .validators
+                .iter()
+                .map(|v| ValidatorInfo {
+                    public_key: hex::decode(
+                        v.public_key
+                            .strip_prefix("pubkey_")
+                            .unwrap_or(&v.public_key),
+                    )
+                    .unwrap_or_default(), // Handle format
+                    stake: v.stake as u64,
+                    slashed: false,
+                })
+                .collect();
+
             // If genesis validators are empty or malformed, fallback (should not happen in prod)
             let validators = if validators.is_empty() {
                 warn!("No validators found in genesis, using self as validator");
@@ -150,13 +173,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 validators
             };
-            
+
             let consensus = Arc::new(Mutex::new(EnhancedConsensus::new(validators.clone())));
             let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators.clone())));
-            
+
             // Initialize network
             // We need to pass config to network service
-            let (network, network_cmd_sender, mut network_event_receiver) = NetworkService::new(node_config.network.bootstrap_nodes.clone())?;
+            let peer_store_path = format!("{}/peers.json", node_config.storage.data_dir);
+            let (network, network_cmd_sender, mut network_event_receiver) = NetworkService::new(
+                node_config.network.bootstrap_nodes.clone(),
+                &peer_store_path,
+            )?;
             let network_cmd_sender = Arc::new(network_cmd_sender);
 
             // Initialize block producer
@@ -176,7 +203,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let metrics = Arc::new(node::metrics::Metrics::new());
 
             // Initialize receipt store
-            let receipt_store = Arc::new(storage::receipt_store::ReceiptStore::new(&format!("{}/receipts_db", node_config.storage.data_dir))?);
+            let receipt_store = Arc::new(storage::receipt_store::ReceiptStore::new(&format!(
+                "{}/receipts_db",
+                node_config.storage.data_dir
+            ))?);
             info!("Receipt store initialized");
 
             // Start RPC server
@@ -189,20 +219,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 metrics.clone(),
                 (*network_cmd_sender).clone(),
             );
-            
+
             let rpc_port = node_config.network.rpc_port;
             tokio::spawn(async move {
                 rpc_server.run(rpc_port, None).await;
             });
 
             info!("Components initialized. Running network...");
-            
+
             // Start listening on P2P port
-            let p2p_addr: libp2p::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", node_config.network.p2p_port)
-                .parse()
-                .expect("Invalid P2P address");
-            network_cmd_sender.send(NetworkCommand::StartListening(p2p_addr)).await?;
-            
+            let p2p_addr: libp2p::Multiaddr =
+                format!("/ip4/0.0.0.0/tcp/{}", node_config.network.p2p_port)
+                    .parse()
+                    .expect("Invalid P2P address");
+            network_cmd_sender
+                .send(NetworkCommand::StartListening(p2p_addr))
+                .await?;
+
             // Spawn network task
             tokio::spawn(network.run());
 
@@ -217,7 +250,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 1, // Start at height 1
                 signing_key,
             );
-            
+
             // Start first round
             let mut pending_bft_events = bft_engine.start_round(0);
 
@@ -228,19 +261,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     match event {
                         BftEvent::BroadcastVote(vote) => {
                             let msg = ConsensusMessage::Vote(vote);
-                            if let Err(e) = network_cmd_sender.send(NetworkCommand::BroadcastConsensusMessage(msg)).await {
+                            if let Err(e) = network_cmd_sender
+                                .send(NetworkCommand::BroadcastConsensusMessage(msg))
+                                .await
+                            {
                                 error!("Failed to broadcast vote: {}", e);
                             }
                         }
                         BftEvent::BroadcastProposal(proposal) => {
                             let msg = ConsensusMessage::Proposal(proposal);
-                            if let Err(e) = network_cmd_sender.send(NetworkCommand::BroadcastConsensusMessage(msg)).await {
+                            if let Err(e) = network_cmd_sender
+                                .send(NetworkCommand::BroadcastConsensusMessage(msg))
+                                .await
+                            {
                                 error!("Failed to broadcast proposal: {}", e);
                             }
                         }
                         BftEvent::FinalizeBlock(block) => {
                             info!("Finalizing block at height {}", block.header.slot);
-                            
+
                             // Load current state
                             let mut state = match state_store.get_all_accounts() {
                                 Ok(s) => s,
@@ -255,14 +294,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Err(e) = executor.execute_block(&block, &mut state) {
                                 error!("Block execution failed during finalization: {}", e);
                             }
-                            
+
                             // Persist state
                             for (address, account) in state {
                                 if let Err(e) = state_store.put_account(&address, &account) {
                                     error!("Failed to persist account state: {}", e);
                                 }
                             }
-                            
+
                             // Persist block
                             if let Err(e) = block_store.put_block(&block) {
                                 error!("Failed to persist block: {}", e);
@@ -270,16 +309,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             if let Err(e) = block_store.set_latest_height(block.header.slot) {
                                 error!("Failed to update latest height: {}", e);
                             }
-                            
+
                             // Update metrics
                             metrics.record_block();
                             metrics.update_finalized_height(block.header.slot);
-                            
+
                             // Remove included transactions from mempool
                             mempool.remove_transactions(&block.extrinsics);
-                            
+
                             // Broadcast finalized block to network (for observers/sync)
-                            if let Err(e) = network_cmd_sender.send(NetworkCommand::BroadcastBlock(block.clone())).await {
+                            if let Err(e) = network_cmd_sender
+                                .send(NetworkCommand::BroadcastBlock(block.clone()))
+                                .await
+                            {
                                 error!("Failed to broadcast finalized block: {}", e);
                             }
 
@@ -304,9 +346,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                         BftEvent::Timeout(step) => {
-                            warn!("Timeout in step {:?} at height {}, round {}", 
-                                  step, bft_engine.height, bft_engine.round);
-                            
+                            warn!(
+                                "Timeout in step {:?} at height {}, round {}",
+                                step, bft_engine.height, bft_engine.round
+                            );
+
                             use common::consensus_types::Step;
                             let events = match step {
                                 Step::Propose => {
@@ -359,14 +403,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             NetworkEvent::BlockReceived { block, source } => {
                                 info!("Received block from network: slot {}", block.header.slot);
-                                
+
                                 // Check if parent is known (for MVP, just check against last_block)
                                 // In a real system, check storage/index
                                 if block.header.parent_hash != last_block.hash() && block.header.slot > 0 {
                                     info!("Received orphan block (parent unknown). Requesting missing blocks from height {}", last_block.header.slot + 1);
                                     // Request missing blocks from the source peer
-                                    if let Err(e) = network_cmd_sender.send(NetworkCommand::RequestBlock { 
-                                        peer: source, 
+                                    if let Err(e) = network_cmd_sender.send(NetworkCommand::RequestBlock {
+                                        peer: source,
                                         start_height: last_block.header.slot + 1,
                                         limit: 10, // Request up to 10 blocks at a time
                                     }).await {
@@ -380,7 +424,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     } else {
                                         // Verify state transition
                                         info!("Verifying state transition for block {}", block.header.slot);
-                                        
+
                                         // Load current state
                                         let mut state = match state_store.get_all_accounts() {
                                             Ok(s) => s,
@@ -389,34 +433,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 continue;
                                             }
                                         };
-                                        
+
                                         // Execute block
                                         let executor = execution::NativeExecutor::new();
                                         if let Err(e) = executor.execute_block(&block, &mut state) {
                                             warn!("Block execution failed: {}", e);
                                             continue;
                                         }
-                                        
+
                                         // Verify state root
                                         let computed_root = storage::StateStore::compute_root(&state);
                                         if computed_root != block.header.state_root {
                                             warn!("Invalid state root. Expected {:?}, got {:?}", block.header.state_root, computed_root);
                                             continue;
                                         }
-                                        
+
                                         // Use fork choice to decide what to do
                                         let mut fc = fork_choice.lock().await;
                                         match fc.handle_incoming_block(&block, &block_store) {
                                             Ok(node::fork_choice::ForkDecision::Accept) => {
                                                 info!("Block accepted: slot {}", block.header.slot);
-                                                
+
                                                 // Persist state
                                                 for (address, account) in state {
                                                     if let Err(e) = state_store.put_account(&address, &account) {
                                                         error!("Failed to persist account state: {}", e);
                                                     }
                                                 }
-                                                
+
                                                 // Persist block
                                                 if let Err(e) = block_store.put_block(&block) {
                                                     error!("Failed to persist block: {}", e);
@@ -424,28 +468,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                                 if let Err(e) = block_store.set_latest_height(block.header.slot) {
                                                     error!("Failed to update latest height: {}", e);
                                                 }
-                                                
+
                                                 // Update metrics
                                                 metrics.record_block();
                                                 metrics.update_finalized_height(block.header.slot);
-                                                
+
                                                 // Remove included transactions from mempool
                                                 mempool.remove_transactions(&block.extrinsics);
-                                                
+
                                                 last_block = block;
                                             }
                                             Ok(node::fork_choice::ForkDecision::Reorg { new_tip, new_height }) => {
                                                 warn!("Reorg needed to tip {:?} at height {}", new_tip, new_height);
                                                 // TODO: Implement full reorg logic (state rollback, etc.)
                                                 // For now, just accept if it's strictly better and we haven't finalized
-                                                
+
                                                 // Persist state (Note: this overwrites current state, which is correct for simple reorg to better chain)
                                                 for (address, account) in state {
                                                     if let Err(e) = state_store.put_account(&address, &account) {
                                                         error!("Failed to persist account state: {}", e);
                                                     }
                                                 }
-                                                
+
                                                 if let Err(e) = block_store.put_block(&block) {
                                                     error!("Failed to persist block: {}", e);
                                                 }
@@ -466,7 +510,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                             NetworkEvent::BlockRequestReceived { peer, request_id: _, start_height, limit, channel } => {
                                 info!("Received block request from {:?} for range {}..{}", peer, start_height, start_height + limit as u64);
-                                
+
                                 // Fetch blocks from storage
                                 let mut blocks = Vec::new();
                                 for height in start_height..(start_height + limit as u64) {
@@ -482,14 +526,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         }
                                     }
                                 }
-                                
+
                                 if let Err(e) = network_cmd_sender.send(NetworkCommand::SendBlockResponse { channel, blocks }).await {
                                     error!("Failed to send block response: {:?}", e);
                                 }
                             }
                             NetworkEvent::BlockResponseReceived { peer, request_id: _, blocks } => {
                                 info!("Received {} blocks from {:?}", blocks.len(), peer);
-                                
+
                                 // Process each block in order
                                 for block in blocks {
                                     // Verify block with consensus
@@ -499,7 +543,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         break;
                                     }
                                     drop(consensus);
-                                    
+
                                     // Load current state
                                     let mut state = match state_store.get_all_accounts() {
                                         Ok(s) => s,
@@ -508,28 +552,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                             break;
                                         }
                                     };
-                                    
+
                                     // Execute block
                                     let executor = execution::NativeExecutor::new();
                                     if let Err(e) = executor.execute_block(&block, &mut state) {
                                         warn!("Block execution failed during sync: {}", e);
                                         break;
                                     }
-                                    
+
                                     // Verify state root
                                     let computed_root = storage::StateStore::compute_root(&state);
                                     if computed_root != block.header.state_root {
                                         warn!("Invalid state root during sync. Expected {:?}, got {:?}", block.header.state_root, computed_root);
                                         break;
                                     }
-                                    
+
                                     // Persist state
                                     for (address, account) in state {
                                         if let Err(e) = state_store.put_account(&address, &account) {
                                             error!("Failed to persist account state: {}", e);
                                         }
                                     }
-                                    
+
                                     // Persist block
                                     if let Err(e) = block_store.put_block(&block) {
                                         error!("Failed to persist block: {}", e);
@@ -539,14 +583,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         error!("Failed to update latest height: {}", e);
                                         break;
                                     }
-                                    
+
                                     // Update metrics
                                     metrics.record_block();
                                     metrics.update_finalized_height(block.header.slot);
-                                    
+
                                     // Remove included transactions from mempool
                                     mempool.remove_transactions(&block.extrinsics);
-                                    
+
                                     last_block = block.clone();
                                     info!("Synced block at height {}", block.header.slot);
                                 }
@@ -556,7 +600,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             }
                         }
                     }
-                    
+
                     // Shutdown signal
                     _ = tokio::signal::ctrl_c() => {
                         info!("Shutdown signal received. Saving peers and exiting...");
@@ -575,13 +619,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             use ed25519_dalek::SigningKey;
             use rand::rngs::OsRng;
             use rand::RngCore;
-            
+
             let mut csprng = OsRng;
             let mut secret_bytes = [0u8; 32];
             csprng.fill_bytes(&mut secret_bytes);
             let signing_key = SigningKey::from_bytes(&secret_bytes);
             let verifying_key = signing_key.verifying_key();
-            
+
             println!("Secret Key: {}", hex::encode(secret_bytes));
             println!("Public Key: {}", hex::encode(verifying_key.to_bytes()));
         }
@@ -590,32 +634,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // For MVP, we'll just print what we would do
             // In a real implementation, this would connect via RPC/HTTP
             println!("Submitting transaction with payload: {}", payload);
-            
+
             use ed25519_dalek::SigningKey;
             use rand::rngs::OsRng;
             use rand::RngCore;
-            
+
             let mut csprng = OsRng;
             let mut secret_bytes = [0u8; 32];
             csprng.fill_bytes(&mut secret_bytes);
             let signing_key = SigningKey::from_bytes(&secret_bytes);
-            
+
             let mut tx = Transaction::test_transaction([0; 20], 0);
             tx.payload = payload.as_bytes().to_vec();
             tx.signature = vec![]; // Placeholder
-            
+
             // Sign tx
             let tx_hash = tx.hash();
             let signature = signing_key.sign(&tx_hash);
             let mut signed_tx = tx;
             signed_tx.signature = signature.to_bytes().to_vec();
-            
+
             println!("Signed transaction: {:?}", signed_tx);
             println!("(To actually submit, we need to implement RPC/API layer)");
         }
         Commands::QueryBalance { address } => {
             info!("Querying balance for address: {}", address);
-            
+
             // Call RPC endpoint
             let url = format!("http://localhost:9933/balance/{}", address);
             match reqwest::get(&url).await {
@@ -634,7 +678,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::GetBlock { height } => {
             info!("Getting block at height: {}", height);
-            
+
             // Call RPC endpoint
             let url = format!("http://localhost:9933/block/{}", height);
             match reqwest::get(&url).await {
@@ -654,11 +698,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::ConnectPeer { multiaddr } => {
             info!("Connecting to peer: {}", multiaddr);
             let client = reqwest::Client::new();
-            // Default RPC port is 26657, but it might be different. 
+            // Default RPC port is 26657, but it might be different.
             // For CLI we assume default or user should provide it (TODO: add --rpc-port arg)
             let rpc_url = "http://127.0.0.1:26657/connect_peer";
-            
-            let response = client.post(rpc_url)
+
+            let response = client
+                .post(rpc_url)
                 .json(&serde_json::json!({
                     "multiaddr": multiaddr
                 }))
@@ -681,13 +726,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Faucet => {
             info!("Starting Faucet Service...");
-            
+
             // Load config from env
-            let private_key_hex = env::var("FAUCET_PRIVATE_KEY").expect("FAUCET_PRIVATE_KEY must be set");
-            let _rpc_url = env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
-            let drip_amount = env::var("DRIP_AMOUNT").unwrap_or_else(|_| "1000000000000000000000".to_string()).parse::<u128>().unwrap();
-            let cooldown = env::var("COOLDOWN_SECONDS").unwrap_or_else(|_| "86400".to_string()).parse::<u64>().unwrap();
-            
+            let private_key_hex =
+                env::var("FAUCET_PRIVATE_KEY").expect("FAUCET_PRIVATE_KEY must be set");
+            let _rpc_url =
+                env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string());
+            let drip_amount = env::var("DRIP_AMOUNT")
+                .unwrap_or_else(|_| "1000000000000000000000".to_string())
+                .parse::<u128>()
+                .unwrap();
+            let cooldown = env::var("COOLDOWN_SECONDS")
+                .unwrap_or_else(|_| "86400".to_string())
+                .parse::<u64>()
+                .unwrap();
+
             // Initialize faucet logic
             use node::faucet::{Faucet, FaucetConfig};
             let config = FaucetConfig {
@@ -696,15 +749,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 max_requests_per_address: 10,
             };
             let faucet = Arc::new(Mutex::new(Faucet::new(config)));
-            
+
             // Load private key
-            let private_key_clean = private_key_hex.trim().strip_prefix("0x").unwrap_or(&private_key_hex);
+            let private_key_clean = private_key_hex
+                .trim()
+                .strip_prefix("0x")
+                .unwrap_or(&private_key_hex);
             let secret_bytes = hex::decode(private_key_clean).expect("Invalid private key hex");
-            let secret_array: [u8; 32] = secret_bytes.try_into().expect("Invalid private key length");
+            let secret_array: [u8; 32] =
+                secret_bytes.try_into().expect("Invalid private key length");
             let _signing_key = SigningKey::from_bytes(&secret_array);
-            
+
             info!("Faucet initialized with drip amount: {}", drip_amount);
-            
+
             let faucet_clone = faucet.clone();
             let route = warp::post()
                 .and(warp::path("faucet"))
@@ -716,17 +773,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Some(s) => s,
                             None => return Ok::<_, warp::Rejection>(warp::reply::json(&serde_json::json!({ "error": "Missing address" }))),
                         };
-                        
+
                         let addr_bytes = match hex::decode(addr_str.strip_prefix("0x").unwrap_or(addr_str)) {
                             Ok(b) => b,
                             Err(_) => return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid hex address" }))),
                         };
-                        
+
                         let address: [u8; 20] = match addr_bytes.try_into() {
                             Ok(a) => a,
                             Err(_) => return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid address length" }))),
                         };
-                        
+
                         let mut faucet = faucet.lock().await;
                         match faucet.request_tokens(address) {
                             Ok(amount) => {
@@ -740,7 +797,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 });
-                
+
             info!("Faucet listening on 0.0.0.0:3000");
             warp::serve(route).run(([0, 0, 0, 0], 3000)).await;
         }
