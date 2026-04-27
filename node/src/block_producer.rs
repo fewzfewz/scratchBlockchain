@@ -1,11 +1,11 @@
-use common::traits::Consensus;
-use common::types::{Block, Header, Transaction, Account, Address};
-use consensus::EnhancedConsensus;
 use common::crypto::SigningKey;
+use common::traits::Consensus;
+use common::types::{Account, Address, Block, Header, Transaction};
+use consensus::EnhancedConsensus;
 use execution::{Executor, NativeExecutor};
+use governance::InflationSchedule;
 use mempool::Mempool;
 use storage::StateStore;
-use governance::InflationSchedule;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -43,20 +43,18 @@ impl BlockProducer {
         }
     }
 
-    /// Produce a new block from mempool transactions
-    pub async fn produce_block(&mut self, parent: &Block) -> Result<Block, Box<dyn std::error::Error>> {
+    /// Produce a new block from current mempool state.
+    ///
+    /// Empty blocks are allowed so the chain can continue advancing even when
+    /// no user transactions are currently queued.
+    pub async fn produce_block(
+        &mut self,
+        parent: &Block,
+    ) -> Result<Block, Box<dyn std::error::Error>> {
         info!("Producing new block at slot {}", self.current_slot);
 
         // Get transactions from mempool
         let transactions = self.mempool.get_transactions(100); // Max 100 txs per block
-        
-        /* 
-        // Allow continuous empty blocks to be produced
-        if transactions.is_empty() {
-            info!("No transactions in mempool, skipping block production");
-            return Err("No transactions available".into());
-        }
-        */
 
         info!("Building block with {} transactions", transactions.len());
 
@@ -69,12 +67,12 @@ impl BlockProducer {
             30_000_000, // Block gas limit
             parent.header.base_fee,
         );
-        
+
         // Execute transactions and update state
         let executor = NativeExecutor::new();
         let mut header = Header::new(parent.hash(), self.current_slot);
         header.base_fee = base_fee;
-        
+
         let mut valid_transactions = Vec::new();
         let mut total_gas_used = 0;
         let block_gas_limit = 30_000_000;
@@ -142,52 +140,65 @@ impl BlockProducer {
         // Calculate block reward using inflation schedule
         let block_height = block.header.slot;
         let block_reward = self.inflation_schedule.calculate_reward(block_height);
-        
+
         // Calculate total fees from transactions
-        let total_fees: u128 = valid_transactions.iter()
+        let total_fees: u128 = valid_transactions
+            .iter()
             .map(|tx| tx.max_fee_per_gas as u128 * tx.gas_limit as u128)
             .sum();
-        
+
         // Calculate fee burn
         let fee_burn = self.inflation_schedule.calculate_fee_burn(total_fees);
         let fee_to_validator = total_fees - fee_burn;
-        
-        info!("Block reward: {} tokens, Fees: {} (burned: {})", 
-              block_reward / 1_000_000_000, 
-              fee_to_validator / 1_000_000_000,
-              fee_burn / 1_000_000_000);
-        
+
+        info!(
+            "Block reward: {} tokens, Fees: {} (burned: {})",
+            block_reward / 1_000_000_000,
+            fee_to_validator / 1_000_000_000,
+            fee_burn / 1_000_000_000
+        );
+
         // Treasury gets 10% of block reward
         let treasury_share = block_reward / 10;
         let validator_reward = block_reward - treasury_share + fee_to_validator;
-        
+
         // Create Coinbase transaction (Reward to validator)
         let validator_address = Address::default(); // Placeholder: should derive from signing_key
-        
+
         // Add reward to state directly
         if let Some(account) = state.get_mut(&validator_address) {
             account.balance += validator_reward;
         } else {
-            state.insert(validator_address, Account {
-                nonce: 0,
-                balance: validator_reward,
-            });
+            state.insert(
+                validator_address,
+                Account {
+                    nonce: 0,
+                    balance: validator_reward,
+                },
+            );
         }
-        
-        info!("Awarded {} tokens to validator (treasury: {})", 
-              validator_reward / 1_000_000_000,
-              treasury_share / 1_000_000_000);
+
+        info!(
+            "Awarded {} tokens to validator (treasury: {})",
+            validator_reward / 1_000_000_000,
+            treasury_share / 1_000_000_000
+        );
 
         Ok(block)
     }
 
     /// Load state from storage into memory
-    fn load_state_from_storage(&self) -> Result<HashMap<Address, Account>, Box<dyn std::error::Error>> {
+    fn load_state_from_storage(
+        &self,
+    ) -> Result<HashMap<Address, Account>, Box<dyn std::error::Error>> {
         self.state_store.get_all_accounts()
     }
 
     /// Persist state from memory to storage
-    fn persist_state_to_storage(&self, state: &HashMap<Address, Account>) -> Result<(), Box<dyn std::error::Error>> {
+    fn persist_state_to_storage(
+        &self,
+        state: &HashMap<Address, Account>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         for (address, account) in state {
             self.state_store.put_account(address, account)?;
         }
@@ -222,7 +233,7 @@ mod tests {
     async fn test_block_production() {
         // Setup
         let mempool = Arc::new(Mempool::new(MempoolConfig::default()));
-        
+
         let signing_key = SigningKey::from_bytes(&[1u8; 32]).unwrap();
         let public_key = signing_key.public_key();
         let validators = vec![ValidatorInfo {
@@ -247,8 +258,9 @@ mod tests {
         let block_store = Arc::new(storage::BlockStore::new(block_store_path.to_str().unwrap()).unwrap());
 
         // Create finality gadget
-        let finality_gadget = Arc::new(Mutex::new(consensus::FinalityGadget::new(validators.clone())));
-        
+        let finality_gadget =
+            Arc::new(Mutex::new(consensus::FinalityGadget::new(validators.clone())));
+
         let mut producer = BlockProducer::new(
             mempool.clone(),
             consensus,
@@ -277,7 +289,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_mempool() {
         let mempool = Arc::new(Mempool::new(MempoolConfig::default()));
-        
+
         let signing_key = SigningKey::from_bytes(&[1u8; 32]).unwrap();
         let public_key = signing_key.public_key();
         let validators = vec![ValidatorInfo {
@@ -291,10 +303,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test_state_db_empty");
         let state_store = Arc::new(StateStore::new(path.to_str().unwrap()).unwrap());
-        
+        let genesis_config = common::types::GenesisConfig::default();
+        state_store.initialize_genesis(&genesis_config).unwrap();
+
         let block_store_path = dir.path().join("test_block_db_empty");
         let block_store = Arc::new(storage::BlockStore::new(block_store_path.to_str().unwrap()).unwrap());
-        let finality_gadget = Arc::new(Mutex::new(consensus::FinalityGadget::new(validators.clone())));
+        let finality_gadget =
+            Arc::new(Mutex::new(consensus::FinalityGadget::new(validators.clone())));
 
         let mut producer = BlockProducer::new(
             mempool,

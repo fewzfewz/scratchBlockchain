@@ -338,9 +338,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                         new_events.extend(events);
                                     }
                                     Err(e) => {
-                                        if e.to_string() != "No transactions available" {
-                                            warn!("Failed to produce block: {}", e);
-                                        }
+                                        warn!("Failed to produce block: {}", e);
                                     }
                                 }
                             }

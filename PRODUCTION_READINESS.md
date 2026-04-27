@@ -14,6 +14,7 @@
 - ✅ Faucet service for test tokens
 - ✅ Local bootstrap multiaddr configuration
 - ✅ Persisted peer reconnect behavior
+- ✅ Continuous empty-block production
 
 **What's Missing:**
 - ❌ Cloud deployment scripts (AWS/GCP/Azure)

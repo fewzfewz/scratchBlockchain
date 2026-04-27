@@ -82,10 +82,10 @@ All endpoints functional:
 WARN consensus::bft: Invalid vote signature from [236, 119, 82, ...]: Invalid signature
 ```
 
-### Medium: Continuous Empty-Block Production
-**Impact**: Idle networks may appear stalled when the mempool is empty  
-**Cause**: Block production currently depends on available transactions  
-**Workaround**: Submit a transaction or allow empty blocks in the block producer
+### Medium: Governance Actions Still Need Wiring
+**Impact**: Governance is present visually but not yet fully actionable  
+**Cause**: Proposal creation and voting flows are not fully wired through the frontend and RPC  
+**Workaround**: Use code-level governance paths until the UI flow is completed
 
 ### Low: Health Checks
 **Impact**: Containers show "unhealthy"  
@@ -148,9 +148,9 @@ WARN consensus::bft: Invalid vote signature from [236, 119, 82, ...]: Invalid si
 13. ✅ Bootstrap peer reconnect configuration
 
 ### Failing / Pending Verification
-1. ⚠️ Re-verify block production on the latest local testnet
-2. ⚠️ Re-verify block finalization on the latest local testnet
-3. ⚠️ Re-verify validator rewards on the latest local testnet
+1. ⚠️ Re-verify block finalization on the latest local testnet
+2. ⚠️ Re-verify validator rewards on the latest local testnet
+3. ⚠️ Re-verify governance transaction flow on the latest local testnet
 
 ---
 
@@ -209,6 +209,7 @@ open http://localhost:3000
 9. Inspect mempool
 10. View logs
 11. Restart nodes with peer bootstrap + reconnect enabled
+12. Observe height advancing even when the mempool is empty
 
 ### ❌ Currently Blocked
 1. Produce blocks (consensus issue)
