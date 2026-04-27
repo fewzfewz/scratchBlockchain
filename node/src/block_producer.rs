@@ -50,10 +50,13 @@ impl BlockProducer {
         // Get transactions from mempool
         let transactions = self.mempool.get_transactions(100); // Max 100 txs per block
         
+        /* 
+        // Allow continuous empty blocks to be produced
         if transactions.is_empty() {
             info!("No transactions in mempool, skipping block production");
             return Err("No transactions available".into());
         }
+        */
 
         info!("Building block with {} transactions", transactions.len());
 
@@ -305,6 +308,9 @@ mod tests {
         let genesis = Block::genesis();
         let result = producer.produce_block(&genesis).await;
 
-        assert!(result.is_err());
+        // An empty block should now be produced successfully
+        assert!(result.is_ok());
+        let block = result.unwrap();
+        assert_eq!(block.extrinsics.len(), 0);
     }
 }
