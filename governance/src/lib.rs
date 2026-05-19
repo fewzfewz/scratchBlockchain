@@ -634,3 +634,91 @@ impl Governance {
         Ok(proposal.status.clone())
     }
 }
+
+
+// ============================================================================
+// Governance Execution & Parameter Updates
+// ============================================================================
+
+/// Executable governance actions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum GovernanceAction {
+    /// Change a protocol parameter
+    SetParameter { key: String, value: String },
+    /// Update validator set
+    UpdateValidatorSet { validators: Vec<ValidatorInfo> },
+    /// Execute treasury spend
+    TreasurySpend { recipient: Address, amount: u128 },
+    /// Upgrade runtime
+    RuntimeUpgrade { version: String, code_hash: [u8; 32] },
+    /// Update inflation schedule
+    UpdateInflation { new_initial_reward: u128, new_halving_interval: u64 },
+}
+
+/// Governance executor that applies approved proposals
+pub struct GovernanceExecutor {
+    staking: StakingContract,
+    executed_actions: Vec<GovernanceAction>,
+}
+
+impl GovernanceExecutor {
+    pub fn new(staking: StakingContract) -> Self {
+        Self {
+            staking,
+            executed_actions: Vec::new(),
+        }
+    }
+    
+    /// Execute an approved governance action
+    pub fn execute(&mut self, action: GovernanceAction) -> Result<(), String> {
+        match action {
+            GovernanceAction::SetParameter { key, value } => {
+                self.set_parameter(&key, &value)?;
+            }
+            GovernanceAction::UpdateValidatorSet { validators } => {
+                self.update_validator_set(validators)?;
+            }
+            GovernanceAction::TreasurySpend { recipient, amount } => {
+                self.staking.treasury.spend(amount)?;
+                // Transfer to recipient logic here
+            }
+            GovernanceAction::RuntimeUpgrade { version, code_hash: _ } => {
+                info!("Runtime upgrade to version {} approved", version);
+            }
+            GovernanceAction::UpdateInflation { new_initial_reward, new_halving_interval } => {
+                let new_schedule = InflationSchedule::new(new_initial_reward, new_halving_interval, 50);
+                // Apply new schedule - would need to update staking
+                info!("Inflation schedule updated");
+            }
+        }
+        
+        self.executed_actions.push(action);
+        Ok(())
+    }
+    
+    fn set_parameter(&mut self, key: &str, value: &str) -> Result<(), String> {
+        match key {
+            "min_stake" => {
+                let new_min = value.parse().map_err(|_| "Invalid min_stake value")?;
+                self.staking.min_stake = new_min;
+            }
+            "unbonding_period" => {
+                let new_period = value.parse().map_err(|_| "Invalid unbonding_period value")?;
+                self.staking.unbonding_period = new_period;
+            }
+            _ => return Err(format!("Unknown parameter: {}", key)),
+        }
+        Ok(())
+    }
+    
+    fn update_validator_set(&mut self, validators: Vec<ValidatorInfo>) -> Result<(), String> {
+        // Update active validator set
+        for validator in validators {
+            if let Some(existing) = self.staking.validators.get_mut(&validator.address) {
+                existing.is_active = validator.is_active;
+                existing.stake = validator.stake;
+            }
+        }
+        Ok(())
+    }
+}

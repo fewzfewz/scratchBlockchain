@@ -1,39 +1,82 @@
+# ============================================================================
+# TESTNET GENESIS CONFIGURATION
+# ============================================================================
+# Network: Modular Blockchain Testnet
+# Chain ID: modular-testnet-1
+# Purpose: Public testnet for developers and validators
+# Validators: 10-50 (community validators)
+# Block Time: 4 seconds (4000ms) for balance between speed and stability
+# ============================================================================
+
 [chain]
-chain_id = "modular-blockchain-testnet"
-timestamp = 1700000000
+chain_id = "modular-testnet-1"
+timestamp = 1700000000  # Use current UNIX timestamp
 initial_height = 0
+network_id = 2
+name = "Modular Blockchain Testnet"
 
 [consensus]
-block_time_ms = 1000  # Faster for testing
-max_validators = 50
-min_stake = "100000"
+block_time_ms = 4000                    # 4 seconds
+max_validators = 200                    # More validators for testnet
+min_stake = "100000000000000000000"     # 100 tokens minimum
+unbonding_period = 604800               # 7 days (4s blocks: 7d = 604800 blocks)
+max_validators_per_epoch = 200
 
 [governance]
-proposal_deposit = "1000"
-voting_period_blocks = 1000  # ~16 minutes
-quorum_threshold = "0.25"
+proposal_deposit = "10000000000000000000"   # 10 tokens deposit
+voting_period_blocks = 86400               # 4 days
+quorum_threshold = "0.25"                  # 25% quorum (easier for testnet)
+approval_threshold = "0.50"                # 50% approval
+max_proposals = 100
 
-# Test validators
+[economic]
+initial_block_reward = "5000000000000000000"   # 5 tokens
+halving_interval = 4200000                    # ~6 months (for faster testing)
+fee_burn_percentage = 30                      # Burn 30% of fees
+treasury_address = "0x0000000000000000000000000000000000000000"
+
+# Testnet validators (community validators)
 [[validators]]
-address = "0x1111111111111111111111111111111111111111"
-stake = "1000000"
-commission_rate = "0.05"
-
-[[validators]]
-address = "0x2222222222222222222222222222222222222222"
-stake = "800000"
-commission_rate = "0.05"
-
-[[validators]]
-address = "0x3333333333333333333333333333333333333333"
-stake = "600000"
-commission_rate = "0.05"
-
-# Test accounts
-[[accounts]]
 address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-balance = "10000000000"
+stake = "1000000000000000000000"   # 1000 tokens
+commission_rate = "0.10"            # 10%
+public_key = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+description = "Community Validator 1"
+website = "https://validator1.testnet.com"
 
+# Add more validators as they join testnet...
+
+# Testnet accounts (for developers)
 [[accounts]]
 address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-balance = "5000000000"
+balance = "50000000000000000000000"   # 50,000 tokens (Faucet)
+
+[[accounts]]
+address = "0xcccccccccccccccccccccccccccccccccccccccc"
+balance = "10000000000000000000000"   # 10,000 tokens (Developer grants)
+
+# Precompiles (standard set)
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000001"
+contract_type = "ecrecover"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000002"
+contract_type = "sha256"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000003"
+contract_type = "ripemd160"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000004"
+contract_type = "identity"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000005"
+contract_type = "blake2f"
+enabled = true

@@ -922,6 +922,6 @@ This is a **fully functional blockchain for local development and testing**. It'
 
 ---
 
-*Last Updated: November 27, 2024*
+*Last Updated: November 27, 2025*
 *Version: 1.0.0*
 *Status: Local Testnet*

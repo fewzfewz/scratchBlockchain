@@ -1,57 +1,150 @@
+# ============================================================================
+# MAINNET GENESIS CONFIGURATION
+# ============================================================================
+# Network: Modular Blockchain Mainnet
+# Chain ID: modular-mainnet-1
+# Launch Date: TBD (set timestamp before launch)
+# Validators: Minimum 100, Maximum 300
+# Block Time: 6 seconds (6000ms) for mainnet stability
+# ============================================================================
+
 [chain]
-chain_id = "modular-blockchain-mainnet"
-timestamp = 1735689600  # 2025-01-01 00:00:00 UTC
+chain_id = "modular-mainnet-1"
+timestamp = 1700000000  # UPDATE BEFORE LAUNCH: Use current UNIX timestamp
 initial_height = 0
+network_id = 1
+name = "Modular Blockchain Mainnet"
 
+# ============================================================================
+# CONSENSUS PARAMETERS
+# ============================================================================
 [consensus]
-block_time_ms = 3000
-max_validators = 100
-min_stake = "1000000"
+# Block production: 6 seconds for mainnet (slower but more stable)
+block_time_ms = 6000
 
+# Validator limits
+max_validators = 300              # Maximum validators in active set
+min_stake = "1000000000000000000000"  # Minimum 1000 tokens to become validator
+unbonding_period = 1814400        # 21 days (6s blocks: 21d = 1814400 blocks)
+max_validators_per_epoch = 300    # All active validators per epoch
+
+# ============================================================================
+# GOVERNANCE PARAMETERS
+# ============================================================================
 [governance]
-proposal_deposit = "10000"
-voting_period_blocks = 100800  # ~7 days at 3s blocks
-quorum_threshold = "0.334"
+proposal_deposit = "10000000000000000000000"  # 10,000 tokens deposit
+voting_period_blocks = 302400                # 21 days (6s blocks)
+quorum_threshold = "0.40"                     # 40% quorum required
+approval_threshold = "0.6667"                 # 66.67% approval required
+max_proposals = 200                           # Max active proposals
 
-# Initial validator set
+# ============================================================================
+# ECONOMIC PARAMETERS
+# ============================================================================
+[economic]
+# Initial block reward: 2 tokens per block
+initial_block_reward = "2000000000000000000"  # 2 tokens
+halving_interval = 3153600                    # 2 years (6s blocks: 2y ≈ 31.5M blocks)
+fee_burn_percentage = 50                      # Burn 50% of transaction fees
+treasury_address = "0x0000000000000000000000000000000000000000"  # Set treasury address
+
+# ============================================================================
+# GENESIS VALIDATORS
+# ============================================================================
+# NOTE: Add mainnet validators here before launch
+# Each validator must stake minimum 1000 tokens
+
 [[validators]]
 address = "0x1111111111111111111111111111111111111111"
-stake = "10000000"
-commission_rate = "0.10"
+stake = "10000000000000000000000"   # 10,000 tokens
+commission_rate = "0.05"             # 5% commission
+public_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
+description = "Mainnet Validator 1"
+website = "https://validator1.example.com"
 
 [[validators]]
 address = "0x2222222222222222222222222222222222222222"
-stake = "8000000"
-commission_rate = "0.08"
+stake = "10000000000000000000000"   # 10,000 tokens
+commission_rate = "0.05"             # 5% commission
+public_key = "0x2222222222222222222222222222222222222222222222222222222222222222"
+description = "Mainnet Validator 2"
+website = "https://validator2.example.com"
 
 [[validators]]
 address = "0x3333333333333333333333333333333333333333"
-stake = "6000000"
-commission_rate = "0.05"
+stake = "10000000000000000000000"   # 10,000 tokens
+commission_rate = "0.05"             # 5% commission
+public_key = "0x3333333333333333333333333333333333333333333333333333333333333333"
+description = "Mainnet Validator 3"
+website = "https://validator3.example.com"
 
-[[validators]]
-address = "0x4444444444444444444444444444444444444444"
-stake = "5000000"
-commission_rate = "0.07"
+# Add more validators as needed...
 
-[[validators]]
-address = "0x5555555555555555555555555555555555555555"
-stake = "4000000"
-commission_rate = "0.06"
-
-# Initial token distribution
-[[accounts]]
-address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-balance = "100000000000"
+# ============================================================================
+# GENESIS ACCOUNTS
+# ============================================================================
+# NOTE: Pre-funded accounts for mainnet launch
 
 [[accounts]]
-address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-balance = "50000000000"
+address = "0x0000000000000000000000000000000000000001"
+balance = "1000000000000000000000000000"   # 1 billion tokens (Foundation)
 
 [[accounts]]
-address = "0xcccccccccccccccccccccccccccccccccccccccc"
-balance = "25000000000"
+address = "0x0000000000000000000000000000000000000002"
+balance = "500000000000000000000000000"    # 500 million tokens (Ecosystem)
 
 [[accounts]]
-address = "0xdddddddddddddddddddddddddddddddddddddddd"
-balance = "10000000000"
+address = "0x0000000000000000000000000000000000000003"
+balance = "200000000000000000000000000"    # 200 million tokens (Team)
+
+[[accounts]]
+address = "0x0000000000000000000000000000000000000004"
+balance = "100000000000000000000000000"    # 100 million tokens (Community)
+
+# ============================================================================
+# PRECOMPILED CONTRACTS (Standard EVM precompiles)
+# ============================================================================
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000001"
+contract_type = "ecrecover"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000002"
+contract_type = "sha256"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000003"
+contract_type = "ripemd160"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000004"
+contract_type = "identity"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000005"
+contract_type = "blake2f"
+enabled = true
+
+# ============================================================================
+# TOKENOMICS SUMMARY
+# ============================================================================
+# Total Supply: 2,100,000,000 NBL
+# Initial Supply: 1,800,000,000 NBL (to be distributed)
+# Treasury Reserve: 300,000,000 NBL
+# 
+# Distribution:
+# - Foundation: 1,000,000,000 NBL
+# - Ecosystem: 500,000,000 NBL
+# - Team: 200,000,000 NBL (4-year vesting)
+# - Community: 100,000,000 NBL
+# - Treasury: 300,000,000 NBL (reserved)
+# 
+# Inflation Schedule:
+# - Initial block reward: 2 NBL
+# - Halving every 2 years
+# - Max supply cap: 2,100,000,000 NBL
+# - Final block reward: 0.0001 NBL (after 64 halvings)

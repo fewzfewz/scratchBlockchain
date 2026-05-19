@@ -272,3 +272,152 @@ mod tests {
         assert_eq!(blob.commitment.commitment, submitted_batch.da_commitment.clone().unwrap());
     }
 }
+
+// ============================================================================
+// Fraud Proof System
+// ============================================================================
+
+/// Fraud proof with evidence
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FraudProof {
+    pub batch_index: u64,
+    pub tx_index: usize,
+    pub invalid_state_root: [u8; 32],
+    pub correct_state_root: [u8; 32],
+    pub evidence: Vec<u8>,
+    pub challenger: Address,
+}
+
+/// Fraud proof verifier
+pub struct FraudVerifier {
+    verified_proofs: HashMap<u64, bool>,
+}
+
+impl FraudVerifier {
+    pub fn new() -> Self {
+        Self {
+            verified_proofs: HashMap::new(),
+        }
+    }
+    
+    /// Verify fraud proof by re-executing
+    pub fn verify_fraud_proof(&mut self, rollup: &RollupNode, proof: &FraudProof) -> Result<bool, String> {
+        let batch = rollup.l1_batches.get(proof.batch_index as usize)
+            .ok_or("Batch not found")?;
+        
+        let tx = batch.transactions.get(proof.tx_index)
+            .ok_or("Transaction not found")?;
+        
+        // Re-execute from previous state
+        let mut state = batch.prev_state_root.clone();
+        
+        // Execute all transactions up to the invalid one
+        for i in 0..=proof.tx_index {
+            let current_tx = &batch.transactions[i];
+            // Execute transaction and update state
+            // (Simplified - would use actual EVM)
+            state = self.execute_transaction(&state, current_tx)?;
+        }
+        
+        // Check if state matches expected
+        let expected_root = self.hash_state(&state);
+        let is_fraud = expected_root != proof.invalid_state_root;
+        
+        if is_fraud {
+            self.verified_proofs.insert(proof.batch_index, true);
+            info!("Fraud proven for batch {}", proof.batch_index);
+        }
+        
+        Ok(is_fraud)
+    }
+    
+    fn execute_transaction(&self, state: &[u8], _tx: &Transaction) -> Result<Vec<u8>, String> {
+        // Simplified - would use EVM
+        Ok(state.to_vec())
+    }
+    
+    fn hash_state(&self, state: &[u8]) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(state);
+        hasher.finalize().into()
+    }
+}
+
+// ============================================================================
+// Cross-Rollup Communication
+// ============================================================================
+
+/// Message between rollups
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CrossRollupMessage {
+    pub from_rollup: String,
+    pub to_rollup: String,
+    pub sender: Address,
+    pub recipient: Address,
+    pub data: Vec<u8>,
+    pub value: u128,
+    pub nonce: u64,
+    pub proof: Option<Vec<u8>>,
+}
+
+/// Cross-rollup messaging bridge
+pub struct RollupBridge {
+    outgoing_messages: VecDeque<CrossRollupMessage>,
+    incoming_messages: VecDeque<CrossRollupMessage>,
+    processed_nonces: HashMap<String, u64>,
+}
+
+impl RollupBridge {
+    pub fn new() -> Self {
+        Self {
+            outgoing_messages: VecDeque::new(),
+            incoming_messages: VecDeque::new(),
+            processed_nonces: HashMap::new(),
+        }
+    }
+    
+    /// Send a message to another rollup
+    pub fn send_message(&mut self, message: CrossRollupMessage) -> Result<(), String> {
+        // Verify nonce is sequential
+        let last_nonce = self.processed_nonces.get(&message.from_rollup).unwrap_or(&0);
+        if message.nonce != *last_nonce + 1 {
+            return Err("Invalid nonce".into());
+        }
+        
+        self.outgoing_messages.push_back(message);
+        Ok(())
+    }
+    
+    /// Receive a message from another rollup
+    pub fn receive_message(&mut self, message: CrossRollupMessage) -> Result<(), String> {
+        // Verify proof if ZK rollup
+        if let Some(proof) = &message.proof {
+            // Verify proof using ZK prover
+            if !self.verify_message_proof(&message, proof) {
+                return Err("Invalid proof".into());
+            }
+        }
+        
+        self.incoming_messages.push_back(message);
+        Ok(())
+    }
+    
+    /// Execute pending incoming messages
+    pub fn execute_messages(&mut self, executor: &mut EvmExecutor) -> Result<usize, String> {
+        let mut executed = 0;
+        
+        while let Some(message) = self.incoming_messages.pop_front() {
+            // Execute message on EVM
+            let _result = executor.execute_message(&message)?;
+            self.processed_nonces.insert(message.to_rollup, message.nonce);
+            executed += 1;
+        }
+        
+        Ok(executed)
+    }
+    
+    fn verify_message_proof(&self, _message: &CrossRollupMessage, _proof: &[u8]) -> bool {
+        // In production, verify ZK proof
+        true
+    }
+}

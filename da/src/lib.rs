@@ -388,3 +388,123 @@ mod tests {
         }
     }
 }
+
+// ============================================================================
+// Data Availability Sampling & Light Client Verification
+// ============================================================================
+
+/// Light client for data availability verification
+pub struct DaLightClient {
+    trusted_roots: VecDeque<[u8; 32]>,
+    sample_size: usize,
+}
+
+impl DaLightClient {
+    pub fn new(sample_size: usize) -> Self {
+        Self {
+            trusted_roots: VecDeque::new(),
+            sample_size,
+        }
+    }
+    
+    /// Add a trusted root
+    pub fn add_trusted_root(&mut self, root: [u8; 32]) {
+        self.trusted_roots.push_back(root);
+        while self.trusted_roots.len() > 10 {
+            self.trusted_roots.pop_front();
+        }
+    }
+    
+    /// Sample random chunks to verify availability
+    pub fn sample_availability(&self, chunks: &[ErasureChunk], total_chunks: usize) -> bool {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        
+        let samples: Vec<usize> = (0..self.sample_size)
+            .map(|_| rng.gen_range(0..total_chunks))
+            .collect();
+        
+        for sample_index in samples {
+            if !chunks.iter().any(|c| c.index == sample_index) {
+                return false; // Missing chunk
+            }
+        }
+        
+        true
+    }
+    
+    /// Verify blob against a trusted root
+    pub fn verify_blob(&self, blob: &DataBlob, root: &[u8; 32]) -> bool {
+        let computed_root = self.compute_root(blob);
+        &computed_root == root && blob.verify()
+    }
+    
+    fn compute_root(&self, blob: &DataBlob) -> [u8; 32] {
+        let mut hasher = Sha256::new();
+        hasher.update(&blob.data);
+        hasher.update(&blob.commitment.commitment);
+        hasher.finalize().into()
+    }
+}
+
+// ============================================================================
+// Data Availability Proofs
+// ============================================================================
+
+/// Proof that data is available
+#[derive(Debug, Clone)]
+pub struct AvailabilityProof {
+    pub sample_results: Vec<bool>,
+    pub merkle_proofs: Vec<Vec<[u8; 32]>>,
+    pub sample_indices: Vec<usize>,
+}
+
+impl AvailabilityProof {
+    pub fn verify(&self, required_samples: usize) -> bool {
+        let available_samples = self.sample_results.iter().filter(|&&r| r).count();
+        available_samples >= required_samples && !self.merkle_proofs.is_empty()
+    }
+}
+
+/// Data availability proof generator
+pub struct AvailabilityProver {
+    coder: ErasureCoder,
+}
+
+impl AvailabilityProver {
+    pub fn new(data_chunks: usize, parity_chunks: usize) -> Self {
+        Self {
+            coder: ErasureCoder::new(data_chunks, parity_chunks),
+        }
+    }
+    
+    /// Generate availability proof for a blob
+    pub fn generate_proof(&self, data: &[u8], sample_indices: &[usize]) -> Result<AvailabilityProof> {
+        let chunks = self.coder.encode(data)?;
+        let total_chunks = chunks.len();
+        
+        let mut sample_results = Vec::new();
+        let mut merkle_proofs = Vec::new();
+        
+        for &index in sample_indices {
+            if index < total_chunks {
+                sample_results.push(true);
+                merkle_proofs.push(self.generate_merkle_proof(&chunks, index));
+            } else {
+                sample_results.push(false);
+                merkle_proofs.push(vec![]);
+            }
+        }
+        
+        Ok(AvailabilityProof {
+            sample_results,
+            merkle_proofs,
+            sample_indices: sample_indices.to_vec(),
+        })
+    }
+    
+    fn generate_merkle_proof(&self, chunks: &[ErasureChunk], index: usize) -> Vec<[u8; 32]> {
+        // Simplified Merkle proof generation
+        vec![[0; 32]]
+    }
+}

@@ -1,3 +1,8 @@
+//! # Rate Limiter Module
+//!
+//! Implements token bucket rate limiting for DoS protection.
+//! Each peer has independent buckets for different message types.
+
 use libp2p::PeerId;
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -37,15 +42,19 @@ struct TokenBucket {
     capacity: f64,
     refill_rate: f64, // tokens per second
     last_refill: Instant,
+    /// Track last activity for cleanup
+    last_activity: Instant,
 }
 
 impl TokenBucket {
     fn new(capacity: u32, refill_rate: u32) -> Self {
+        let now = Instant::now();
         Self {
             tokens: capacity as f64,
             capacity: capacity as f64,
             refill_rate: refill_rate as f64,
-            last_refill: Instant::now(),
+            last_refill: now,
+            last_activity: now,
         }
     }
 
@@ -60,6 +69,7 @@ impl TokenBucket {
 
     fn try_consume(&mut self, cost: f64) -> bool {
         self.refill();
+        self.last_activity = Instant::now();
 
         if self.tokens >= cost {
             self.tokens -= cost;
@@ -69,9 +79,8 @@ impl TokenBucket {
         }
     }
 
-    #[allow(dead_code)]
-    fn available_tokens(&self) -> f64 {
-        self.tokens
+    fn is_stale(&self, max_idle: Duration) -> bool {
+        Instant::now().duration_since(self.last_activity) > max_idle
     }
 }
 
@@ -206,13 +215,22 @@ impl RateLimiter {
     /// Clean up expired bans and old buckets
     pub fn cleanup(&mut self) {
         let now = Instant::now();
+        let max_idle = Duration::from_secs(300); // 5 minutes
 
         // Remove expired bans
         self.banned_peers.retain(|_, ban| now < ban.until);
 
-        // Remove old token buckets (not used in last 5 minutes)
+        // Remove stale token buckets (no activity for 5 minutes)
         self.buckets
-            .retain(|_, bucket| now.duration_since(bucket.last_refill) < Duration::from_secs(300));
+            .retain(|_, bucket| !bucket.is_stale(max_idle));
+
+        // Clean up violation counts for peers that are no longer active
+        let active_peers: std::collections::HashSet<PeerId> = self
+            .buckets
+            .keys()
+            .map(|(peer, _)| *peer)
+            .collect();
+        self.violation_counts.retain(|peer, _| active_peers.contains(peer));
     }
 
     /// Get statistics
@@ -222,6 +240,22 @@ impl RateLimiter {
             banned_peers: self.banned_peers.len(),
             total_violations: self.violation_counts.values().sum(),
         }
+    }
+
+    /// Export metrics for monitoring
+    pub fn export_metrics(&self) -> serde_json::Value {
+        serde_json::json!({
+            "active_buckets": self.buckets.len(),
+            "banned_peers": self.banned_peers.len(),
+            "total_violations": self.violation_counts.values().sum::<u32>(),
+            "banned_peer_details": self.banned_peers.iter().map(|(peer, ban)| {
+                serde_json::json!({
+                    "peer": peer.to_string(),
+                    "until": ban.until.elapsed().as_secs(),
+                    "reason": ban.reason,
+                })
+            }).collect::<Vec<_>>(),
+        })
     }
 
     // Helper methods
@@ -294,7 +328,6 @@ mod tests {
 
         // Should allow up to capacity
         for _ in 0..20 {
-            // 2x transactions_per_second
             assert!(limiter
                 .check_and_consume(&peer, MessageType::Transaction)
                 .is_ok());
@@ -383,8 +416,20 @@ mod tests {
         // Wait for ban to expire
         thread::sleep(Duration::from_millis(200));
 
-        // Cleanup should remove expired ban
+        // Cleanup should remove expired ban and stale buckets
         limiter.cleanup();
         assert_eq!(limiter.get_banned_peers().len(), 0);
+    }
+
+    #[test]
+    fn test_export_metrics() {
+        let config = RateLimitConfig::default();
+        let mut limiter = RateLimiter::new(config);
+        let peer = PeerId::random();
+
+        let _ = limiter.check_and_consume(&peer, MessageType::Transaction);
+        
+        let metrics = limiter.export_metrics();
+        assert!(metrics["active_buckets"].as_u64().unwrap() >= 1);
     }
 }

@@ -107,7 +107,7 @@ docker-compose down -v
 
 #### Monitoring (2)
 - **prometheus** - Port 9090
-- **grafana** - Port 3000 (password: blockchain2024)
+- **grafana** - Port 3000 (password: nebula)
 
 ### Differences from deployment/local:
 - ❌ No node key persistence
