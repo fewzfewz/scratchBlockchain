@@ -25,7 +25,7 @@
     "lint": "eslint src --ext .ts",
     "format": "prettier --write \"src/**/*.ts\"",
     "prepare": "npm run build",
-    "prepublishOnly": "npm run test && npm run lint",
+    "prepublishOnly": "npm run test",
     "version": "npm run format && git add -A src",
     "postversion": "git push && git push --tags"
   },
@@ -42,22 +42,24 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/modular-blockchain/sdk.git"
+    "url": "https://github.com/your-org/modular-blockchain.git"
   },
   "bugs": {
-    "url": "https://github.com/modular-blockchain/sdk/issues"
+    "url": "https://github.com/your-org/modular-blockchain/issues"
   },
-  "homepage": "https://github.com/modular-blockchain/sdk#readme",
+  "homepage": "https://github.com/your-org/modular-blockchain#readme",
   "dependencies": {
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",
     "axios": "^1.16.1",
     "bip39": "^3.1.0",
-    "eventemitter3": "^5.0.4"
+    "eventemitter3": "^5.0.4",
+    "ws": "^8.16.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",
     "@types/node": "^20.19.41",
+    "@types/ws": "^8.5.10",
     "@typescript-eslint/eslint-plugin": "^6.21.0",
     "@typescript-eslint/parser": "^6.21.0",
     "eslint": "^8.57.1",

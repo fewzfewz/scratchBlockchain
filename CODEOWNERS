@@ -1,0 +1,22 @@
+# Each line is a file pattern followed by one or more owners.
+# For more details, see: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners
+* @modular-blockchain/core
+
+# Rust crates
+/consensus/ @modular-blockchain/consensus
+/execution/ @modular-blockchain/execution
+/network/ @modular-blockchain/network
+/node/ @modular-blockchain/core
+/governance/ @modular-blockchain/governance
+
+# JavaScript SDK
+/sdk/javascript/ @modular-blockchain/sdk
+
+# Deployment
+/deployment/ @modular-blockchain/devops
+
+# Documentation
+/docs/ @modular-blockchain/docs
+README.md @modular-blockchain/docs

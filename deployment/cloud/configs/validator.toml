@@ -1,0 +1,29 @@
+[network]
+chain_id = "modular-testnet-1"
+p2p_port = 26656
+rpc_port = 26657
+bootstrap_nodes = [
+    "/dns4/bootstrap.testnet.modular-blockchain.io/tcp/26656",
+    "/dns4/validator1.testnet.modular-blockchain.io/tcp/26656",
+    "/dns4/validator2.testnet.modular-blockchain.io/tcp/26656",
+]
+
+[consensus]
+block_time_ms = 3000
+max_validators = 100
+
+[validator]
+enabled = true
+commission_rate = "0.10"
+
+[storage]
+data_dir = "/data/blockchain"
+
+[api]
+enabled = true
+address = "0.0.0.0:8545"
+cors_origins = ["*"]
+
+[metrics]
+enabled = true
+address = "0.0.0.0:9090"

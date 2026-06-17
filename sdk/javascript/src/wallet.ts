@@ -1,16 +1,17 @@
-import { secp256k1 } from "@noble/curves/secp256k1";
+import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
-import { keccak_256 } from "@noble/hashes/sha3";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import { generateMnemonic, mnemonicToSeedSync } from "bip39";
 import { Provider } from "./types/provider";
-import {
-  TransactionRequest,
-  Transaction,
-  TransactionReceipt,
-  Signature,
-} from "./types/client";
+import { TransactionRequest, Transaction } from "./types/client";
 import { ModularClient } from "./client";
+
+function uint64LE(value: number): Uint8Array {
+  const buf = new ArrayBuffer(8);
+  const view = new DataView(buf);
+  view.setBigUint64(0, BigInt(value), true);
+  return new Uint8Array(buf);
+}
 
 export class Wallet {
   private privateKey: Uint8Array;
@@ -19,26 +20,21 @@ export class Wallet {
 
   constructor(privateKey: string | Uint8Array) {
     if (typeof privateKey === "string") {
-      const cleanKey = privateKey.startsWith("0x")
-        ? privateKey.slice(2)
-        : privateKey;
+      const cleanKey = privateKey.startsWith("0x") ? privateKey.slice(2) : privateKey;
       this.privateKey = hexToBytes(cleanKey);
     } else {
       this.privateKey = privateKey;
     }
 
-    // Derive public key (uncompressed format)
-    const pubKey = secp256k1.getPublicKey(this.privateKey, false);
+    const pubKey = ed25519.getPublicKey(this.privateKey);
     this.publicKey = bytesToHex(pubKey);
-
-    // Derive address (last 20 bytes of keccak256 of public key without prefix)
-    const pubKeyWithoutPrefix = pubKey.slice(1);
-    const hash = keccak_256(pubKeyWithoutPrefix);
+    // Address = last 20 bytes of SHA-256(public_key), hex with 0x prefix
+    const hash = sha256(pubKey);
     this.address = "0x" + bytesToHex(hash.slice(-20));
   }
 
   static generate(): Wallet {
-    const privateKey = secp256k1.utils.randomPrivateKey();
+    const privateKey = ed25519.utils.randomPrivateKey();
     return new Wallet(privateKey);
   }
 
@@ -46,7 +42,7 @@ export class Wallet {
     return new Wallet(privateKey);
   }
 
-  static fromMnemonic(mnemonic: string, index: number = 0): Wallet {
+  static fromMnemonic(mnemonic: string, _index: number = 0): Wallet {
     const seed = mnemonicToSeedSync(mnemonic);
     // Use first 32 bytes as private key (simplified - in production use BIP32)
     const privateKey = seed.slice(0, 32);
@@ -58,44 +54,64 @@ export class Wallet {
   }
 
   async signMessage(message: string): Promise<string> {
-    const messageHash = keccak_256(new TextEncoder().encode(message));
-    const signature = await secp256k1.sign(messageHash, this.privateKey);
+    const msgBytes = new TextEncoder().encode(message);
+    const h = sha256(msgBytes);
+    const signature = ed25519.sign(h, this.privateKey);
     return bytesToHex(signature);
   }
 
   async signTransaction(tx: TransactionRequest): Promise<Transaction> {
-    const txData = this.serializeTransaction(tx);
-    const txHash = keccak_256(txData);
-    const signature = await secp256k1.sign(txHash, this.privateKey, {
-      lowS: true,
-    });
+    const sender = this.address;
+    const nonce = tx.nonce ?? 0;
+    const rawPayload = tx.data
+      ? hexToBytes(tx.data.startsWith("0x") ? tx.data.slice(2) : tx.data)
+      : new Uint8Array();
+    const gasLimit = Number(tx.gasLimit ?? 21000);
+    const maxFeePerGas = Number(tx.maxFeePerGas ?? 1000000000);
+    const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 100000000);
+    const chainId = tx.chainId ?? null;
+    const to = tx.to ?? null;
+    const value = Number(tx.value ?? 0);
 
-    // Recover recovery ID
-    const recId = signature.recovery;
+    // Serialize matching Rust Transaction::hash() exactly:
+    // Sha256(sender(20) + nonce(8LE) + payload(var) + gas_limit(8LE)
+    //   + max_fee(8LE) + max_priority_fee(8LE)
+    //   + [chain_id(8LE)] + [to(20)] + value(8LE))
+    const parts: Uint8Array[] = [
+      hexToBytes(sender.startsWith("0x") ? sender.slice(2) : sender),
+      uint64LE(nonce),
+      rawPayload,
+      uint64LE(gasLimit),
+      uint64LE(maxFeePerGas),
+      uint64LE(maxPriorityFeePerGas),
+    ];
+    if (chainId !== null) parts.push(uint64LE(chainId));
+    if (to !== null) {
+      parts.push(hexToBytes(to.startsWith("0x") ? to.slice(2) : to));
+    }
+    parts.push(uint64LE(value));
 
-    const sig: Signature = {
-      r: bytesToHex(signature.r),
-      s: bytesToHex(signature.s),
-      v: recId !== undefined ? recId + 27 : 0,
-    };
+    const total = parts.reduce((sum, p) => sum + p.length, 0);
+    const message = new Uint8Array(total);
+    let offset = 0;
+    for (const p of parts) { message.set(p, offset); offset += p.length; }
+
+    const hash = sha256(message);
+    const signatureBytes = ed25519.sign(hash, this.privateKey);
 
     return {
-      ...tx,
-      from: this.address,
-      hash: "0x" + bytesToHex(txHash),
-      signature: sig,
+      sender,
+      nonce,
+      payload: "0x" + bytesToHex(rawPayload),
+      signature: "0x" + bytesToHex(signatureBytes),
+      gasLimit,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      chainId,
+      to: to ?? null,
+      value,
+      hash: "0x" + bytesToHex(hash),
     };
-  }
-
-  async signRawTransaction(rawTx: Uint8Array): Promise<string> {
-    const txHash = keccak_256(rawTx);
-    const signature = await secp256k1.sign(txHash, this.privateKey);
-    const signatureBytes = new Uint8Array([
-      ...signature.r,
-      ...signature.s,
-      signature.recovery !== undefined ? signature.recovery : 0,
-    ]);
-    return bytesToHex(signatureBytes);
   }
 
   connect(provider: Provider): ConnectedWallet {
@@ -114,79 +130,46 @@ export class Wallet {
     return this.address;
   }
 
-  private serializeTransaction(tx: TransactionRequest): Uint8Array {
-    // EIP-1559 transaction serialization
-    const data = {
-      chainId: tx.chainId || 1,
-      nonce: tx.nonce || 0,
-      gasLimit: tx.gasLimit || "21000",
-      maxFeePerGas: tx.maxFeePerGas || "1000000000",
-      maxPriorityFeePerGas: tx.maxPriorityFeePerGas || "100000000",
-      to: tx.to || "0x",
-      value: tx.value || "0",
-      data: tx.data || "0x",
-    };
-
-    return new TextEncoder().encode(JSON.stringify(data));
-  }
-
-  static verifySignature(
-    message: string,
-    signature: string,
-    address: string,
-  ): boolean {
+  static verifySignature(message: string, signature: string, publicKey: string): boolean {
     try {
-      const messageHash = keccak_256(new TextEncoder().encode(message));
+      const msgBytes = new TextEncoder().encode(message);
+      const h = sha256(msgBytes);
       const sigBytes = hexToBytes(signature);
-      const recovered = secp256k1.recoverPublicKey(messageHash, sigBytes);
-      const recoveredAddress = this.publicKeyToAddress(bytesToHex(recovered));
-      return recoveredAddress.toLowerCase() === address.toLowerCase();
+      const pkBytes = hexToBytes(publicKey);
+      return ed25519.verify(sigBytes, h, pkBytes);
     } catch {
       return false;
     }
   }
-
-  private static publicKeyToAddress(publicKey: string): string {
-    const pubKeyBytes = hexToBytes(publicKey);
-    const pubKeyWithoutPrefix = pubKeyBytes.slice(1);
-    const hash = keccak_256(pubKeyWithoutPrefix);
-    return "0x" + bytesToHex(hash.slice(-20));
-  }
 }
 
-export class ConnectedWallet extends Wallet {
+export class ConnectedWallet {
+  private wallet: Wallet;
   private client: ModularClient;
 
   constructor(privateKey: string | Uint8Array, provider: Provider) {
-    super(privateKey);
+    this.wallet = new Wallet(privateKey);
     this.client = new ModularClient(provider);
   }
 
-  async sendTransaction(tx: TransactionRequest): Promise<TransactionReceipt> {
+  async sendTransaction(tx: TransactionRequest): Promise<any> {
     if (!tx.nonce) {
       tx.nonce = await this.getNonce();
     }
-    tx.from = this.address;
-
-    const signedTx = await this.signTransaction(tx);
+    const signedTx = await this.wallet.signTransaction(tx);
     return await this.client.sendTransaction(signedTx);
-  }
-
-  async sendRawTransaction(rawTx: Uint8Array): Promise<TransactionReceipt> {
-    const signature = await this.signRawTransaction(rawTx);
-    return await this.client.sendRawTransaction(signature);
   }
 
   async getBalance(): Promise<string> {
     return await this.client.getBalance(this.address);
   }
 
-  async getNonce(): Promise<number> {
-    return await this.client.getNonce(this.address);
+  get address(): string {
+    return this.wallet.address;
   }
 
-  async getTransactionCount(): Promise<number> {
-    return await this.getNonce();
+  async getNonce(): Promise<number> {
+    return await this.client.getNonce(this.address);
   }
 
   getClient(): ModularClient {

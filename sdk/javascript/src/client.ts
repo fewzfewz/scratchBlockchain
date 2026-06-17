@@ -1,7 +1,6 @@
 import { Provider } from "./types/provider";
 import {
   Block,
-  Account,
   Transaction,
   TransactionReceipt,
   TransactionRequest,
@@ -10,6 +9,8 @@ import {
   EstimateGasResponse,
   MempoolResponse,
   PeerInfo,
+  NodeStatus,
+  Account,
 } from "./types/client";
 import EventEmitter from "eventemitter3";
 
@@ -39,16 +40,15 @@ export class ModularClient extends EventEmitter {
     return this.connected;
   }
 
-  async disconnect(): void {
+  async disconnect(): Promise<void> {
     this.connected = false;
     this.emit("disconnected");
   }
 
   // Chain info
   async getChainId(): Promise<number> {
-    const status = await this.provider.request("chain_id");
-    // Extract chain ID from status response
-    return status.chain_id || 1;
+    // /status doesn't return chain_id; default to 1 as placeholder
+    return 1;
   }
 
   async getBlockNumber(): Promise<number> {
@@ -57,13 +57,14 @@ export class ModularClient extends EventEmitter {
   }
 
   async getBlock(blockNumber: number): Promise<Block> {
-    const response = await this.provider.request("get_block", [blockNumber]);
-    return this.formatBlock(response);
+    return await this.provider.request("get_block", [blockNumber]);
   }
 
   async getBlockByHash(hash: string): Promise<Block> {
-    const response = await this.provider.request("get_block_by_hash", [hash]);
-    return this.formatBlock(response);
+    const data = await this.provider.request("get_block_by_hash", [hash]);
+    // Rust wraps blocks in { block: ..., error: ... }
+    if (data.error) throw new Error(data.error);
+    return data.block;
   }
 
   async getLatestBlock(): Promise<Block> {
@@ -92,30 +93,28 @@ export class ModularClient extends EventEmitter {
   }
 
   // Transactions
-  async sendTransaction(tx: TransactionRequest): Promise<TransactionReceipt> {
-    const response = await this.provider.request("send_transaction", [tx]);
-    const txHash = response.hash || response;
-
-    // Wait for transaction to be mined
-    const receipt = await this.waitForTransaction(txHash);
-    this.emit("transactionSent", receipt);
-    return receipt;
+  async sendTransaction(tx: Transaction): Promise<any> {
+    // POST to /submit_tx with the full Transaction JSON
+    const response = await this.provider.request("submit_tx", [tx]);
+    if (response.status && response.status.startsWith("error")) {
+      throw new Error(response.status);
+    }
+    return response;
   }
 
-  async sendRawTransaction(signedTx: string): Promise<TransactionReceipt> {
-    const response = await this.provider.request("send_raw_transaction", [
-      signedTx,
-    ]);
-    const txHash = response.hash || response;
-    return await this.waitForTransaction(txHash);
+  async sendRawTransaction(signedTx: string): Promise<any> {
+    // signedTx is a hex-encoded Transaction JSON string
+    const tx: Transaction = JSON.parse(signedTx);
+    return await this.sendTransaction(tx);
   }
 
-  async getTransaction(hash: string): Promise<Transaction | null> {
+  async getTransaction(hash: string): Promise<any> {
     try {
-      const response = await this.provider.request("get_transaction", [hash]);
-      if (!response) return null;
-      return this.formatTransaction(response, hash);
-    } catch (error) {
+      const data = await this.provider.request("get_transaction", [hash]);
+      // Rust wraps receipt in { receipt: ..., error: ... }
+      if (data.error) return null;
+      return data.receipt;
+    } catch {
       return null;
     }
   }
@@ -124,12 +123,10 @@ export class ModularClient extends EventEmitter {
     hash: string,
   ): Promise<TransactionReceipt | null> {
     try {
-      const response = await this.provider.request("get_transaction_receipt", [
-        hash,
-      ]);
-      if (!response || Object.keys(response).length === 0) return null;
-      return this.formatReceipt(response);
-    } catch (error) {
+      const data = await this.provider.request("get_transaction_receipt", [hash]);
+      if (data.error || !data.receipt) return null;
+      return data.receipt;
+    } catch {
       return null;
     }
   }
@@ -140,15 +137,13 @@ export class ModularClient extends EventEmitter {
     timeout: number = 60000,
   ): Promise<TransactionReceipt> {
     const startTime = Date.now();
-    let lastReceipt: TransactionReceipt | null = null;
 
     while (Date.now() - startTime < timeout) {
       const receipt = await this.getTransactionReceipt(hash);
 
       if (receipt) {
-        lastReceipt = receipt;
         const currentBlock = await this.getBlockNumber();
-        const confirms = currentBlock - receipt.blockNumber + 1;
+        const confirms = currentBlock - receipt.block_height + 1;
 
         if (confirms >= confirmations) {
           this.emit("transactionConfirmed", receipt);
@@ -162,7 +157,6 @@ export class ModularClient extends EventEmitter {
         });
       }
 
-      // Exponential backoff
       await new Promise((resolve) => setTimeout(resolve, 1000));
     }
 
@@ -171,7 +165,7 @@ export class ModularClient extends EventEmitter {
 
   // Gas & Fees
   async getGasPrice(): Promise<GasPriceResponse> {
-    return await this.provider.request("gas_price", []);
+    return await this.provider.request("gas_price");
   }
 
   async estimateGas(tx: TransactionRequest): Promise<EstimateGasResponse> {
@@ -183,8 +177,8 @@ export class ModularClient extends EventEmitter {
   }
 
   // Mempool
-  async getMempool(limit: number = 100): Promise<MempoolResponse> {
-    const response = await this.provider.request("get_mempool", [limit]);
+  async getMempool(_limit: number = 100): Promise<MempoolResponse> {
+    const response = await this.provider.request("get_mempool");
     return response;
   }
 
@@ -195,7 +189,8 @@ export class ModularClient extends EventEmitter {
 
   // Network
   async getPeers(): Promise<PeerInfo[]> {
-    return await this.provider.request("get_peers", []);
+    const response = await this.provider.request("get_peers");
+    return response.peers || [];
   }
 
   async connectPeer(multiaddr: string): Promise<void> {
@@ -203,18 +198,18 @@ export class ModularClient extends EventEmitter {
   }
 
   // Node Status
-  async getNodeStatus(): Promise<any> {
-    return await this.provider.request("status", []);
+  async getNodeStatus(): Promise<NodeStatus> {
+    return await this.provider.request("status");
   }
 
   async getMetrics(): Promise<string> {
-    return await this.provider.request("get_metrics", []);
+    return await this.provider.request("get_metrics");
   }
 
   async healthCheck(): Promise<boolean> {
     try {
-      await this.provider.request("health", []);
-      return true;
+      const response = await this.provider.request("health");
+      return response.status === "healthy";
     } catch {
       return false;
     }
@@ -223,54 +218,5 @@ export class ModularClient extends EventEmitter {
   // Utilities
   getProvider(): Provider {
     return this.provider;
-  }
-
-  // Private formatting methods
-  private formatBlock(data: any): Block {
-    return {
-      number: data.number || data.height || 0,
-      hash: data.hash || "0x",
-      parentHash: data.parent_hash || "0x",
-      timestamp: data.timestamp || 0,
-      transactions: data.transactions || [],
-      stateRoot: data.state_root || "0x",
-      validator: data.validator || "0x",
-      gasUsed: data.gas_used || "0",
-      gasLimit: data.gas_limit || "30000000",
-    };
-  }
-
-  private formatTransaction(data: any, hash: string): Transaction {
-    return {
-      hash: hash,
-      from: data.from || "0x",
-      to: data.to,
-      nonce: data.nonce || 0,
-      value: data.value || "0",
-      gasLimit: data.gas_limit || "21000",
-      gasPrice: data.gas_price,
-      maxFeePerGas: data.max_fee_per_gas,
-      maxPriorityFeePerGas: data.max_priority_fee_per_gas,
-      data: data.data || "0x",
-      blockNumber: data.block_number,
-      blockHash: data.block_hash,
-      timestamp: data.timestamp,
-      signature: data.signature,
-    };
-  }
-
-  private formatReceipt(data: any): TransactionReceipt {
-    return {
-      transactionHash: data.transaction_hash || data.tx_hash,
-      blockNumber: data.block_number,
-      blockHash: data.block_hash,
-      from: data.from,
-      to: data.to,
-      status: data.status === "Success" || data.status === "success" ? 1 : 0,
-      gasUsed: data.gas_used || "0",
-      cumulativeGasUsed: data.cumulative_gas_used || "0",
-      logs: data.logs || [],
-      contractAddress: data.contract_address,
-    };
   }
 }

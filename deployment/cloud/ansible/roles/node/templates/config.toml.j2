@@ -1,0 +1,25 @@
+[network]
+chain_id = "{{ chain_id }}"
+p2p_port = 26656
+rpc_port = 26657
+bootstrap_nodes = [{% for node in bootstrap_nodes %}"{{ node }}"{{ "," if not loop.last }}{% endfor %}]
+
+[consensus]
+block_time_ms = {{ block_time_ms | default(3000) }}
+max_validators = {{ max_validators | default(100) }}
+
+[validator]
+enabled = {{ is_validator | default(false) | lower }}
+commission_rate = "{{ commission_rate | default('0.10') }}"
+
+[storage]
+data_dir = "{{ data_dir }}"
+
+[api]
+enabled = true
+address = "0.0.0.0:8545"
+cors_origins = ["*"]
+
+[metrics]
+enabled = true
+address = "0.0.0.0:9090"

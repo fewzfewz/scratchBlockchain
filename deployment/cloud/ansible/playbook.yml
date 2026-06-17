@@ -1,0 +1,88 @@
+---
+- name: Deploy Modular Blockchain testnet
+  hosts: all
+  become: yes
+  gather_facts: yes
+  vars:
+    chain_id: "modular-testnet-1"
+    node_version: "latest"
+    data_dir: "/data/blockchain"
+    genesis_path: "../configs/genesis.json"
+
+  tasks:
+    - name: Install system dependencies
+      apt:
+        name:
+          - curl
+          - wget
+          - unzip
+          - git
+          - build-essential
+          - pkg-config
+          - libssl-dev
+          - ufw
+        state: present
+        update_cache: yes
+
+    - name: Configure firewall
+      ufw:
+        rule: "{{ item.rule }}"
+        port: "{{ item.port }}"
+        proto: tcp
+      loop:
+        - { rule: allow, port: 26656 }
+        - { rule: allow, port: 26657 }
+        - { rule: allow, port: 8545 }
+        - { rule: allow, port: 9090 }
+        - { rule: allow, port: 22 }
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+        policy: deny
+        direction: incoming
+
+    - name: Create data directory
+      file:
+        path: "{{ data_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Download node binary
+      get_url:
+        url: "https://github.com/your-org/modular-blockchain/releases/download/{{ node_version }}/modular-node-linux-amd64.tar.gz"
+        dest: "/tmp/modular-node.tar.gz"
+      when: node_version != "source"
+
+    - name: Extract binary
+      unarchive:
+        src: "/tmp/modular-node.tar.gz"
+        dest: "/usr/local/bin"
+        remote_src: yes
+      when: node_version != "source"
+
+    - name: Copy genesis file
+      copy:
+        src: "{{ genesis_path }}"
+        dest: "{{ data_dir }}/genesis.json"
+        mode: "0644"
+
+    - name: Create systemd service
+      template:
+        src: "modular-node.service.j2"
+        dest: "/etc/systemd/system/modular-node.service"
+        mode: "0644"
+      notify: restart modular-node
+
+    - name: Enable and start service
+      systemd:
+        name: modular-node
+        enabled: yes
+        state: started
+        daemon_reload: yes
+
+  handlers:
+    - name: restart modular-node
+      systemd:
+        name: modular-node
+        state: restarted

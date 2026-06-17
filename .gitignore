@@ -28,7 +28,11 @@ Thumbs.db
 #folders
 sdk/javascript/node_modules
 frontend/governance/node_modules
+node_modules
 
+
+
+package-lock.json
 
 GITHUB_PUSH_GUIDE.md
 

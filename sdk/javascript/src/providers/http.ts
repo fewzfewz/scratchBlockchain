@@ -1,15 +1,21 @@
 import axios, { AxiosInstance } from "axios";
 import { Provider, ProviderOptions } from "../types/provider";
 
+interface EndpointInfo {
+  method: "GET" | "POST";
+  path: string;
+}
+
 export class HttpProvider implements Provider {
   private client: AxiosInstance;
   private url: string;
   private isConnected: boolean = false;
 
   constructor(url: string, options: ProviderOptions = {}) {
-    this.url = url;
+    // Ensure URL has no trailing slash
+    this.url = url.replace(/\/+$/, "");
     this.client = axios.create({
-      baseURL: url,
+      baseURL: this.url,
       timeout: options.timeout || 30000,
       headers: {
         "Content-Type": "application/json",
@@ -21,19 +27,26 @@ export class HttpProvider implements Provider {
 
   async request(method: string, params: any[] = []): Promise<any> {
     try {
-      // Convert method names to match Rust RPC endpoints
-      const endpoint = this.mapMethodToEndpoint(method);
-      const response = await this.client.post(
-        endpoint,
-        this.buildRequestBody(method, params),
-      );
+      const ep = this.mapMethodToEndpoint(method);
 
-      if (response.data.error) {
-        throw new Error(response.data.error.message || "RPC Error");
+      let response;
+      if (ep.method === "GET") {
+        const url = this.buildGetUrl(ep.path, params);
+        response = await this.client.get(url);
+      } else {
+        response = await this.client.post(ep.path, params[0] || {});
       }
 
       this.isConnected = true;
-      return response.data.result || response.data;
+
+      // Rust RPC returns data directly (not wrapped in JSON-RPC envelope)
+      if (response.data && typeof response.data === "object") {
+        if (response.data.error) {
+          throw new Error(response.data.error);
+        }
+        return response.data;
+      }
+      return response.data;
     } catch (error) {
       this.isConnected = false;
       if (axios.isAxiosError(error)) {
@@ -43,14 +56,14 @@ export class HttpProvider implements Provider {
     }
   }
 
-  private mapMethodToEndpoint(method: string): string {
-    const methodMap: Record<string, string> = {
+  private mapMethodToEndpoint(method: string): EndpointInfo {
+    const get: Record<string, string> = {
       chain_id: "/status",
       block_number: "/status",
       get_block: "/block/",
+      get_block_by_hash: "/block/hash/",
       get_balance: "/balance/",
       get_account: "/balance/",
-      send_transaction: "/submit_tx",
       get_transaction: "/tx/",
       get_transaction_receipt: "/tx/",
       estimate_gas: "/estimate_gas",
@@ -58,26 +71,31 @@ export class HttpProvider implements Provider {
       get_mempool: "/mempool",
       get_peers: "/peers",
       get_metrics: "/metrics",
-      get_health: "/health",
+      status: "/status",
+      health: "/health",
+      fee_history: "/fee_history/",
     };
 
-    return methodMap[method] || "/";
+    const post: Record<string, string> = {
+      send_transaction: "/submit_tx",
+      submit_tx: "/submit_tx",
+      send_raw_transaction: "/submit_tx",
+      connect_peer: "/connect_peer",
+      estimate_gas_post: "/estimate_gas",
+    };
+
+    if (post[method]) {
+      return { method: "POST", path: post[method] };
+    }
+    return { method: "GET", path: get[method] || "/" };
   }
 
-  private buildRequestBody(method: string, params: any[]): any {
-    // Handle GET endpoints with params in URL
-    if (method === "get_block" && params[0]) {
-      return {}; // Will append to URL
-    }
-    if (method === "get_balance" && params[0]) {
-      return {};
-    }
-    if (method === "get_transaction" && params[0]) {
-      return {};
-    }
-
-    // POST endpoints
-    return params[0] || {};
+  private buildGetUrl(basePath: string, params: any[]): string {
+    if (params.length === 0) return basePath;
+    const param = params[0];
+    if (param === undefined || param === null) return basePath;
+    const encoded = typeof param === "string" ? encodeURIComponent(param) : String(param);
+    return basePath + encoded;
   }
 
   getUrl(): string {

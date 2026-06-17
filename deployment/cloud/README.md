@@ -2,6 +2,7 @@
 
 Migrate your local testnet to cloud infrastructure (AWS/GCP/Azure).
 
+
 ## Overview
 
 The local Docker Compose setup is designed to be cloud-ready. This guide shows how to deploy to production cloud infrastructure.
@@ -310,7 +311,94 @@ terraform plan
 terraform apply
 ```
 
-## Option 3: Docker Swarm (Easiest)
+## Option 3: Azure Deployment
+
+### Prerequisites
+- Azure subscription
+- [Azure CLI](https://docs.microsoft.com/cli/azure/install-azure-cli) installed and logged in (`az login`)
+- Terraform installed
+- SSH key pair generated
+
+### Quick Deploy
+
+```bash
+# Set required variables
+export AZURE_SUBSCRIPTION_ID=$(az account show --query id -o tsv)
+export SSH_KEY_PATH="$HOME/.ssh/id_rsa.pub"
+export DOMAIN_NAME="testnet.modular-blockchain.io"  # optional
+
+# Run the deployment script
+bash deployment/cloud/scripts/deploy-azure.sh
+```
+
+### Terraform (Manual)
+
+```bash
+cd deployment/cloud/terraform/azure
+
+terraform init
+terraform plan \
+  -var="azure_subscription_id=$(az account show --query id -o tsv)" \
+  -var="ssh_public_key_path=$HOME/.ssh/id_rsa.pub"
+
+terraform apply \
+  -var="azure_subscription_id=$(az account show --query id -o tsv)" \
+  -var="ssh_public_key_path=$HOME/.ssh/id_rsa.pub"
+```
+
+### Architecture
+
+```
+Azure Deployment
+├── Resource Group: modular-testnet-rg
+├── Virtual Network: 10.0.0.0/16
+│   └── Subnet: 10.0.1.0/24
+├── Network Security Groups
+│   ├── validator-nsg (P2P 26656, RPC 26657, API 8545, Metrics 9090, SSH 22)
+│   └── rpc-nsg (API 8545, P2P 26656, SSH 22)
+├── Virtual Machines
+│   ├── Bootstrap (Standard_D4s_v5, 100GB Premium SSD)
+│   ├── 4 × Validators (Standard_D4s_v5, 100GB Premium SSD)
+│   └── 2 × RPC (Standard_D8s_v5, 200GB Premium SSD)
+├── Load Balancer (Standard SKU)
+│   ├── Backend pool → RPC VMs
+│   ├── Health probe → /health:8545
+│   └── Rules → 80/443 → 8545
+├── Public IPs (Static, Standard SKU)
+│   └── Each VM + Load Balancer frontend
+└── Azure DNS (optional)
+    ├── rpc.testnet.xyz → LB IP
+    ├── faucet.testnet.xyz → LB IP
+    └── bootstrap.testnet.xyz → Bootstrap IP
+```
+
+### VM Sizes Reference
+
+| Role | Azure VM Size | vCPU | RAM | Monthly Cost (est.) |
+|------|---------------|------|-----|-------------------|
+| Validator | Standard_D4s_v5 | 4 | 16 GB | ~$130 |
+| RPC | Standard_D8s_v5 | 8 | 32 GB | ~$260 |
+
+### Instance Details
+
+- **OS**: Ubuntu 22.04 LTS (Canonical)
+- **Authentication**: SSH public key (password disabled)
+- **Disk**: Premium SSD LRS
+- **Network**: Static public IP per instance
+
+### Cleanup
+
+```bash
+cd deployment/cloud/terraform/azure
+terraform destroy -var="azure_subscription_id=$(az account show --query id -o tsv)" -var="ssh_public_key_path=$HOME/.ssh/id_rsa.pub"
+```
+
+To also remove the resource group and all resources:
+```bash
+az group delete --name modular-testnet-rg --yes --no-wait
+```
+
+## Option 4: Docker Swarm (Easiest)
 
 ### Step 1: Initialize Swarm
 
@@ -410,6 +498,13 @@ sudo crontab -e
 - Data transfer: $50
 - **Total**: ~$608/month
 
+### Azure (Monthly)
+- 4 × Standard_D4s_v5 validators: $520
+- 2 × Standard_D8s_v5 RPC: $520
+- Load balancer: $25
+- Data transfer: $50
+- **Total**: ~$1,115/month
+
 ### DigitalOcean (Cheapest)
 - 3 × 4GB droplets: $72
 - 2 × 8GB droplets: $96
@@ -445,4 +540,5 @@ If cloud deployment fails:
 
 - AWS: https://aws.amazon.com/support
 - GCP: https://cloud.google.com/support
+- Azure: https://azure.microsoft.com/support
 - Discord: #cloud-deployment
