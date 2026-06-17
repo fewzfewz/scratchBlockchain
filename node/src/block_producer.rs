@@ -79,10 +79,10 @@ impl BlockExecutor {
             .extrinsics
             .iter()
             .map(|tx| BlockTransaction {
-                caller: format!("0x{}", hex::encode(tx.from)),
+                caller: format!("0x{}", hex::encode(tx.sender)),
                 to: tx.to.map(|addr| format!("0x{}", hex::encode(addr))),
                 value: tx.value as u64,
-                data: tx.data.clone(),
+                data: tx.payload.clone(),
                 gas_limit: Some(tx.gas_limit),
             })
             .collect();

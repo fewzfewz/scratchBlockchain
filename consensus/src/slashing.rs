@@ -8,7 +8,7 @@
 use crate::{SlashingCondition, ValidatorInfo};
 use common::types::Hash;
 use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Slashing configuration
 #[derive(Debug, Clone)]
@@ -75,6 +75,7 @@ impl SlashingTracker {
             return;
         }
         
+        let val_copy = validator.clone();
         let missed = self.missed_blocks
             .entry(validator)
             .or_insert_with(VecDeque::new);
@@ -91,11 +92,10 @@ impl SlashingTracker {
             let missed_count = missed.len();
             tracing::warn!(
                 "Validator {:?} missed {} blocks in last {} blocks - SLASHING",
-                hex::encode(&validator[..4]),
+                hex::encode(&val_copy[..4]),
                 missed_count,
                 self.config.liveness_window
             );
-            // Trigger slashing (would be handled by parent)
         }
     }
     
@@ -208,7 +208,7 @@ impl SlashingTracker {
     }
     
     /// Check liveness for all validators and return those below threshold
-    pub fn check_liveness(&self, validators: &[ValidatorInfo]) -> Vec<&Vec<u8>> {
+    pub fn check_liveness(&self, validators: &[ValidatorInfo]) -> Vec<Vec<u8>> {
         let mut offline = Vec::new();
         
         for validator in validators {
@@ -218,7 +218,7 @@ impl SlashingTracker {
             
             let liveness = self.get_liveness_percentage(&validator.public_key);
             if liveness < 50.0 {
-                offline.push(&validator.public_key);
+                offline.push(validator.public_key.clone());
             }
         }
         

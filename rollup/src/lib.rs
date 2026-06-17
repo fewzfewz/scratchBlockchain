@@ -1,10 +1,12 @@
 use anyhow::Result;
-use common::types::Transaction;
+use common::types::{Transaction, Address};
 use execution::EvmExecutor;
 use serde::{Deserialize, Serialize};
 use zk::ZkProver;
 use da::DataAvailability;
 use std::sync::{Arc, Mutex};
+use tracing::info;
+use std::collections::{HashMap, VecDeque};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Batch {
@@ -17,11 +19,7 @@ pub struct Batch {
     pub da_commitment: Option<Vec<u8>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FraudProof {
-    pub batch_index: u64,
-    pub invalid_tx_index: usize,
-}
+
 
 /// Rollup type configuration
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -163,9 +161,14 @@ impl RollupNode {
     }
 
     pub fn generate_fraud_proof(&self, batch_index: u64, tx_index: usize) -> FraudProof {
+        let batch = &self.l1_batches[batch_index as usize];
         FraudProof {
             batch_index,
-            invalid_tx_index: tx_index,
+            tx_index,
+            invalid_state_root: [0u8; 32],
+            correct_state_root: [0u8; 32],
+            evidence: vec![],
+            challenger: [0u8; 20],
         }
     }
 
@@ -314,9 +317,7 @@ impl FraudVerifier {
         // Execute all transactions up to the invalid one
         for i in 0..=proof.tx_index {
             let current_tx = &batch.transactions[i];
-            // Execute transaction and update state
-            // (Simplified - would use actual EVM)
-            state = self.execute_transaction(&state, current_tx)?;
+            state = self.execute_transaction(rollup, &state, current_tx)?;
         }
         
         // Check if state matches expected
@@ -331,9 +332,35 @@ impl FraudVerifier {
         Ok(is_fraud)
     }
     
-    fn execute_transaction(&self, state: &[u8], _tx: &Transaction) -> Result<Vec<u8>, String> {
-        // Simplified - would use EVM
-        Ok(state.to_vec())
+    fn execute_transaction(&self, rollup: &RollupNode, state: &[u8], tx: &Transaction) -> Result<Vec<u8>, String> {
+        // Execute the transaction using the EVM executor from the rollup node
+        let result = rollup.executor.execute_transaction(
+            "0x0000000000000000000000000000000000000000",
+            None,
+            0,
+            &tx.payload,
+        );
+        
+        match result {
+            Ok(receipt) => {
+                // Update state based on transaction execution result
+                let mut new_state = state.to_vec();
+                // Include the receipt hash in state for fraud proof determinism
+                let receipt_hash = receipt.transaction_hash;
+                let mut hasher = Sha256::new();
+                hasher.update(&new_state);
+                hasher.update(&receipt_hash);
+                new_state = hasher.finalize().to_vec();
+                Ok(new_state)
+            }
+            Err(_) => {
+                // Transaction execution failed; hash state with failure marker
+                let mut hasher = Sha256::new();
+                hasher.update(state);
+                hasher.update(b"failed");
+                Ok(hasher.finalize().to_vec())
+            }
+        }
     }
     
     fn hash_state(&self, state: &[u8]) -> [u8; 32] {

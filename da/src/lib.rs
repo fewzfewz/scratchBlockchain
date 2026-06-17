@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::collections::VecDeque;
 
 /// KZG-style polynomial commitment (simplified for MVP)
 /// In production, this would use actual KZG commitments with BLS12-381
@@ -144,16 +145,90 @@ impl ErasureCoder {
             ));
         }
 
-        // Simplified decoding: just concatenate data chunks
-        let mut data = Vec::new();
-        let mut sorted_chunks: Vec<_> = chunks.iter().collect();
-        sorted_chunks.sort_by_key(|c| c.index);
+        // Separate data and parity chunks
+        let mut data_chunks: Vec<&ErasureChunk> = chunks.iter().filter(|c| c.index < self.data_chunks).collect();
+        let parity_chunks: Vec<&ErasureChunk> = chunks.iter().filter(|c| c.index >= self.data_chunks).collect();
 
-        for chunk in sorted_chunks.iter().take(self.data_chunks) {
-            data.extend_from_slice(&chunk.data);
+        // Check if we have all data chunks
+        if data_chunks.len() == self.data_chunks {
+            // Fast path: all data present, just concatenate
+            data_chunks.sort_by_key(|c| c.index);
+            let mut data = Vec::new();
+            for chunk in data_chunks {
+                data.extend_from_slice(&chunk.data);
+            }
+            return Ok(data);
         }
 
+        // Recovery path: use XOR parity to reconstruct missing data chunks
+        // Identify which data indices are missing
+        let mut present_indices: Vec<usize> = data_chunks.iter().map(|c| c.index).collect();
+        present_indices.sort();
+        let missing_indices: Vec<usize> = (0..self.data_chunks)
+            .filter(|i| !present_indices.contains(i))
+            .collect();
+
+        if missing_indices.is_empty() {
+            let mut data = Vec::new();
+            data_chunks.sort_by_key(|c| c.index);
+            for chunk in data_chunks {
+                data.extend_from_slice(&chunk.data);
+            }
+            return Ok(data);
+        }
+
+        // With XOR parity, we can recover at most `parity_chunks` missing indices
+        // if we have at least `missing_indices.len()` distinct parity chunks
+        if missing_indices.len() > self.parity_chunks {
+            return Err(anyhow::anyhow!(
+                "Cannot recover: {} missing chunks, only {} parity chunks available",
+                missing_indices.len(),
+                self.parity_chunks
+            ));
+        }
+
+        let chunk_size = data_chunks[0].data.len();
+
+        // Recovery: XOR all available data chunks and parity chunks
+        // For each missing index, XOR all present data + all parity
+        // This works when exactly one parity chunk encodes all data chunks
+        // In a proper RS implementation, each parity encodes a different linear combination
+        let mut recovered_chunks: Vec<ErasureChunk> = Vec::new();
+        for &missing_idx in &missing_indices {
+            let mut recovered = vec![0u8; chunk_size];
+            for chunk in &data_chunks {
+                for (j, byte) in chunk.data.iter().enumerate() {
+                    if j < chunk_size {
+                        recovered[j] ^= byte;
+                    }
+                }
+            }
+            for chunk in &parity_chunks {
+                for (j, byte) in chunk.data.iter().enumerate() {
+                    if j < chunk_size {
+                        recovered[j] ^= byte;
+                    }
+                }
+            }
+            recovered_chunks.push(ErasureChunk {
+                data: recovered,
+                index: missing_idx,
+                total_chunks: 0,
+                proof: vec![],
+            });
+        }
+        recovered_chunks.sort_by_key(|c| c.index);
+        let mut data = Vec::new();
+        for chunk in recovered_chunks {
+            data.extend_from_slice(&chunk.data);
+        }
         Ok(data)
+    }
+}
+
+impl Default for ErasureCoder {
+    fn default() -> Self {
+        Self { data_chunks: 4, parity_chunks: 2 }
     }
 }
 
@@ -503,7 +578,7 @@ impl AvailabilityProver {
         })
     }
     
-    fn generate_merkle_proof(&self, chunks: &[ErasureChunk], index: usize) -> Vec<[u8; 32]> {
+    fn generate_merkle_proof(&self, _chunks: &[ErasureChunk], _index: usize) -> Vec<[u8; 32]> {
         // Simplified Merkle proof generation
         vec![[0; 32]]
     }

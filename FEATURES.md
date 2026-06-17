@@ -5,7 +5,7 @@
 ### Core Blockchain (Phases 1-8)
 - [x] BFT Consensus with GRANDPA finality
 - [x] Multi-VM execution (EVM, Native, WASM-ready)
-- [x] Persistent storage with sled database
+- [x] Persistent storage with RocksDB
 - [x] P2P networking (libp2p)
 - [x] Fork detection & chain reorganization
 - [x] Transaction mempool with MEV protection
@@ -68,10 +68,10 @@
 - [x] Faucet UI
 
 ### Testing
-- [x] Unit tests (26/26 passing)
-- [x] Integration tests
-- [x] Load tests
-- [x] Chaos tests
+- [ ] Unit tests (some exist, many need fixing)
+- [ ] Integration tests (not set up)
+- [ ] Load tests (not set up)
+- [ ] Chaos tests (not set up)
 
 ---
 
@@ -116,19 +116,19 @@
 ## Progress Summary
 
 **Total Features**: 50+  
-**Implemented**: 45+ (90%)  
-**Remaining**: 5 (10%)  
+**Implemented**: ~25 (50%)  
+**Remaining**: ~25 (50%) — code may exist but requires compilation fixes and integration  
 
 **Code Stats**:
 - Total Lines: ~15,000+
 - Rust Code: ~12,000 lines
 - JavaScript: ~350 lines
 - HTML/CSS: ~500 lines
-- Tests: 26 passing
+- Tests: Some unit tests exist, comprehensive suite not verified
 
-**Build Status**: ✅ Success (2.69s)  
-**Test Coverage**: Comprehensive  
-**Documentation**: Complete
+**Build Status**: ⚠️ Partial (some crates compile, others need fixes)  
+**Test Coverage**: Minimal  
+**Documentation**: Incomplete
 
 ---
 
@@ -136,16 +136,16 @@
 
 | Phase | Status | Duration |
 |-------|--------|----------|
-| Phases 1-9 | ✅ Complete | Done |
-| Phase 10 | ✅ Complete | Done |
-| Phase 11 | ✅ Complete | Done |
-| Phase 13 | ✅ Complete | Done |
-| Phase 14 (Tools) | ✅ Complete | Done |
-| **Phase 12 (Audit)** | 🔴 Critical | 6-8 weeks |
-| **Phase 14 (Testnet)** | ⏳ Ready | 8-12 weeks |
-| **Phase 15 (Launch)** | ⏳ Pending | 2-4 weeks |
+| Phases 1-8 | ⚠️ Code written, needs compilation fixes | 2-4 weeks |
+| Phase 9 (Economics) | ⚠️ Code written, not integrated | 2-3 weeks |
+| Phase 10 (Bridges) | ⚠️ Code written, not deployed | 4-6 weeks |
+| Phase 11 (Governance) | ⚠️ Code written, not exposed via RPC | 2-3 weeks |
+| Phase 13 (Dev Tools) | ❌ Not started | 4-6 weeks |
+| **Phase 12 (Audit)** | ❌ Not started | 6-8 weeks |
+| **Phase 14 (Testnet)** | ❌ Not started | 8-12 weeks |
+| **Phase 15 (Launch)** | ❌ Not started | 2-4 weeks |
 
-**Total Remaining**: 4-6 months
+**Total Remaining**: 9-12 months
 
 ---
 
@@ -177,4 +177,4 @@
 
 ---
 
-**Your blockchain is 90% complete and ready for the final push to mainnet!**
+**Your blockchain core is partially implemented (~50%). The codebase has significant breadth but needs compilation fixes, integration wiring, and testing before it can be considered mainnet-ready.**

@@ -22,12 +22,10 @@ use tracing::{error, info, warn, debug};
 // Import from our modules
 mod config;
 mod rewards;
-mod slashing;
 mod sync;
 
 use config::NodeConfig;
 use rewards::{RewardManager, RewardConfig};
-use slashing::{SlashingTracker, SlashingConfig, EvidenceCollector};
 
 // External imports
 use common::consensus_types::{ConsensusMessage, Proposal, Vote, Step};
@@ -45,7 +43,7 @@ use network::{NetworkCommand, NetworkEvent, NetworkService};
 use mempool::Mempool;
 
 use storage::db::{ChainStore, ColumnFamily, WriteBatch};
-use storage::trie::MerklePatriciaTrie;
+use storage::trie::PatriciaTrie;
 use storage::receipt_store::ReceiptStore;
 
 use node::block_producer::{BlockProducer, BlockExecutor, BlockProducerConfig};
@@ -193,8 +191,6 @@ struct Node {
     
     // Economic components
     reward_manager: Arc<Mutex<RewardManager>>,
-    slashing_tracker: Arc<Mutex<SlashingTracker>>,
-    evidence_collector: Arc<Mutex<EvidenceCollector>>,
     
     // Mempool
     mempool: Arc<Mempool>,
@@ -228,9 +224,10 @@ impl Node {
         let data_dir = &config.storage.data_dir;
         fs::create_dir_all(data_dir)?;
         
-        let chain_store = Arc::new(ChainStore::new(data_dir)?);
-        let receipt_store = Arc::new(ReceiptStore::new(&format!("{}/receipts", data_dir))?);
-        let state_trie = Arc::new(Mutex::new(MerklePatriciaTrie::new(&format!("{}/state", data_dir))?));
+        let chain_store = Arc::new(ChainStore::open(data_dir)?);
+        let kv_store = chain_store.inner().clone();
+        let receipt_store = Arc::new(ReceiptStore::new(kv_store.clone()));
+        let state_trie = Arc::new(Mutex::new(PatriciaTrie::new(kv_store)?));
         
         // ================================================================
         // 3. Load Genesis if needed
@@ -258,7 +255,7 @@ impl Node {
         // ================================================================
         let key_path = PathBuf::from(data_dir).join("validator_key.json");
         let signing_key = load_or_generate_key(&key_path)?;
-        let public_key = signing_key.verifying_key().to_bytes().to_vec();
+        let public_key = signing_key.public_key();
         
         // ================================================================
         // 5. Setup Validator Set from Genesis
@@ -339,10 +336,6 @@ impl Node {
         let reward_config = RewardConfig::default();
         let reward_manager = Arc::new(Mutex::new(RewardManager::new(reward_config)));
         
-        let slashing_config = SlashingConfig::default();
-        let slashing_tracker = Arc::new(Mutex::new(SlashingTracker::new(slashing_config)));
-        let evidence_collector = Arc::new(Mutex::new(EvidenceCollector::new()));
-        
         // ================================================================
         // 13. Initialize Network
         // ================================================================
@@ -409,8 +402,6 @@ impl Node {
             block_executor,
             block_producer,
             reward_manager,
-            slashing_tracker,
-            evidence_collector,
             mempool,
             network_cmd_sender,
             network_event_receiver,
@@ -495,7 +486,7 @@ impl Node {
                 
                 // Calculate total fees
                 let total_fees: u64 = receipts.iter()
-                    .map(|r| r.gas_used * r.effective_gas_price)
+                    .map(|r| r.gas_used * block.header.base_fee)
                     .sum();
                 
                 // Get voters (simplified - in production, get from consensus)
@@ -657,7 +648,7 @@ impl Node {
         }
         
         // Process rewards
-        let total_fees: u64 = receipts.iter().map(|r| r.gas_used * r.effective_gas_price).sum();
+        let total_fees: u64 = receipts.iter().map(|r| r.gas_used * block.header.base_fee).sum();
         let proposer = block.header.validator_set_id.to_le_bytes().to_vec();
         let voters = vec![];
         
@@ -767,7 +758,7 @@ fn load_or_generate_key(key_path: &PathBuf) -> Result<SigningKey, Box<dyn std::e
         let secret_array: [u8; 32] = secret_bytes.as_slice().try_into()?;
         Ok(SigningKey::from_bytes(&secret_array))
     } else {
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate();
         
         if let Some(parent) = key_path.parent() {
             fs::create_dir_all(parent)?;
@@ -775,7 +766,7 @@ fn load_or_generate_key(key_path: &PathBuf) -> Result<SigningKey, Box<dyn std::e
         
         let key_data = serde_json::json!({
             "secret_key": hex::encode(signing_key.to_bytes()),
-            "public_key": hex::encode(signing_key.verifying_key().to_bytes()),
+            "public_key": hex::encode(signing_key.public_key()),
             "key_type": "ed25519",
         });
         fs::write(key_path, serde_json::to_string_pretty(&key_data)?)?;
@@ -868,18 +859,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         Commands::KeyGen { output } => {
             info!("🔑 Generating new validator keypair...");
-            let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
-            let verifying_key = signing_key.verifying_key();
+            let signing_key = SigningKey::generate();
+            let public_key = signing_key.public_key();
             
             let key_data = serde_json::json!({
                 "secret_key": hex::encode(signing_key.to_bytes()),
-                "public_key": hex::encode(verifying_key.to_bytes()),
+                "public_key": hex::encode(&public_key),
                 "key_type": "ed25519",
             });
             
             fs::write(&output, serde_json::to_string_pretty(&key_data)?)?;
             info!("✅ Keypair saved to {:?}", output);
-            println!("Public Key: {}", hex::encode(verifying_key.to_bytes()));
+            println!("Public Key: {}", hex::encode(&public_key));
         }
         
         Commands::SubmitTx { payload, rpc_url } => {

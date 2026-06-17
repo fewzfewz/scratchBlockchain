@@ -99,7 +99,7 @@ impl BftEngine {
         bytes
     }
 
-    fn serialize_vote(&self, vote: &Vote) -> Vec<u8> {
+    pub fn serialize_vote(&self, vote: &Vote) -> Vec<u8> {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&vote.height.to_le_bytes());
         bytes.extend_from_slice(&vote.round.to_le_bytes());
@@ -236,6 +236,14 @@ impl BftEngine {
         self.check_quorum()
     }
 
+    pub fn add_vote_public(&mut self, vote: Vote) {
+        self.add_vote(vote)
+    }
+
+    pub fn check_quorum_public(&mut self) -> Vec<BftEvent> {
+        self.check_quorum()
+    }
+
     fn add_vote(&mut self, vote: Vote) {
         let round_votes = self.votes
             .entry((vote.round, vote.step))
@@ -310,6 +318,10 @@ impl BftEngine {
         }
 
         events
+    }
+
+    pub fn has_quorum_public(&self, round: u64, step: Step) -> Option<Option<Hash>> {
+        self.has_quorum(round, step)
     }
 
     fn has_quorum(&self, round: u64, step: Step) -> Option<Option<Hash>> {
@@ -534,6 +546,131 @@ mod tests {
             assert!(v.block_hash.is_none());
         } else {
             panic!("Expected BroadcastVote");
+        }
+    }
+
+    #[test]
+    fn test_cross_validator_vote_quorum_flow() {
+        let sk1 = crypto::SigningKey::generate();
+        let pk1 = sk1.public_key();
+        let sk2 = crypto::SigningKey::generate();
+        let pk2 = sk2.public_key();
+
+        let v1 = ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false };
+        let v2 = ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false };
+
+        // Determine who is proposer for (height=1, round=0) given these 2 validators
+        let proposer_pk = {
+            let mut sorted: Vec<&Vec<u8>> = vec![&pk1, &pk2];
+            sorted.sort();
+            let seed_input = {
+                let mut b = Vec::new();
+                b.extend_from_slice(&1u64.to_le_bytes());
+                b.extend_from_slice(&0u64.to_le_bytes());
+                b
+            };
+            let seed = crypto::hash(&seed_input);
+            let idx = u64::from_le_bytes(seed[..8].try_into().unwrap()) as usize % sorted.len();
+            sorted[idx].clone()
+        };
+
+        let (proposer_sk, proposer_pk, nonproposer_sk, nonproposer_pk) =
+            if proposer_pk == pk1 {
+                (sk1, pk1, sk2, pk2)
+            } else {
+                (sk2, pk2, sk1, pk1)
+            };
+
+        let block = make_block(1);
+        let block_hash = block.hash();
+
+        // Proposer creates a signed proposal
+        let p_bytes = {
+            let mut b = Vec::new();
+            b.extend_from_slice(&1u64.to_le_bytes());
+            b.extend_from_slice(&0u64.to_le_bytes());
+            b.extend_from_slice(&block_hash);
+            b.extend_from_slice(&proposer_pk);
+            b
+        };
+        let proposal = Proposal {
+            height: 1, round: 0,
+            block,
+            signature: proposer_sk.sign(&p_bytes),
+            proposer: proposer_pk.clone(),
+        };
+
+        // Non-proposer creates a signed prevote on the same block
+        let vote = {
+            let mut v = Vote {
+                height: 1, round: 0,
+                step: Step::Prevote,
+                block_hash: Some(block_hash),
+                signature: vec![],
+                voter: nonproposer_pk.clone(),
+            };
+            let v_bytes = {
+                let mut b = Vec::new();
+                b.extend_from_slice(&v.height.to_le_bytes());
+                b.extend_from_slice(&v.round.to_le_bytes());
+                b.push(v.step as u8);
+                b.extend_from_slice(&block_hash);
+                b.extend_from_slice(&nonproposer_pk);
+                b
+            };
+            v.signature = nonproposer_sk.sign(&v_bytes);
+            v
+        };
+
+        // ---- TEST 1: manual add_vote + check_quorum ----
+        {
+            let proposer_sk_copy =
+                crypto::SigningKey::from_bytes(&proposer_sk.to_bytes()).unwrap();
+            let mut engine = BftEngine::new(
+                proposer_pk.clone(),
+                vec![v1.clone(), v2.clone()],
+                1,
+                proposer_sk_copy,
+            );
+            engine.start_round(0);
+
+            // Receive proposal (moves engine to Prevote, adds proposer's own vote)
+            let prop_events = engine.handle_proposal(proposal.clone());
+            assert!(!prop_events.is_empty(), "proposal from correct proposer should be accepted");
+
+            // Now add the non-proposer's vote
+            engine.add_vote_public(vote.clone());
+            let after = engine.votes.get(&(0, Step::Prevote)).map(|m| m.len()).unwrap_or(0);
+            assert_eq!(after, 2, "both validator votes should be in the map");
+
+            let quorum = engine.has_quorum_public(0, Step::Prevote);
+            let events = engine.check_quorum_public();
+            assert_eq!(events.len(), 1, "quorum should produce BroadcastVote");
+
+            assert!(quorum.is_some(), "2-of-2 validators should reach quorum");
+        }
+
+        // ---- TEST 2: handle_vote directly (full flow) ----
+        {
+            let proposer_sk_copy =
+                crypto::SigningKey::from_bytes(&proposer_sk.to_bytes()).unwrap();
+            let mut engine = BftEngine::new(
+                proposer_pk,
+                vec![v1, v2],
+                1,
+                proposer_sk_copy,
+            );
+            engine.start_round(0);
+
+            // Receive proposal
+            engine.handle_proposal(proposal);
+
+            // Receive non-proposer's vote
+            let events = engine.handle_vote(vote);
+            assert_eq!(events.len(), 1,
+                "handle_vote on second prevote should reach quorum and return events");
+            assert!(events.iter().any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Precommit)),
+                    "should transition to Precommit and broadcast");
         }
     }
 

@@ -13,13 +13,17 @@
 //! - **Slashing** to punish validators who violate safety rules
 
 pub mod bft;
+pub mod slashing;
 
+pub use bft::{BftEngine, BftEvent};
+pub use common::consensus_types::ValidatorInfo;
 use common::traits::Consensus;
-use common::types::{Block, Header, Hash};
+use common::types::{Block, Header};
+use ed25519_dalek::Verifier;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use tracing::{info, warn, error, debug};
+use tracing::{info, warn, debug};
 
 // ============================================================================
 // Slashing Conditions
@@ -39,23 +43,6 @@ pub enum SlashingCondition {
     
     /// Validator was offline for too long
     LivenessFailure { validator: Vec<u8>, missed_blocks: u64 },
-}
-
-// ============================================================================
-// Validator Information
-// ============================================================================
-
-/// Information about a participating validator
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ValidatorInfo {
-    /// Ed25519 public key (32 bytes)
-    pub public_key: Vec<u8>,
-    
-    /// Staked amount (higher stake = more voting power)
-    pub stake: u64,
-    
-    /// Whether this validator has been slashed
-    pub slashed: bool,
 }
 
 // ============================================================================
@@ -173,23 +160,29 @@ impl FinalityGadget {
         }
         
         // Check for equivocation (voting for different blocks at same height)
+        let mut equivocating: Option<Vec<u8>> = None;
         if let Some(existing_votes) = self.prevotes.get(&vote.block_number) {
             for existing in existing_votes {
                 if existing.voter == vote.voter && existing.block_hash != vote.block_hash {
                     warn!("Equivocation detected: validator voted for different blocks at height {}", 
                           vote.block_number);
-                    // In production, this would trigger slashing
+                    equivocating = Some(vote.voter.clone());
+                    break;
                 }
             }
         }
+        if let Some(voter) = equivocating {
+            let _ = self.slash(&voter);
+        }
         
         // Add to prevotes
+        let bn = vote.block_number;
         self.prevotes
-            .entry(vote.block_number)
+            .entry(bn)
             .or_default()
             .push(vote);
         
-        debug!("Prevote recorded for height {} from validator", vote.block_number);
+        debug!("Prevote recorded for height {}", bn);
         Ok(())
     }
     
@@ -210,12 +203,18 @@ impl FinalityGadget {
         }
         
         // Check for equivocation
+        let mut equivocating: Option<Vec<u8>> = None;
         if let Some(existing_votes) = self.precommits.get(&vote.block_number) {
             for existing in existing_votes {
                 if existing.voter == vote.voter && existing.block_hash != vote.block_hash {
                     warn!("Precommit equivocation detected for height {}", vote.block_number);
+                    equivocating = Some(vote.voter.clone());
+                    break;
                 }
             }
+        }
+        if let Some(voter) = equivocating {
+            let _ = self.slash(&voter);
         }
         
         // Add to precommits

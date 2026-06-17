@@ -1,37 +1,58 @@
-# What's Left - Production Readiness Checklist
+# What's Left - Development Status
 
-## Current Status: **MAINNET READY** ✅ (98%)
+## Current Status: **DEVELOPMENT** ⚠️ (~65%)
 
-### Last Updated: May 19, 2026
-### Overall Production Readiness: **98%**
+### Last Updated: June 17, 2026
+### Overall Feature Completeness: **~65%** (lightweight crates compile & test, heavy deps block workspace build)
 
 ---
 
-## ✅ COMPLETED & PRODUCTION-READY
+## ✅ DONE (compilation fixes + integrations applied)
 
-### Core Blockchain (100% Complete)
+### Compilation Status
+- ✅ **8 lightweight crates compile with zero warnings**: common, consensus, da, interop, mev, mempool, zk, storage
+- ✅ **86 tests pass** across all lightweight crates (0 failures)
+- ✅ Storage: PatriciaTrie / ReceiptStore use `Arc<dyn KeyValueStore>` (sled-free)
+- ✅ Mempool: heap ordering and nonce tracking fixed
+- ✅ ZK: Halo2 gated behind feature flag, SHA-256 default prover works
+- ✅ Merkle proofs: verify_proof logic bug fixed
+- ❌ `cargo build --workspace` blocked: rocksdb, libp2p, wasmtime, revm compile from source (2-15 min each)
+- ❌ `node` crate: heavy deps prevent compilation in quick-check mode
+
+### Consensus Blocker Resolved
+- ✅ **Root cause found**: key files were raw hex (not JSON `{"secret_key":"..."}`), Docker mount path was `node_key.json` vs `validator_key.json`
+- ✅ Both fixes applied: key files converted to JSON, mount path corrected
+- ✅ All 12 consensus tests pass (including cross-validator quorum flow)
+
+### Slashing Infrastructure (NOW ACTIVE)
+- ✅ `pub mod slashing;` added to `consensus/src/lib.rs`
+- ✅ `SlashingTracker`, `SlashingConfig`, `EvidenceCollector` available to consumers
+- ✅ Equivocation detection in `FinalityGadget::prevote()` / `precommit()` now calls `FinalityGadget::slash()`
+- ✅ `EnhancedConsensus::check_slashing_conditions()` fully implemented (detects double-sign, calls slash)
+- ⚠️ Full slashing integration into node event loop needs `node` crate compilation (heavy deps)
+
+### Core Blockchain
 - ✅ BFT Consensus with proper locking rounds
 - ✅ Vote aggregation by stake weight (2/3+ threshold)
 - ✅ View-change protocol for leader rotation
 - ✅ Finality gadget (GRANDPA-style)
-- ✅ Slashing infrastructure (hooks ready)
-- ✅ Block production with empty blocks
+- ✅ **Slashing infrastructure** — equivocation detection now triggers slashing
 - ✅ State root computation and verification
 - ✅ EIP-1559 gas pricing
-- ✅ Account abstraction (ERC-4337)
-- ✅ MEV protection with commit-reveal
+- ⚠️ Account abstraction (ERC-4337) — code exists, needs node integration (blocked by heavy deps)
+- ⚠️ MEV protection with commit-reveal — code exists, needs node integration (blocked by heavy deps)
 
-### Infrastructure (100% Complete)
-- ✅ Docker deployment with 9 services
-- ✅ 3 validator nodes with persistent storage
-- ✅ 2 RPC nodes for load distribution
-- ✅ Monitoring with Prometheus + Grafana
+### Infrastructure (~60% Complete)
+- ✅ Docker deployment configuration
+- ✅ 3 validator nodes configured
+- ✅ 2 RPC nodes configured
+- ✅ Monitoring stack (Prometheus + Grafana)
 - ✅ Nginx reverse proxy
-- ✅ Health checks and auto-restart
-- ✅ Persistent peer discovery
-- ✅ Auto-reconnect after restart
+- ✅ Peer discovery configuration
+- ✅ Auto-reconnect configuration
+- ❌ Health checks (curl not installed in containers)
 
-### Networking (100% Complete)
+### Networking
 - ✅ libp2p with gossipsub
 - ✅ Kademlia DHT for peer discovery
 - ✅ Request-response for block sync
@@ -39,95 +60,62 @@
 - ✅ Rate limiting for DoS protection
 - ✅ DNS resolution for bootstrap nodes
 - ✅ Peer persistence to disk
-- ✅ Periodic re-dial of known peers
 
-### Storage (100% Complete)
+### Storage
 - ✅ RocksDB with column families
 - ✅ Atomic batch writes
 - ✅ Merkle Patricia Trie for state
 - ✅ Block and receipt stores
-- ✅ Efficient iterators
 - ✅ LRU caching for hot data
-- ✅ Compression support
 
-### RPC API (100% Complete)
-- ✅ All 15 endpoints functional
-- ✅ Transaction submission
+### RPC API
+- ✅ Transaction submission endpoint
 - ✅ Balance queries
 - ✅ Block retrieval (by hash/height)
 - ✅ Gas price estimation
-- ✅ Fee history (EIP-1559)
 - ✅ Peer management
 - ✅ Node status
-- ✅ Metrics export (Prometheus)
-- ✅ WebSocket ready (placeholder)
+- ✅ Metrics export
+- ⚠️ WebSocket (placeholder only)
 
-### User Interfaces (85% Complete)
-- ✅ Block Explorer UI (React + Vite)
-- ✅ Wallet UI (Web3 compatible)
-- ✅ Faucet UI with rate limiting
-- ⚠️ Governance UI (view-only, needs voting wiring)
-- ❌ Validator Dashboard (planned)
-
-### Developer Tools (75% Complete)
-- ✅ JavaScript/TypeScript SDK
-- ✅ Basic transaction examples
-- ✅ Wallet integration examples
-- ✅ CLI tool with all commands
-- ⚠️ Contract deployment tools (basic)
-- ❌ Starter kits (DeFi, NFT, DAO templates)
-
-### Security (70% Complete)
+### Security
 - ✅ Rate limiting (100 req/sec per IP)
 - ✅ Request body size limits (1MB)
 - ✅ Signature verification for all messages
 - ✅ Nonce replay protection
 - ✅ Chain ID validation
-- ✅ DoS protection in network layer
-- ✅ Circuit breaker for emergencies
-- ⚠️ Professional audit (scheduled)
-- ⚠️ Bug bounty program (planned Q3 2026)
-
-### Documentation (85% Complete)
-- ✅ CAPABILITIES.md - Full feature list
-- ✅ WHAT_IT_DOES.md - Architecture overview
-- ✅ CONTRIBUTING.md - Development guide
-- ✅ ROADMAP.md - Project timeline
-- ✅ README.md - Quick start
-- ✅ Docker deployment docs
-- ✅ Validator guide
-- ⚠️ API documentation (in progress)
-- ❌ Video tutorials (planned)
+- ❌ Professional audit (not started)
+- ❌ Bug bounty program (not started)
 
 ---
 
-## 🎯 IMMEDIATE NEXT STEPS (Week 1)
+## 🎯 NEXT STEPS
 
-### Critical Fixes (0 remaining)
+### Critical: Workspace Build
+1. ❌ Compile heavy deps (rocksdb, libp2p, wasmtime, revm): `cargo build --workspace` (2-15 min each)
+2. ❌ Verify `node/src/main.rs` compiles with block_producer + slashing + RPC integration
+3. ❌ Run end-to-end testnet via Docker
 
-All core issues have been resolved:
+### Wire Dormant Features (need node crate compilation)
+1. ⚠️ **Account Abstraction** — add `AccountAbstractionExecutor` to Node, RPC endpoints for `submit_user_operation`, integrate bundler into `BlockProducer`
+2. ⚠️ **MEV Protection** — replace `Mempool` with `MevMempool` in Node, add commit/reveal/encrypted RPC routes, wire `BlockProducer` to use `get_all_ready_transactions()`
 
-1. ✅ **Empty-block production** - Chain advances even with empty mempool
-2. ✅ **Validator auto-connection** - Peers persist and auto-reconnect
-3. ✅ **Signature verification** - Proper ed25519 implementation
-4. ✅ **State root computation** - Verified before commit
-5. ✅ **Block finalization** - Atomic commits with receipts
+### Integration Tasks
+1. ⚠️ Wire `SlashingTracker` into `Node` struct and call `record_missed_block()` / `check_liveness()` on block finalization
+2. ⚠️ Expose slashing events via RPC endpoint
+3. ❌ Create/fix health checks (install curl in containers)
+4. ❌ Build Block Explorer UI
+5. ❌ Build Wallet UI
+6. ❌ Generate API documentation
 
-### Quick Wins (Can Do Today)
+### Quick Wins (After Workspace Build)
+```
+# Build
+cargo build
 
-#### 1. Test Complete Flow (10 min)
-```bash
-# Rebuild everything
-docker-compose build
-docker-compose up -d
+# Run local testnet
+docker-compose -f deployment/local/docker-compose.yml up -d
 
-# Check all services are healthy
-docker-compose ps
-
-# Submit a test transaction
-curl -X POST http://localhost:9933/submit_tx \
-  -H "Content-Type: application/json" \
-  -d '{"payload": "0x..."}'
-
-# Monitor block production
-watch -n 2 'curl -s http://localhost:9933/status | jq .height'
+# Check status
+curl http://localhost:26657/status
+```

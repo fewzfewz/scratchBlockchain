@@ -1,4 +1,4 @@
-use common::types::{Address, Transaction};
+use common::types::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

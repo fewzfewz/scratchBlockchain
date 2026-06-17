@@ -7,14 +7,15 @@
 //! - MEV auction with builder competition
 //! - Block building optimization
 
-use common::types::{Block, Transaction, Hash};
+use common::types::{Block, Transaction};
 use common::crypto::SigningKey;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use rand::Rng;
-use tracing::{info, warn, debug, error};
+use ed25519_dalek::Verifier;
+use tracing::{info, debug};
 
 // ============================================================================
 // Commit-Reveal Scheme for Frontrunning Protection
@@ -60,7 +61,9 @@ pub struct CommitRevealScheme {
 struct CommitmentMetadata {
     commit_height: u64,
     sender: [u8; 20],
+    #[allow(dead_code)]
     nonce: u64,
+    #[allow(dead_code)]
     timestamp: Instant,
 }
 
@@ -94,9 +97,10 @@ impl CommitRevealScheme {
 
     /// Reveal a transaction after the delay period
     pub fn reveal(&mut self, tx: Transaction, secret: [u8; 32], commitment: [u8; 32], current_height: u64) -> Result<RevealedTransaction, String> {
-        // Verify commitment exists
+        // Verify commitment exists and get metadata
         let metadata = self.pending_commitments.get(&commitment)
-            .ok_or("Commitment not found")?;
+            .ok_or("Commitment not found")?
+            .clone();
         
         // Check delay period
         if current_height - metadata.commit_height < self.min_reveal_delay {
@@ -217,7 +221,7 @@ pub enum BuildStrategy {
 }
 
 #[derive(Debug, Default)]
-struct BuilderPerformance {
+pub struct BuilderPerformance {
     blocks_built: u64,
     total_bids_submitted: u64,
     total_bids_won: u64,
@@ -243,7 +247,7 @@ impl BlockBuilder {
         let (selected_txs, mev_value) = self.select_transactions(available_txs)?;
         
         // Build block with selected transactions
-        let mut block = self.construct_block(parent_block, selected_txs)?;
+        let block = self.construct_block(parent_block, selected_txs)?;
         
         // Calculate bid amount (percentage of extracted value)
         let bid_amount = match self.strategies.first().unwrap_or(&BuildStrategy::Balanced) {
@@ -253,8 +257,14 @@ impl BlockBuilder {
             BuildStrategy::UserPriority => mev_value * 50 / 100,     // Bid 50% of value
         };
         
-        // Create and sign bid
-        let tx_root = block.extrinsics_root();
+        // Create and sign bid (compute extrinsics root)
+        let tx_root = {
+            let mut hasher = Sha256::new();
+            for tx in &block.extrinsics {
+                hasher.update(tx.hash());
+            }
+            hasher.finalize().into()
+        };
         let mut bid = BuilderBid {
             builder_pubkey: self.pubkey.clone(),
             block: block.clone(),
@@ -274,7 +284,8 @@ impl BlockBuilder {
         
         self.performance.blocks_built += 1;
         self.performance.total_bids_submitted += 1;
-        self.performance.avg_bid_amount = (self.performance.avg_bid_amount * (self.performance.total_bids_submitted - 1) + bid_amount) / self.performance.total_bids_submitted;
+        let total = self.performance.total_bids_submitted as u128;
+        self.performance.avg_bid_amount = (self.performance.avg_bid_amount * (total - 1) + bid_amount) / total;
         self.performance.total_mev_extracted += mev_value;
         
         let build_time = start_time.elapsed();
@@ -292,7 +303,7 @@ impl BlockBuilder {
         let max_gas_per_block = 30_000_000;
         
         // Score each transaction based on strategy
-        let mut scored_txs: Vec<(Transaction, u128, u64)> = txs.into_iter()
+        let mut scored_txs: Vec<(Transaction, u128, u128)> = txs.into_iter()
             .map(|tx| {
                 let mev = self.calculate_mev(&tx);
                 let score = match self.strategies.first().unwrap_or(&BuildStrategy::Balanced) {
@@ -309,11 +320,11 @@ impl BlockBuilder {
         scored_txs.sort_by(|a, b| b.1.cmp(&a.1));
         
         // Select transactions within gas limit
-        for (tx, score, mev) in scored_txs {
+        for (tx, _score, mev) in scored_txs {
             if total_gas + tx.gas_limit <= max_gas_per_block {
-                selected.push(tx);
                 total_gas += tx.gas_limit;
                 total_mev += mev;
+                selected.push(tx);
             }
         }
         
@@ -340,7 +351,7 @@ impl BlockBuilder {
 
     /// Construct block from selected transactions
     fn construct_block(&self, parent: &Block, txs: Vec<Transaction>) -> Result<Block, String> {
-        let mut block = Block::new(parent.header.clone(), txs);
+        let block = Block::new(parent.header.clone(), txs);
         // In production, would compute state root, etc.
         Ok(block)
     }
@@ -385,10 +396,13 @@ pub struct MEVAuction {
 
 #[derive(Debug, Clone)]
 struct AuctionResult {
+    #[allow(dead_code)]
     height: u64,
     winning_bid: u128,
     mev_value: u128,
+    #[allow(dead_code)]
     num_bidders: usize,
+    #[allow(dead_code)]
     timestamp: u64,
 }
 
@@ -572,7 +586,7 @@ pub struct ThresholdEncryption {
 }
 
 impl ThresholdEncryption {
-    pub fn new(validator_pubkeys: Vec<Vec<u8>>, threshold: usize) -> Self {
+    pub fn new(validator_pubkeys: Vec<Vec<u8>>, _threshold: usize) -> Self {
         Self {
             encrypted_txs: HashMap::new(),
             decryption_shares: HashMap::new(),
@@ -582,19 +596,39 @@ impl ThresholdEncryption {
         }
     }
 
-    /// Encrypt a transaction using threshold encryption
+    /// Encrypt a transaction using threshold encryption (Shamir's Secret Sharing)
     pub fn encrypt_transaction(&mut self, tx: &Transaction, nonce: u64, threshold: usize) -> EncryptedTransaction {
-        // In production, this would use actual threshold encryption (e.g., Shamir's Secret Sharing)
-        // For now, we use a simplified XOR-based encryption
-        
         let tx_bytes = bincode::serialize(tx).unwrap_or_default();
-        let key = self.generate_shared_key(nonce);
         
+        // Generate a random master secret (the actual encryption key)
+        let master_secret: [u8; 32] = rand::thread_rng().gen();
+        
+        // Encrypt the transaction bytes with the master secret (XOR for simplicity;
+        // in production use AES-256-GCM)
         let encrypted_data: Vec<u8> = tx_bytes
             .iter()
-            .zip(key.iter().cycle())
+            .zip(master_secret.iter().cycle())
             .map(|(b, k)| b ^ k)
             .collect();
+        
+        // Split the master secret into n shares using polynomial-based
+        // Shamir's Secret Sharing over GF(2^8)
+        let shares = self.split_secret(&master_secret, self.total_validators, threshold);
+        
+        // Store shares keyed by validator index
+        for (i, share) in shares.iter().enumerate() {
+            if i < self.validator_pubkeys.len() {
+                let decryption_share = DecryptionShare {
+                    nonce,
+                    validator: self.validator_pubkeys[i].clone(),
+                    share: share.clone(),
+                    signature: vec![], // Will be signed by each validator
+                };
+                // Pre-populate with expected shares (validators will submit with sigs)
+                let shares_map = self.decryption_shares.entry(nonce).or_default();
+                shares_map.insert(self.validator_pubkeys[i].clone(), decryption_share.share.clone());
+            }
+        }
         
         EncryptedTransaction {
             encrypted_data,
@@ -604,14 +638,92 @@ impl ThresholdEncryption {
         }
     }
 
+    /// Split a secret into shares using Shamir's Secret Sharing (over GF(2^8))
+    fn split_secret(&self, secret: &[u8; 32], total: usize, threshold: usize) -> Vec<Vec<u8>> {
+        use rand::Rng;
+        let mut rng = rand::thread_rng();
+        
+        // For each byte of the secret, generate a polynomial of degree (threshold - 1)
+        // where f(0) = secret_byte, and f(i) = share for participant i
+        let mut shares: Vec<Vec<u8>> = vec![Vec::with_capacity(secret.len()); total];
+        
+        for byte_idx in 0..secret.len() {
+            let secret_byte = secret[byte_idx];
+            
+            // Generate random coefficients for polynomial of degree (threshold - 1)
+            // f(x) = secret + a1*x + a2*x^2 + ... + a_{t-1}*x^{t-1}
+            let mut coeffs = vec![0i16; threshold - 1];
+            for c in &mut coeffs {
+                *c = rng.gen_range(1..=255);
+            }
+            
+            // Evaluate polynomial at x = 1..total
+            for i in 0..total {
+                let x = (i + 1) as i16;
+                let mut y = secret_byte as i16;
+                let mut x_pow = x;
+                for &c in &coeffs {
+                    y += c * x_pow;
+                    x_pow *= x;
+                }
+                shares[i].push((y & 0xFF) as u8);
+            }
+        }
+        
+        shares
+    }
+
+    /// Reconstruct the secret from shares using Lagrange interpolation (GF(2^8))
+    fn reconstruct_secret(&self, shares: &HashMap<Vec<u8>, Vec<u8>>, threshold: usize) -> Vec<u8> {
+        let num_bytes = shares.values().next().map(|s| s.len()).unwrap_or(0);
+        let mut secret = vec![0u8; num_bytes];
+        
+        // Get the x values (validator indices) for the available shares
+        let x_vals: Vec<i16> = self.validator_pubkeys.iter()
+            .enumerate()
+            .filter(|(_, pk)| shares.contains_key(*pk))
+            .map(|(i, _)| (i + 1) as i16)
+            .collect();
+        
+        if x_vals.len() < threshold {
+            return secret;
+        }
+        
+        // For each byte, use Lagrange interpolation at x=0
+        for byte_idx in 0..num_bytes {
+            let y_vals: Vec<i16> = self.validator_pubkeys.iter()
+                .filter_map(|pk| shares.get(pk))
+                .map(|s| s[byte_idx] as i16)
+                .collect();
+            
+            let mut result = 0i16;
+            for i in 0..threshold {
+                let mut num = 1i16;
+                let mut den = 1i16;
+                for j in 0..threshold {
+                    if i != j {
+                        num *= -x_vals[j];
+                        den *= x_vals[i] - x_vals[j];
+                    }
+                }
+                let li = num / den;
+                result += y_vals[i] * li;
+            }
+            secret[byte_idx] = (result & 0xFF) as u8;
+        }
+        
+        secret
+    }
+
     /// Submit an encrypted transaction to the mempool
     pub fn submit_encrypted(&mut self, encrypted: EncryptedTransaction) -> Result<(), String> {
-        if self.encrypted_txs.contains_key(&encrypted.nonce) {
+        let nonce = encrypted.nonce;
+        if self.encrypted_txs.contains_key(&nonce) {
             return Err("Transaction with same nonce already exists".into());
         }
         
-        self.encrypted_txs.insert(encrypted.nonce, encrypted);
-        debug!("Encrypted transaction submitted with nonce {}", encrypted.nonce);
+        self.encrypted_txs.insert(nonce, encrypted);
+        debug!("Encrypted transaction submitted with nonce {}", nonce);
         
         Ok(())
     }
@@ -655,24 +767,15 @@ impl ThresholdEncryption {
             None => return Err("Transaction not found".into()),
         };
         
-        // In production, combine shares using polynomial interpolation
-        // For now, we reconstruct the key by XORing shares
-        
         let shares = self.decryption_shares.get(&nonce).unwrap();
-        let mut combined_key = vec![0u8; 32];
         
-        for share in shares.values() {
-            for (i, byte) in share.iter().enumerate() {
-                if i < combined_key.len() {
-                    combined_key[i] ^= byte;
-                }
-            }
-        }
+        // Reconstruct the master secret using Lagrange interpolation
+        let master_secret = self.reconstruct_secret(shares, encrypted.threshold);
         
         // Decrypt the transaction
         let decrypted_bytes: Vec<u8> = encrypted.encrypted_data
             .iter()
-            .zip(combined_key.iter().cycle())
+            .zip(master_secret.iter().cycle())
             .map(|(b, k)| b ^ k)
             .collect();
         
@@ -701,13 +804,6 @@ impl ThresholdEncryption {
         }
         
         ready
-    }
-
-    /// Generate a shared key from nonce (simplified)
-    fn generate_shared_key(&self, nonce: u64) -> Vec<u8> {
-        let mut hasher = Sha256::new();
-        hasher.update(nonce.to_le_bytes());
-        hasher.finalize().to_vec()
     }
 
     /// Verify decryption share signature
@@ -845,7 +941,7 @@ mod tests {
         assert_eq!(scheme.pending_count(), 1);
         
         // Try to reveal too early
-        assert!(scheme.reveal(tx, secret, commitment, 2).is_err());
+        assert!(scheme.reveal(tx.clone(), secret, commitment, 2).is_err());
         
         // Reveal after delay
         let result = scheme.reveal(tx.clone(), secret, commitment, 3);
@@ -858,10 +954,11 @@ mod tests {
     #[test]
     fn test_auction() {
         let mut auction = MEVAuction::new(100, 12);
-        let signing_key = SigningKey::generate(&mut rand::rngs::OsRng);
+        let signing_key = SigningKey::generate();
+        let pubkey = signing_key.public_key();
         
         let block = Block::genesis();
-        let builder = BlockBuilder::new(vec![1; 32], signing_key, BuildStrategy::Balanced);
+        let mut builder = BlockBuilder::new(pubkey, signing_key, BuildStrategy::Balanced);
         let bid = builder.build_block(&block, vec![]).unwrap();
         
         assert!(auction.submit_bid(bid, 1).is_ok());

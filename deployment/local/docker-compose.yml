@@ -16,7 +16,7 @@ services:
     volumes:
       - validator1_data:/data
       - ./configs/validator1.toml:/config.toml:ro
-      - ./configs/validator1_key.json:/data/node_key.json:ro
+      - ./configs/validator1_key.json:/data/validator_key.json:ro
       - ./configs/genesis.json:/genesis.json:ro
       - ../../target/release/node:/usr/local/bin/modular-node:ro
     environment:
@@ -49,7 +49,7 @@ services:
     volumes:
       - validator2_data:/data
       - ./configs/validator2.toml:/config.toml:ro
-      - ./configs/validator2_key.json:/data/node_key.json:ro
+      - ./configs/validator2_key.json:/data/validator_key.json:ro
       - ./configs/genesis.json:/genesis.json:ro
       - ../../target/release/node:/usr/local/bin/modular-node:ro
     environment:
@@ -84,7 +84,7 @@ services:
     volumes:
       - validator3_data:/data
       - ./configs/validator3.toml:/config.toml:ro
-      - ./configs/validator3_key.json:/data/node_key.json:ro
+      - ./configs/validator3_key.json:/data/validator_key.json:ro
       - ./configs/genesis.json:/genesis.json:ro
       - ../../target/release/node:/usr/local/bin/modular-node:ro
     environment:

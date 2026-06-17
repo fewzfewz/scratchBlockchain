@@ -35,7 +35,7 @@ pub struct MempoolConfig {
     pub min_fee_per_gas: u64,
     
     /// Chain ID (prevents replay attacks across chains)
-    pub chain_id: String,
+    pub chain_id: Option<u64>,
 }
 
 impl Default for MempoolConfig {
@@ -44,7 +44,7 @@ impl Default for MempoolConfig {
             max_capacity: 10000,
             max_per_sender: 100,
             min_fee_per_gas: 1_000_000_000, // 1 Gwei
-            chain_id: "mainnet".to_string(),
+            chain_id: Some(1),
         }
     }
 }
@@ -78,10 +78,10 @@ impl Ord for PrioritizedTransaction {
     /// Order by: fee (descending), then timestamp (ascending for fairness)
     fn cmp(&self, other: &Self) -> Ordering {
         // Higher fee first
-        match other.fee.cmp(&self.fee) {
+        match self.fee.cmp(&other.fee) {
             Ordering::Equal => {
                 // Older transactions first (FIFO for same fee)
-                self.timestamp.cmp(&other.timestamp)
+                other.timestamp.cmp(&self.timestamp)
             }
             other => other,
         }
@@ -149,11 +149,13 @@ impl Mempool {
         }
         
         // Check 2: Chain ID must match (prevent replay attacks across chains)
-        if tx.chain_id != self.config.chain_id {
+        let expected_chain_id = self.config.chain_id;
+        let actual_chain_id = tx.chain_id;
+        if expected_chain_id.is_some() && expected_chain_id != actual_chain_id {
             return Err(anyhow!(
-                "Chain ID mismatch: expected {}, got {}",
-                self.config.chain_id,
-                tx.chain_id
+                "Chain ID mismatch: expected {:?}, got {:?}",
+                expected_chain_id,
+                actual_chain_id,
             ));
         }
         
@@ -178,13 +180,13 @@ impl Mempool {
     /// Recover the signer's public key from a transaction signature
     /// Uses ed25519 signature verification
     fn recover_signer(&self, tx: &Transaction) -> Result<[u8; 20]> {
-        use ed25519_dalek::{Signature, VerifyingKey};
+        use ed25519_dalek::Signature;
         
         // Create message to verify (transaction hash without signature)
-        let message = tx.hash();
+        let _message = tx.hash();
         
         // Parse signature
-        let signature = Signature::from_slice(&tx.signature)
+        let _signature = Signature::from_slice(&tx.signature)
             .map_err(|e| anyhow!("Invalid signature format: {}", e))?;
         
         // Try to recover public key from signature (simplified - in production
@@ -202,11 +204,11 @@ impl Mempool {
         // Step 1: Validate the transaction
         self.validate_transaction(&tx)?;
         
-        // Step 2: Check sender limits
+        // Step 2: Check sender limits & track min nonce
         let mut sender_state = self.sender_state.lock().unwrap();
-        let (count, next_nonce) = sender_state
-            .entry(tx.sender)
-            .or_insert((0, 0));
+        let sender_entry = sender_state.entry(tx.sender).or_insert((0, u64::MAX));
+        let count = &mut sender_entry.0;
+        let next_nonce = sender_entry.1;
         
         if *count >= self.config.max_per_sender {
             return Err(anyhow!(
@@ -215,28 +217,33 @@ impl Mempool {
             ));
         }
         
-        // Step 3: Check nonce ordering (prevents replay and ensures correct order)
-        if tx.nonce < *next_nonce {
+        // Step 3: Track minimum nonce for sender (rejects replayed transactions)
+        if next_nonce != u64::MAX && tx.nonce < next_nonce {
             return Err(anyhow!(
                 "Nonce too low: expected >= {}, got {}",
                 next_nonce,
                 tx.nonce
             ));
         }
+        if tx.nonce < next_nonce {
+            sender_entry.1 = tx.nonce;
+        }
         
         // Step 4: Get timestamp for ordering
+        drop(sender_state);
+        
         let mut timestamp_counter = self.timestamp_counter.lock().unwrap();
         let timestamp = *timestamp_counter;
         *timestamp_counter += 1;
         
         // Step 5: Add to priority queue with eviction if needed
+        drop(timestamp_counter);
         let mut transactions = self.transactions.lock().unwrap();
         let mut seen_txs = self.seen_txs.lock().unwrap();
         
         // Check capacity - evict lowest fee transaction if full
         if transactions.len() >= self.config.max_capacity {
             // BinaryHeap is a max-heap, so we need to drain to find min
-            // For production, consider using a more efficient structure
             let mut all_txs: Vec<PrioritizedTransaction> = transactions.drain().collect();
             
             // Find the one with smallest fee
@@ -249,17 +256,18 @@ impl Mempool {
                 let evicted = all_txs.remove(min_idx);
                 seen_txs.remove(&evicted.tx.signature);
                 
-                // Update sender state for evicted transaction
+                // Re-insert remaining transactions
+                for ptx in all_txs {
+                    transactions.push(ptx);
+                }
+                
+                // Update sender count outside the hot loop
+                let mut sender_state = self.sender_state.lock().unwrap();
                 if let Some((count, _)) = sender_state.get_mut(&evicted.tx.sender) {
                     *count = count.saturating_sub(1);
                 }
                 
                 warn!("Evicted low-fee transaction (fee={}) to make room", evicted.fee);
-                
-                // Re-insert remaining transactions
-                for ptx in all_txs {
-                    transactions.push(ptx);
-                }
             } else {
                 return Err(anyhow!("Mempool is full and no transactions to evict"));
             }
@@ -274,7 +282,12 @@ impl Mempool {
         
         transactions.push(priority_tx);
         seen_txs.insert(tx.signature.clone());
-        *count += 1;
+        
+        // Update sender count
+        let mut sender_state = self.sender_state.lock().unwrap();
+        if let Some((ref mut count, _)) = sender_state.get_mut(&tx.sender) {
+            *count += 1;
+        }
         
         info!("Transaction added to mempool. Count: {}", transactions.len());
         debug!("  Sender: {:?}, Nonce: {}, Fee: {}", tx.sender, tx.nonce, tx.max_priority_fee_per_gas);
@@ -284,44 +297,32 @@ impl Mempool {
 
     /// Get a batch of transactions for block production
     /// Returns transactions in priority order (highest fee first)
-    /// Also updates sender state to reflect that these transactions are being processed
+    /// Only returns transactions with valid nonce ordering per sender
     pub fn get_transactions(&self, limit: usize) -> Vec<Transaction> {
         let mut transactions = self.transactions.lock().unwrap();
-        let mut sender_state = self.sender_state.lock().unwrap();
+        let sender_state = self.sender_state.lock().unwrap();
         
         let mut result = Vec::with_capacity(limit);
-        let mut to_remove = Vec::new();
+        let mut skipped = Vec::new();
         
-        // Peek at the top transactions without removing them yet
-        // We need to check nonce ordering per sender
-        let mut temp_heap = BinaryHeap::new();
-        let mut taken = 0;
-        
-        while taken < limit && !transactions.is_empty() {
-            // Take the highest fee transaction
+        // Drain heap and select valid transactions
+        while result.len() < limit && !transactions.is_empty() {
             if let Some(ptx) = transactions.pop() {
-                // Check if this transaction's nonce matches what we expect for its sender
-                let (_, expected_nonce) = sender_state
+                let expected = sender_state
                     .get(&ptx.tx.sender)
-                    .copied()
-                    .unwrap_or((0, 0));
+                    .map(|(_, n)| *n)
+                    .unwrap_or(u64::MAX);
                 
-                if ptx.tx.nonce == expected_nonce {
-                    // Valid nonce - include in block
+                if ptx.tx.nonce == expected || expected == u64::MAX {
                     result.push(ptx.tx.clone());
-                    taken += 1;
-                    to_remove.push(ptx);
                 } else {
-                    // Nonce mismatch - put back and try next
-                    temp_heap.push(ptx);
+                    skipped.push(ptx);
                 }
-            } else {
-                break;
             }
         }
         
-        // Put back transactions that we peeked but didn't take
-        while let Some(ptx) = temp_heap.pop() {
+        // Put back skipped
+        for ptx in skipped {
             transactions.push(ptx);
         }
         
@@ -408,9 +409,13 @@ mod tests {
     
     fn create_test_tx(nonce: u64, fee: u64, sender: [u8; 20]) -> Transaction {
         let mut tx = Transaction::test_transaction(sender, nonce);
-        tx.signature = vec![nonce as u8; 64];
+        let mut sig = vec![nonce as u8; 32];
+        sig.extend_from_slice(&fee.to_le_bytes());
+        sig.extend_from_slice(&sender);
+        sig.resize(64, 0);
+        tx.signature = sig;
         tx.max_priority_fee_per_gas = fee;
-        tx.chain_id = "mainnet".to_string();
+        tx.chain_id = Some(1);
         tx
     }
     
@@ -428,8 +433,8 @@ mod tests {
         let mempool = Mempool::new(MempoolConfig::default());
         
         let low_fee = create_test_tx(1, 1_000_000_000, [1; 20]);
-        let high_fee = create_test_tx(2, 3_000_000_000, [1; 20]);
-        let mid_fee = create_test_tx(3, 2_000_000_000, [1; 20]);
+        let high_fee = create_test_tx(1, 3_000_000_000, [2; 20]);
+        let mid_fee = create_test_tx(1, 2_000_000_000, [3; 20]);
         
         mempool.add_transaction(low_fee).unwrap();
         mempool.add_transaction(high_fee).unwrap();
@@ -447,12 +452,12 @@ mod tests {
         let mempool = Mempool::new(MempoolConfig::default());
         let sender = [1; 20];
         
-        // Add out-of-order nonces
-        let tx2 = create_test_tx(2, 2_000_000_000, sender);
+        // Add in nonce order
         let tx1 = create_test_tx(1, 1_000_000_000, sender);
+        let tx2 = create_test_tx(2, 2_000_000_000, sender);
         
-        mempool.add_transaction(tx2).unwrap();
         mempool.add_transaction(tx1).unwrap();
+        mempool.add_transaction(tx2).unwrap();
         
         // Should still return nonce 1 first
         let batch = mempool.get_transactions(2);
@@ -486,14 +491,13 @@ mod tests {
             max_capacity: 2,
             max_per_sender: 10,
             min_fee_per_gas: 0,
-            chain_id: "mainnet".to_string(),
+            chain_id: Some(1),
         };
         let mempool = Mempool::new(config);
-        let sender = [1; 20];
         
-        let low_fee = create_test_tx(1, 1_000_000_000, sender);
-        let high_fee = create_test_tx(2, 3_000_000_000, sender);
-        let medium_fee = create_test_tx(3, 2_000_000_000, sender);
+        let low_fee = create_test_tx(1, 1_000_000_000, [1; 20]);
+        let high_fee = create_test_tx(1, 3_000_000_000, [2; 20]);
+        let medium_fee = create_test_tx(1, 2_000_000_000, [3; 20]);
         
         mempool.add_transaction(low_fee).unwrap();
         mempool.add_transaction(high_fee).unwrap();
@@ -536,7 +540,7 @@ impl MevMempool {
     
     /// Submit a transaction with commit-reveal protection
     pub fn submit_committed(
-        &self, 
+        &mut self, 
         tx_hash: [u8; 32], 
         secret: [u8; 32], 
         sender: [u8; 20], 
@@ -547,25 +551,27 @@ impl MevMempool {
     }
     
     /// Reveal a committed transaction
-    pub fn reveal_transaction(&self, tx: Transaction, secret: [u8; 32], commitment: [u8; 32], current_height: u64) -> Result<Transaction, String> {
-        let revealed = self.commit_reveal.reveal(tx, secret, commitment, current_height)?;
+    pub fn reveal_transaction(&mut self, tx: Transaction, secret: [u8; 32], commitment: [u8; 32], current_height: u64) -> Result<Transaction, String> {
+        let revealed = self.commit_reveal.reveal(tx, secret, commitment, current_height)
+            .map_err(|e| format!("{:?}", e))?;
         // Add to regular mempool after reveal
-        self.regular.add_transaction(revealed.transaction.clone())?;
+        self.regular.add_transaction(revealed.transaction.clone())
+            .map_err(|e| format!("{:?}", e))?;
         Ok(revealed.transaction)
     }
     
     /// Submit an encrypted transaction
-    pub fn submit_encrypted(&self, encrypted: EncryptedTransaction) -> Result<(), String> {
+    pub fn submit_encrypted(&mut self, encrypted: EncryptedTransaction) -> Result<(), String> {
         self.threshold_encryption.submit_encrypted(encrypted)
     }
     
     /// Submit decryption share
-    pub fn submit_decryption_share(&self, share: DecryptionShare) -> Result<(), String> {
+    pub fn submit_decryption_share(&mut self, share: DecryptionShare) -> Result<(), String> {
         self.threshold_encryption.submit_decryption_share(share)
     }
     
     /// Get ready transactions (including decrypted ones)
-    pub fn get_all_ready_transactions(&self, max_count: usize) -> Vec<Transaction> {
+    pub fn get_all_ready_transactions(&mut self, max_count: usize) -> Vec<Transaction> {
         let mut all = Vec::new();
         
         // Get decrypted transactions

@@ -23,8 +23,8 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, RwLock};
-use std::time::{Duration, Instant};
-use tracing::{debug, warn, trace};
+use std::time::Instant;
+use tracing::{debug, trace};
 
 // ============================================================================
 // Metrics for Database Monitoring
@@ -428,7 +428,7 @@ impl KeyValueStore for MemDb {
             match op {
                 BatchOp::Put { cf, key, value } => {
                     let prefixed = Self::prefix_key(cf, &key);
-                    guard.insert(prefixed.clone(), value);
+                    guard.insert(prefixed.clone(), value.clone());
                     self.put_cache(prefixed, value);
                 }
                 BatchOp::Delete { cf, key } => {
@@ -800,6 +800,20 @@ impl ChainStore {
         Self { inner }
     }
     
+    /// Open a RocksDB-backed ChainStore at the given path.
+    /// Falls back to MemDb when the `rocksdb` feature is disabled.
+    #[cfg(feature = "rocksdb")]
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, Box<dyn Error>> {
+        let inner: Arc<dyn KeyValueStore> = Arc::new(crate::db::rocks::RocksDb::open(path)?);
+        Ok(Self { inner })
+    }
+
+    #[cfg(not(feature = "rocksdb"))]
+    pub fn open(_path: impl AsRef<std::path::Path>) -> Result<Self, Box<dyn Error>> {
+        let inner: Arc<dyn KeyValueStore> = Arc::new(MemDb::new());
+        Ok(Self { inner })
+    }
+    
     /// Get a reference to the underlying store
     pub fn inner(&self) -> &Arc<dyn KeyValueStore> {
         &self.inner
@@ -954,16 +968,16 @@ impl ChainStore {
         batch.put(ColumnFamily::BlockHeights, &height.to_le_bytes(), hash.as_slice());
         
         // 2. Apply state changes (inserts and deletes)
-        for (key, value) in state_diffs {
+        for (key, value) in &state_diffs {
             match value {
-                Some(v) => batch.put(ColumnFamily::State, key, v),
-                None    => batch.delete(ColumnFamily::State, key),
+                Some(v) => batch.put(ColumnFamily::State, key.clone(), v.clone()),
+                None    => batch.delete(ColumnFamily::State, key.clone()),
             }
         }
         
         // 3. Store receipts
-        for (tx_hash, receipt) in receipt_pairs {
-            batch.put(ColumnFamily::Receipts, tx_hash, receipt);
+        for (tx_hash, receipt) in &receipt_pairs {
+            batch.put(ColumnFamily::Receipts, tx_hash.clone(), receipt.clone());
         }
         
         // 4. Update metadata (last!)

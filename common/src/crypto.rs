@@ -476,7 +476,9 @@ mod additional_tests {
         let sig1 = key1.sign(msg1);
         let sig2 = key2.sign(msg2);
         
-        let pubkeys = vec![key1.public_key().as_slice(), key2.public_key().as_slice()];
+        let pk1 = key1.public_key();
+        let pk2 = key2.public_key();
+        let pubkeys = vec![pk1.as_slice(), pk2.as_slice()];
         let messages = vec![msg1.as_slice(), msg2.as_slice()];
         let sigs = vec![sig1.as_slice(), sig2.as_slice()];
         

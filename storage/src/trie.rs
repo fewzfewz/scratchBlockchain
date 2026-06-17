@@ -24,7 +24,10 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, RwLock};
-use tracing::{debug, warn};
+use tracing::debug;
+
+use crate::db::ColumnFamily;
+use crate::db::KeyValueStore;
 
 /// Nibble (4-bit value) used for trie paths
 /// Hex characters (0-15) represent half-bytes
@@ -46,13 +49,6 @@ pub const EMPTY_TRIE_HASH: NodeHash = [
 ];
 
 /// Convert bytes to nibble path (each byte becomes 2 nibbles)
-/// 
-/// # Example
-/// ```
-/// let bytes = vec![0xAB, 0xCD];
-/// let nibbles = bytes_to_nibbles(&bytes);
-/// assert_eq!(nibbles, vec![0xA, 0xB, 0xC, 0xD]);
-/// ```
 fn bytes_to_nibbles(bytes: &[u8]) -> NibblePath {
     let mut nibbles = Vec::with_capacity(bytes.len() * 2);
     for byte in bytes {
@@ -63,13 +59,6 @@ fn bytes_to_nibbles(bytes: &[u8]) -> NibblePath {
 }
 
 /// Convert nibble path back to bytes (requires even length)
-/// 
-/// # Example
-/// ```
-/// let nibbles = vec![0xA, 0xB, 0xC, 0xD];
-/// let bytes = nibbles_to_bytes(&nibbles);
-/// assert_eq!(bytes, vec![0xAB, 0xCD]);
-/// ```
 #[allow(dead_code)]
 fn nibbles_to_bytes(nibbles: &[Nibble]) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(nibbles.len() / 2);
@@ -122,23 +111,12 @@ pub enum TrieNode {
 }
 
 impl TrieNode {
-    /// Compute the hash of this node (with caching)
-    /// 
-    /// # Performance
-    /// First call computes and caches the hash. Subsequent calls return cached value.
+    /// Compute the hash of this node
     pub fn hash(&self) -> NodeHash {
-        use std::sync::OnceLock;
-        
-        // Static cache for node hashes (per node instance)
-        // This prevents recomputing hashes for unchanged nodes
-        static CACHE: OnceLock<NodeHash> = OnceLock::new();
-        
-        *CACHE.get_or_init(|| {
-            let encoded = self.encode();
-            let mut hasher = Sha256::new();
-            hasher.update(&encoded);
-            hasher.finalize().into()
-        })
+        let encoded = self.encode();
+        let mut hasher = Sha256::new();
+        hasher.update(&encoded);
+        hasher.finalize().into()
     }
     
     /// Encode node for hashing and storage
@@ -167,8 +145,8 @@ pub struct PatriciaTrie {
     /// Speeds up repeated access to the same nodes
     node_cache: Arc<RwLock<HashMap<NodeHash, TrieNode>>>,
     
-    /// Persistent storage backend (sled database)
-    db: sled::Db,
+    /// Persistent storage backend
+    db: Arc<dyn KeyValueStore>,
     
     /// Statistics for monitoring
     stats: Arc<RwLock<TrieStats>>,
@@ -192,33 +170,30 @@ impl PatriciaTrie {
     /// 
     /// # Returns
     /// * `Result<Self>` - New trie instance
-    pub fn new(db_path: &str) -> Result<Self, Box<dyn Error>> {
-        let db = sled::open(db_path)?;
-        
+    pub fn new(db: Arc<dyn KeyValueStore>) -> Result<Self, Box<dyn Error>> {
         // Try to load existing root from database
-        let root = if let Some(root_bytes) = db.get(b"root")? {
-            let mut root_hash = [0u8; 32];
-            root_hash.copy_from_slice(&root_bytes);
-            root_hash
-        } else {
-            // Empty trie has empty root
-            let empty_node = TrieNode::Empty;
-            let root_hash = empty_node.hash();
-            
-            // Cache the empty node
-            let mut node_cache = HashMap::new();
-            node_cache.insert(root_hash, empty_node);
-            
-            // Store root in database
-            db.insert(b"root", &root_hash)?;
-            db.flush()?;
-            
-            root_hash
-        };
+        let (root, cache) =
+            if let Some(root_bytes) = db.get(ColumnFamily::State, b"root")? {
+                let mut root_hash = [0u8; 32];
+                root_hash.copy_from_slice(&root_bytes);
+                (root_hash, HashMap::new())
+            } else {
+                // Empty trie has empty root
+                let empty_node = TrieNode::Empty;
+                let root_hash = empty_node.hash();
+                
+                let mut c = HashMap::new();
+                c.insert(root_hash, empty_node);
+                
+                db.put(ColumnFamily::State, b"root", &root_hash)?;
+                db.flush()?;
+                
+                (root_hash, c)
+            };
         
         Ok(Self {
             root: Arc::new(RwLock::new(root)),
-            node_cache: Arc::new(RwLock::new(HashMap::new())),
+            node_cache: Arc::new(RwLock::new(cache)),
             db,
             stats: Arc::new(RwLock::new(TrieStats::default())),
         })
@@ -395,7 +370,7 @@ impl PatriciaTrie {
             stats.cache_misses += 1;
         }
         
-        if let Some(data) = self.db.get(hash)? {
+        if let Some(data) = self.db.get(ColumnFamily::State, &hash)? {
             let node = TrieNode::decode(&data)?;
             
             // Cache for future use
@@ -417,7 +392,7 @@ impl PatriciaTrie {
     /// Persist a node to disk and cache
     fn persist_node(&mut self, hash: NodeHash, node: &TrieNode) -> Result<(), Box<dyn Error>> {
         let encoded = node.encode();
-        self.db.insert(hash, encoded.as_slice())?;
+        self.db.put(ColumnFamily::State, &hash, &encoded)?;
         self.db.flush()?;
         
         // Update cache
@@ -516,7 +491,7 @@ impl PatriciaTrie {
                             value: None,
                         };
                         let branch_hash = branch.hash();
-                        changed.push((branch_hash, branch));
+                        changed.push((branch_hash, branch.clone()));
                         
                         if common_len > 0 {
                             TrieNode::Extension {
@@ -660,7 +635,7 @@ impl PatriciaTrie {
         let new_node = match node {
             TrieNode::Empty => TrieNode::Empty,
             
-            TrieNode::Leaf { path: leaf_path, .. } => {
+            TrieNode::Leaf { path: ref leaf_path, .. } => {
                 if path == leaf_path.as_slice() {
                     TrieNode::Empty
                 } else {
@@ -668,8 +643,8 @@ impl PatriciaTrie {
                 }
             }
             
-            TrieNode::Extension { path: ext_path, child } => {
-                if path.starts_with(&ext_path) {
+            TrieNode::Extension { path: ref ext_path, child } => {
+                if path.starts_with(ext_path) {
                     let (new_child, child_changes) = self.delete_at(child, &path[ext_path.len()..])?;
                     changed.extend(child_changes);
                     
@@ -678,7 +653,7 @@ impl PatriciaTrie {
                         TrieNode::Empty
                     } else {
                         TrieNode::Extension {
-                            path: ext_path,
+                            path: ext_path.clone(),
                             child: new_child,
                         }
                     }
@@ -751,7 +726,7 @@ impl PatriciaTrie {
     pub fn flush(&self) -> Result<(), Box<dyn Error>> {
         // Store root hash
         let root = self.root_hash();
-        self.db.insert(b"root", &root)?;
+        self.db.put(ColumnFamily::State, b"root", &root)?;
         
         // Flush database
         self.db.flush()?;
@@ -762,7 +737,7 @@ impl PatriciaTrie {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::tempdir;
+    use crate::db::MemDb;
     
     #[test]
     fn test_nibble_conversion() {
@@ -776,8 +751,8 @@ mod tests {
     
     #[test]
     fn test_trie_insert_get() {
-        let dir = tempdir().unwrap();
-        let mut trie = PatriciaTrie::new(dir.path().to_str().unwrap()).unwrap();
+        let db = MemDb::new();
+        let mut trie = PatriciaTrie::new(Arc::new(db)).unwrap();
         
         let key = b"hello";
         let value = b"world";
@@ -790,8 +765,8 @@ mod tests {
     
     #[test]
     fn test_trie_multiple_inserts() {
-        let dir = tempdir().unwrap();
-        let mut trie = PatriciaTrie::new(dir.path().to_str().unwrap()).unwrap();
+        let db = MemDb::new();
+        let mut trie = PatriciaTrie::new(Arc::new(db)).unwrap();
         
         trie.insert(b"key1", b"value1").unwrap();
         trie.insert(b"key2", b"value2").unwrap();
@@ -805,8 +780,8 @@ mod tests {
     
     #[test]
     fn test_trie_delete() {
-        let dir = tempdir().unwrap();
-        let mut trie = PatriciaTrie::new(dir.path().to_str().unwrap()).unwrap();
+        let db = MemDb::new();
+        let mut trie = PatriciaTrie::new(Arc::new(db)).unwrap();
         
         trie.insert(b"key1", b"value1").unwrap();
         trie.insert(b"key2", b"value2").unwrap();
@@ -819,11 +794,11 @@ mod tests {
     
     #[test]
     fn test_root_hash_consistency() {
-        let dir1 = tempdir().unwrap();
-        let dir2 = tempdir().unwrap();
+        let db1 = MemDb::new();
+        let db2 = MemDb::new();
         
-        let mut trie1 = PatriciaTrie::new(dir1.path().to_str().unwrap()).unwrap();
-        let mut trie2 = PatriciaTrie::new(dir2.path().to_str().unwrap()).unwrap();
+        let mut trie1 = PatriciaTrie::new(Arc::new(db1)).unwrap();
+        let mut trie2 = PatriciaTrie::new(Arc::new(db2)).unwrap();
         
         trie1.insert(b"key1", b"value1").unwrap();
         trie1.insert(b"key2", b"value2").unwrap();
@@ -836,8 +811,8 @@ mod tests {
     
     #[test]
     fn test_merkle_proof() {
-        let dir = tempdir().unwrap();
-        let mut trie = PatriciaTrie::new(dir.path().to_str().unwrap()).unwrap();
+        let db = MemDb::new();
+        let mut trie = PatriciaTrie::new(Arc::new(db)).unwrap();
         
         let key = b"test_key";
         let value = b"test_value";
@@ -854,19 +829,18 @@ mod tests {
     
     #[test]
     fn test_persistence_across_restart() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().to_str().unwrap();
+        let db = MemDb::new();
         
         // First session: insert data
         {
-            let mut trie = PatriciaTrie::new(path).unwrap();
+            let mut trie = PatriciaTrie::new(Arc::new(db.clone())).unwrap();
             trie.insert(b"persistent", b"data").unwrap();
             trie.flush().unwrap();
         }
         
         // Second session: reload and verify
         {
-            let trie = PatriciaTrie::new(path).unwrap();
+            let trie = PatriciaTrie::new(Arc::new(db)).unwrap();
             let value = trie.get(b"persistent").unwrap();
             assert_eq!(value, Some(b"data".to_vec()));
         }

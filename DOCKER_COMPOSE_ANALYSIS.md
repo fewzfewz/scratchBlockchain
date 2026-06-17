@@ -12,7 +12,7 @@ Your project has **3 docker-compose files** serving different purposes:
 ## 1. deployment/local/docker-compose.yml ✅ **ACTIVE**
 
 **Purpose**: Complete local testnet with all services  
-**Location**: `/home/fewzan/.gemini/antigravity/scratch/deployment/local/`  
+**Location**: ``  
 **Status**: **Currently Running** (This is what you're using)
 
 ### Services (9 total):
@@ -87,7 +87,7 @@ docker-compose down -v
 ## 2. docker-compose.yml ⚠️ **ALTERNATIVE**
 
 **Purpose**: Simpler 3-node setup with different ports  
-**Location**: `/home/fewzan/.gemini/antigravity/scratch/` (root)  
+**Location**: `` (root)  
 **Status**: **Not Currently Used**
 
 ### Services (5 total):

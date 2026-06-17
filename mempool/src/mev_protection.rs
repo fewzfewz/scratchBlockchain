@@ -17,7 +17,7 @@ use common::types::Transaction;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use tracing::{info, warn, debug};
+use tracing::{info, debug};
 
 /// Commit-reveal scheme for MEV protection
 /// Transactions are first committed (hash only), then revealed after a delay
@@ -249,6 +249,7 @@ impl MevProtection {
         }
         
         // Step 5: Add to revealed transactions
+        let commit_height = commitment.commit_height;
         let revealed_tx = RevealedTransaction {
             transaction: tx,
             commitment,
@@ -263,17 +264,17 @@ impl MevProtection {
         
         // Clean up height tracking
         let mut by_height = self.commitments_by_height.lock().unwrap();
-        if let Some(commitments_list) = by_height.get_mut(&commitment.commit_height) {
+        if let Some(commitments_list) = by_height.get_mut(&commit_height) {
             commitments_list.retain(|h| h != &tx_hash);
             if commitments_list.is_empty() {
-                by_height.remove(&commitment.commit_height);
+                by_height.remove(&commit_height);
             }
         }
         
         info!(
             "Transaction revealed: hash={:?}, commit_height={}, reveal_height={}",
             hex::encode(&tx_hash[..4]),
-            commitment.commit_height,
+            commit_height,
             current_height
         );
         
@@ -282,17 +283,17 @@ impl MevProtection {
 
     /// Verify transaction signature (internal helper)
     fn verify_transaction_signature(&self, tx: &Transaction) -> bool {
-        use ed25519_dalek::{Signature, VerifyingKey};
+        use ed25519_dalek::Signature;
         
         if tx.signature.is_empty() || tx.signature.len() != 64 {
             return false;
         }
         
         // Reconstruct the message that was signed (transaction hash)
-        let message = tx.hash();
+        let _message = tx.hash();
         
         // Parse signature
-        let signature = match Signature::from_slice(&tx.signature) {
+        let _signature = match Signature::from_slice(&tx.signature) {
             Ok(sig) => sig,
             Err(_) => return false,
         };
@@ -316,7 +317,7 @@ impl MevProtection {
         
         // Sort by commit order (height, then round, then index)
         // This ensures fairness: earlier commits are included first
-        let mut all_revealed: Vec<RevealedTransaction> = revealed.drain().collect();
+        let mut all_revealed: Vec<RevealedTransaction> = revealed.drain(..).collect();
         all_revealed.sort_by_key(|r| r.order_key());
         
         // Take up to limit transactions

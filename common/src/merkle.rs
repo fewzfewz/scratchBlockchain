@@ -6,7 +6,6 @@
 //! - Multi-proof support for multiple leaves
 //! - Batch verification
 
-use sha2::{Digest, Sha256};
 use crate::crypto::hash_pair;
 
 /// Merkle proof for a single leaf
@@ -30,9 +29,9 @@ impl MerkleProof {
         for (i, sibling) in self.siblings.iter().enumerate() {
             let is_right = self.indices[i];
             current = if is_right {
-                hash_pair(&current, sibling)
-            } else {
                 hash_pair(sibling, &current)
+            } else {
+                hash_pair(&current, sibling)
             };
         }
         
@@ -61,6 +60,7 @@ impl MerkleProof {
             if sibling_idx < level_size {
                 // Get sibling from current level
                 let sibling = tree.levels.get(offset + sibling_idx)
+                    .copied()
                     .or_else(|| tree.calculate_node(offset, sibling_idx, level_size))
                     .unwrap_or([0u8; 32]);
                 siblings.push(sibling);
@@ -102,7 +102,7 @@ impl MultiProof {
     /// Verify multi-proof against root
     pub fn verify(&self, root: &[u8; 32], total_leaves: usize) -> bool {
         // Build a map of leaf index to hash
-        let mut leaf_map: std::collections::HashMap<usize, [u8; 32]> = self.leaf_indices
+        let leaf_map: std::collections::HashMap<usize, [u8; 32]> = self.leaf_indices
             .iter()
             .zip(self.leaves.iter())
             .map(|(&i, &h)| (i, h))
@@ -130,9 +130,9 @@ impl MultiProof {
                     // Try to get sibling
                     if let Some(sibling) = hash_map.get(&sibling_key) {
                         let combined = if is_right {
-                            hash_pair(hash_map.get(&(offset + i)).unwrap(), sibling)
-                        } else {
                             hash_pair(sibling, hash_map.get(&(offset + i)).unwrap())
+                        } else {
+                            hash_pair(hash_map.get(&(offset + i)).unwrap(), sibling)
                         };
                         next_level.insert(offset / 2 + i / 2, combined);
                     }
@@ -215,7 +215,7 @@ impl MerkleTree {
         }
         
         let start_idx = offset;
-        let end_idx = start_idx + level_size;
+        let _end_idx = start_idx + level_size;
         
         if start_idx >= self.levels.len() {
             return None;

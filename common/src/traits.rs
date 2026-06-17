@@ -7,6 +7,7 @@
 //! - State management
 //! - Block production
 
+use crate::consensus_types::ValidatorInfo;
 use crate::types::{Block, Hash, Header, Transaction, TransactionReceipt, Address, Account};
 use std::error::Error;
 
@@ -22,10 +23,10 @@ pub trait Consensus {
     fn is_finalized(&self, hash: &Hash) -> bool;
     
     /// Get current validator set
-    fn validators(&self) -> Vec<crate::consensus_types::ValidatorInfo>;
+    fn validators(&self) -> Vec<ValidatorInfo> { vec![] }
     
     /// Get current round
-    fn current_round(&self) -> u64;
+    fn current_round(&self) -> u64 { 0 }
 }
 
 /// Storage interface for persistence
