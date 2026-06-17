@@ -4,5 +4,6 @@ pub mod fork_choice;
 pub mod light_client;
 pub mod metrics;
 pub mod rpc;
+pub mod runtime_upgrade;
 pub mod test_utils;
 pub mod faucet;

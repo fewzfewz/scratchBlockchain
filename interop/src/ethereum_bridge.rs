@@ -1,4 +1,5 @@
-use common::types::{Address, Transaction};
+use common::types::{Address, PublicKey};
+use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey, Verifier};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -32,8 +33,8 @@ pub struct EthereumBridge {
     locked_tokens: HashMap<Address, HashMap<Address, u128>>, // token -> user -> amount
     /// Processed message IDs to prevent replay
     processed_messages: HashMap<u64, bool>,
-    /// Authorized relayers
-    relayers: Vec<Address>,
+    /// Authorized relayers (Ed25519 public keys)
+    relayers: Vec<PublicKey>,
     /// Required signatures for message validation
     required_signatures: usize,
     /// Next message ID
@@ -45,7 +46,7 @@ pub struct EthereumBridge {
 }
 
 impl EthereumBridge {
-    pub fn new(chain_id: u32, eth_chain_id: u32, relayers: Vec<Address>, required_signatures: usize) -> Self {
+    pub fn new(chain_id: u32, eth_chain_id: u32, relayers: Vec<PublicKey>, required_signatures: usize) -> Self {
         Self {
             locked_tokens: HashMap::new(),
             processed_messages: HashMap::new(),
@@ -143,13 +144,45 @@ impl EthereumBridge {
             return false;
         }
 
-        // In real implementation, verify cryptographic signatures
-        // For now, just check we have enough signatures
-        message.signatures.len() >= self.required_signatures
+        // Build the signed message payload
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&message.id.to_le_bytes());
+        payload.extend_from_slice(&message.source_chain.to_le_bytes());
+        payload.extend_from_slice(&message.dest_chain.to_le_bytes());
+        payload.extend_from_slice(&message.sender);
+        payload.extend_from_slice(&message.recipient);
+        payload.extend_from_slice(&message.token);
+        payload.extend_from_slice(&message.amount.to_le_bytes());
+        payload.extend_from_slice(&message.nonce.to_le_bytes());
+
+        // Count valid signatures from authorized relayers
+        let mut valid_count = 0;
+        for sig_bytes in &message.signatures {
+            if sig_bytes.len() != 64 {
+                continue;
+            }
+            let sig = match Ed25519Signature::from_slice(sig_bytes) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            // Try each authorized relayer's key
+            for relayer in &self.relayers {
+                let vk = match VerifyingKey::from_bytes(relayer) {
+                    Ok(k) => k,
+                    Err(_) => continue,
+                };
+                if vk.verify(&payload, &sig).is_ok() {
+                    valid_count += 1;
+                    break;
+                }
+            }
+        }
+
+        valid_count >= self.required_signatures
     }
 
     /// Add a relayer
-    pub fn add_relayer(&mut self, relayer: Address) -> Result<(), String> {
+    pub fn add_relayer(&mut self, relayer: PublicKey) -> Result<(), String> {
         if self.relayers.contains(&relayer) {
             return Err("Relayer already exists".into());
         }
@@ -158,8 +191,8 @@ impl EthereumBridge {
     }
 
     /// Remove a relayer
-    pub fn remove_relayer(&mut self, relayer: Address) -> Result<(), String> {
-        if let Some(pos) = self.relayers.iter().position(|r| *r == relayer) {
+    pub fn remove_relayer(&mut self, relayer: &PublicKey) -> Result<(), String> {
+        if let Some(pos) = self.relayers.iter().position(|r| r == relayer) {
             self.relayers.remove(pos);
             Ok(())
         } else {
@@ -188,7 +221,7 @@ mod tests {
 
     #[test]
     fn test_lock_tokens() {
-        let relayers = vec![[1u8; 20], [2u8; 20], [3u8; 20]];
+        let relayers = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
         let mut bridge = EthereumBridge::new(1, 2, relayers, 2);
 
         let user = [10u8; 20];
@@ -205,7 +238,15 @@ mod tests {
 
     #[test]
     fn test_unlock_tokens() {
-        let relayers = vec![[1u8; 20], [2u8; 20], [3u8; 20]];
+        use ed25519_dalek::{SigningKey as EdSigningKey, Signer};
+
+        let signer1 = EdSigningKey::generate(&mut rand::thread_rng());
+        let signer2 = EdSigningKey::generate(&mut rand::thread_rng());
+        let vk1 = signer1.verifying_key().to_bytes();
+        let vk2 = signer2.verifying_key().to_bytes();
+        let vk3 = EdSigningKey::generate(&mut rand::thread_rng()).verifying_key().to_bytes();
+
+        let relayers = vec![vk1, vk2, vk3];
         let mut bridge = EthereumBridge::new(1, 2, relayers, 2);
 
         let mut message = BridgeMessage {
@@ -217,8 +258,23 @@ mod tests {
             token: [30u8; 20],
             amount: 500,
             nonce: 1,
-            signatures: vec![vec![1u8; 64], vec![2u8; 64]], // Mock signatures
+            signatures: vec![],
         };
+
+        // Build the signed payload (same as verify_signatures does)
+        let mut payload = Vec::new();
+        payload.extend_from_slice(&message.id.to_le_bytes());
+        payload.extend_from_slice(&message.source_chain.to_le_bytes());
+        payload.extend_from_slice(&message.dest_chain.to_le_bytes());
+        payload.extend_from_slice(&message.sender);
+        payload.extend_from_slice(&message.recipient);
+        payload.extend_from_slice(&message.token);
+        payload.extend_from_slice(&message.amount.to_le_bytes());
+        payload.extend_from_slice(&message.nonce.to_le_bytes());
+
+        let sig1 = signer1.sign(&payload).to_bytes().to_vec();
+        let sig2 = signer2.sign(&payload).to_bytes().to_vec();
+        message.signatures = vec![sig1, sig2];
 
         let result = bridge.unlock_tokens(message.clone());
         assert!(result.is_ok());
@@ -231,14 +287,14 @@ mod tests {
 
     #[test]
     fn test_relayer_management() {
-        let relayers = vec![[1u8; 20]];
+        let relayers = vec![[1u8; 32]];
         let mut bridge = EthereumBridge::new(1, 2, relayers, 1);
 
-        let new_relayer = [2u8; 20];
+        let new_relayer = [2u8; 32];
         bridge.add_relayer(new_relayer).unwrap();
         assert_eq!(bridge.relayers.len(), 2);
 
-        bridge.remove_relayer(new_relayer).unwrap();
+        bridge.remove_relayer(&new_relayer).unwrap();
         assert_eq!(bridge.relayers.len(), 1);
     }
 }

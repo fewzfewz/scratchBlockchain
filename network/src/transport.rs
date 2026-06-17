@@ -7,7 +7,7 @@ pub fn build_transport(
     libp2p::core::transport::Boxed<(libp2p::PeerId, libp2p::core::muxing::StreamMuxerBox)>,
 > {
     let tcp_transport = tcp::tokio::Transport::new(tcp::Config::default().nodelay(true));
-    
+
     // Wrap with DNS resolution to support /dns4 and /dns6 multiaddrs
     let dns_transport = dns::tokio::Transport::system(tcp_transport)?;
 

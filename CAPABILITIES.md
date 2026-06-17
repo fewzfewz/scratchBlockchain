@@ -85,7 +85,7 @@ Block {
 - Block reward: 10 tokens (9 to validator, 1 to treasury)
 
 ### 2. Account System
-**Location**: `common/src/types.rs`
+**Location**: `common/src/consensus_types.rs`
 
 **What You Can Do:**
 - Create accounts with 20-byte addresses
@@ -135,7 +135,7 @@ Account {
 - Byzantine fault tolerance (tolerates up to 1/3 malicious validators)
 
 ### 2. Finality Gadget
-**Location**: `consensus/src/finality.rs`
+**Location**: `consensus/src/bft.rs` (integrated into BFT engine)
 
 **What You Can Do:**
 - Achieve deterministic finality
@@ -154,7 +154,7 @@ FinalityVote {
 ```
 
 ### 3. Validator Management
-**Location**: `consensus/src/validator_set.rs`
+**Location**: `consensus/src/bft.rs`
 
 **What You Can Do:**
 - Register as a validator (requires minimum stake)
@@ -173,7 +173,7 @@ FinalityVote {
 ## Transaction System
 
 ### 1. Transaction Structure
-**Location**: `common/src/types.rs`
+**Location**: `common/src/consensus_types.rs`
 
 **What You Can Do:**
 - Send token transfers
@@ -372,7 +372,7 @@ modular-node connect-peer --multiaddr "/dns4/validator1/tcp/26656/p2p/<PEER_ID>"
 ## Storage & State Management
 
 ### 1. Block Storage
-**Location**: `storage/src/block_store.rs`
+**Location**: `storage/src/db.rs`
 
 **What You Can Do:**
 - Store blocks persistently (RocksDB)
@@ -389,7 +389,7 @@ block:finalized -> u64
 ```
 
 ### 2. State Storage
-**Location**: `storage/src/state_store.rs`
+**Location**: `storage/src/db.rs`
 
 **What You Can Do:**
 - Store account states
@@ -406,7 +406,7 @@ account:<address> -> Account {
 ```
 
 ### 3. Receipt Storage
-**Location**: `storage/src/receipt_store.rs`
+**Location**: `storage/src/db.rs`
 
 **What You Can Do:**
 - Store transaction receipts
@@ -546,7 +546,7 @@ RateLimitConfig {
 ## Monitoring & Metrics
 
 ### 1. Prometheus Metrics
-**Location**: `monitoring/src/metrics.rs`
+**Location**: `monitoring/src/lib.rs`
 
 **Available Metrics:**
 - `block_height` - Current blockchain height
@@ -710,7 +710,7 @@ Proposal {
 ## Development Tools
 
 ### 1. Faucet Service
-**Location**: `node/src/faucet.rs`
+**Location**: `node/src/rpc.rs`
 
 **What You Can Do:**
 - Request test tokens
@@ -1099,14 +1099,12 @@ cargo doc --open
 
 ## Conclusion
 
-This modular blockchain provides a **complete, production-ready platform** for building decentralized applications. With support for:
+This modular blockchain is a **comprehensive codebase in development** with broad feature coverage. Current state:
 
-✅ **Multiple execution environments** (EVM, WASM, Native)
-✅ **Advanced consensus** (BFT + Finality)
-✅ **Cross-chain interoperability** (Ethereum, Cosmos)
-✅ **Developer-friendly tools** (SDK, Faucet, RPC)
-✅ **Production features** (Monitoring, Governance, MEV protection)
+⚠️ **Multiple execution environments** (EVM, WASM, Native) — code exists, not fully integrated
+⚠️ **Advanced consensus** (BFT + Finality) — code exists, blocked by signature bug
+⚠️ **Cross-chain interoperability** (Ethereum, Cosmos) — code exists, not deployed
+⚠️ **Developer-friendly tools** (SDK, Faucet, RPC) — code exists, needs compilation fixes
+⚠️ **Production features** (Monitoring, Governance, MEV protection) — code exists, needs integration
 
-You can build anything from simple token transfers to complex DeFi protocols, NFT marketplaces, DAOs, and more.
-
-**Start building today!**
+**Code is written but needs compilation fixes, integration, and testing before production use.**

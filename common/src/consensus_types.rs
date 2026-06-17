@@ -33,3 +33,14 @@ pub enum ConsensusMessage {
     Vote(Vote),
     Proposal(Proposal),
 }
+
+/// Information about a participating validator
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorInfo {
+    /// Ed25519 public key (32 bytes)
+    pub public_key: Vec<u8>,
+    /// Staked amount (higher stake = more voting power)
+    pub stake: u64,
+    /// Whether this validator has been slashed
+    pub slashed: bool,
+}

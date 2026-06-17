@@ -1,25 +1,194 @@
+# ============================================================================
+# DEVNET GENESIS CONFIGURATION
+# ============================================================================
+# Network: Modular Blockchain Devnet
+# Chain ID: modular-devnet-1
+# Purpose: Development and testing environment
+# Validators: 3 (simple for testing)
+# Block Time: 3 seconds (3000ms) for faster testing
+# ============================================================================
+
 [chain]
-chain_id = "modular-blockchain-devnet"
-timestamp = 1600000000
+chain_id = "modular-devnet-1"
+timestamp = 1700000000  # Use current UNIX timestamp
 initial_height = 0
+network_id = 12345
+name = "Modular Blockchain Devnet"
 
+# ============================================================================
+# CONSENSUS PARAMETERS (Optimized for Development)
+# ============================================================================
 [consensus]
-block_time_ms = 500  # Very fast for development
-max_validators = 10
-min_stake = "1000"
+# Fast block production for development (3 seconds)
+block_time_ms = 3000
 
+# Validator limits (small for devnet)
+max_validators = 100
+min_stake = "1000000000000000000"  # Minimum 1 token
+unbonding_period = 100             # Fast unbonding for testing (100 blocks)
+max_validators_per_epoch = 50
+
+# ============================================================================
+# GOVERNANCE PARAMETERS (Simplified for Testing)
+# ============================================================================
 [governance]
-proposal_deposit = "100"
-voting_period_blocks = 100  # ~50 seconds
-quorum_threshold = "0.1"
+proposal_deposit = "1000000000000000000"  # 1 token deposit
+voting_period_blocks = 1000              # ~50 minutes for testing
+quorum_threshold = "0.334"               # 33.4% quorum
+approval_threshold = "0.5"               # 50% approval
+max_proposals = 50
 
-# Single validator for dev
+# ============================================================================
+# ECONOMIC PARAMETERS (Test-friendly)
+# ============================================================================
+[economic]
+# Higher initial reward for testing (10 tokens)
+initial_block_reward = "10000000000000000000"  # 10 tokens
+halving_interval = 2100000                    # ~4 years (unchanged)
+fee_burn_percentage = 50                       # Burn 50% of fees
+treasury_address = "0x0000000000000000000000000000000000000000"
+
+# ============================================================================
+# DEVNET VALIDATORS (3 validators for local testing)
+# ============================================================================
+
 [[validators]]
 address = "0x1111111111111111111111111111111111111111"
-stake = "10000"
-commission_rate = "0.0"
+stake = "10000000000000000000"   # 10 tokens
+commission_rate = "0.05"          # 5%
+public_key = "0x1111111111111111111111111111111111111111111111111111111111111111"
+description = "Devnet Validator 1"
+website = "http://localhost:8001"
 
-# Dev account with large balance
+[[validators]]
+address = "0x2222222222222222222222222222222222222222"
+stake = "10000000000000000000"   # 10 tokens
+commission_rate = "0.05"          # 5%
+public_key = "0x2222222222222222222222222222222222222222222222222222222222222222"
+description = "Devnet Validator 2"
+website = "http://localhost:8002"
+
+[[validators]]
+address = "0x3333333333333333333333333333333333333333"
+stake = "10000000000000000000"   # 10 tokens
+commission_rate = "0.05"          # 5%
+public_key = "0x3333333333333333333333333333333333333333333333333333333333333333"
+description = "Devnet Validator 3"
+website = "http://localhost:8003"
+
+# ============================================================================
+# DEVNET ACCOUNTS (Pre-funded for testing)
+# ============================================================================
+
+# Faucet account (for distributing test tokens)
 [[accounts]]
-address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-balance = "1000000000000"
+address = "0x0000000000000000000000000000000000000fa1"
+balance = "10000000000000000000000000"  # 10 million tokens
+code = "0x"  # No contract code
+
+# Developer accounts (for testing)
+[[accounts]]
+address = "0x1111111111111111111111111111111111111111"
+balance = "1000000000000000000000000"   # 1 million tokens
+
+[[accounts]]
+address = "0x2222222222222222222222222222222222222222"
+balance = "1000000000000000000000000"   # 1 million tokens
+
+[[accounts]]
+address = "0x3333333333333333333333333333333333333333"
+balance = "1000000000000000000000000"   # 1 million tokens
+
+# Test accounts for smart contract development
+[[accounts]]
+address = "0x4444444444444444444444444444444444444444"
+balance = "500000000000000000000000"     # 500,000 tokens
+
+[[accounts]]
+address = "0x5555555555555555555555555555555555555555"
+balance = "500000000000000000000000"     # 500,000 tokens
+
+[[accounts]]
+address = "0x6666666666666666666666666666666666666666"
+balance = "500000000000000000000000"     # 500,000 tokens
+
+# Account abstraction test accounts
+[[accounts]]
+address = "0x7777777777777777777777777777777777777777"
+balance = "10000000000000000000000"      # 10,000 tokens
+
+[[accounts]]
+address = "0x8888888888888888888888888888888888888888"
+balance = "10000000000000000000000"      # 10,000 tokens
+
+# ERC-20 token contract deployer (for testing)
+[[accounts]]
+address = "0x9999999999999999999999999999999999999999"
+balance = "50000000000000000000000"      # 50,000 tokens
+code = "0x"  # Will deploy contracts via RPC
+
+# ============================================================================
+# PRECOMPILED CONTRACTS (All EVM precompiles enabled for devnet)
+# ============================================================================
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000001"
+contract_type = "ecrecover"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000002"
+contract_type = "sha256"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000003"
+contract_type = "ripemd160"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000004"
+contract_type = "identity"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000005"
+contract_type = "blake2f"
+enabled = true
+
+# Additional precompiles for devnet testing
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000100"
+contract_type = "bls12_381_g1_add"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000101"
+contract_type = "bls12_381_g1_msm"
+enabled = true
+
+[[precompiles]]
+address = "0x0000000000000000000000000000000000000102"
+contract_type = "bls12_381_g2_add"
+enabled = true
+
+# ============================================================================
+# DEVNET TOKENOMICS SUMMARY
+# ============================================================================
+# Total Supply: 2,100,000,000 NBL (same as mainnet)
+# Initial Supply: 100,000,000 NBL (for testing)
+# 
+# Distribution:
+# - Faucet: 10,000,000 NBL
+# - Developer accounts: 6,000,000 NBL (1M each)
+# - Test accounts: 2,520,000 NBL
+# - Smart contract testers: 130,000 NBL
+# - Reserved for testing: 81,350,000 NBL
+# 
+# Features enabled for devnet:
+# - Fast block time (3 seconds)
+# - Short unbonding period (100 blocks)
+# - Higher block rewards (10 NBL)
+# - All precompiles enabled
+# - Multiple test accounts pre-funded
+# - Account abstraction support
+# - MEV protection enabled

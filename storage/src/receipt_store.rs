@@ -1,30 +1,26 @@
-use anyhow::Result;
 use common::types::{Hash, TransactionReceipt};
-use sled::Db;
-use std::path::Path;
+use crate::db::{KeyValueStore, ColumnFamily};
+use std::error::Error;
+use std::sync::Arc;
 
 pub struct ReceiptStore {
-    db: Db,
+    db: Arc<dyn KeyValueStore>,
 }
 
 impl ReceiptStore {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let db = sled::open(path)?;
-        Ok(Self { db })
+    pub fn new(db: Arc<dyn KeyValueStore>) -> Self {
+        Self { db }
     }
 
-    /// Store a transaction receipt
-    pub fn put_receipt(&self, receipt: &TransactionReceipt) -> Result<()> {
+    pub fn put_receipt(&self, receipt: &TransactionReceipt) -> Result<(), Box<dyn Error>> {
         let key = receipt.tx_hash;
         let value = bincode::serialize(receipt)?;
-        self.db.insert(key, value)?;
-        self.db.flush()?;
+        self.db.put(ColumnFamily::Receipts, &key, &value)?;
         Ok(())
     }
 
-    /// Get a transaction receipt by hash
-    pub fn get_receipt(&self, tx_hash: &Hash) -> Result<Option<TransactionReceipt>> {
-        match self.db.get(tx_hash)? {
+    pub fn get_receipt(&self, tx_hash: &Hash) -> Result<Option<TransactionReceipt>, Box<dyn Error>> {
+        match self.db.get(ColumnFamily::Receipts, tx_hash)? {
             Some(bytes) => {
                 let receipt: TransactionReceipt = bincode::deserialize(&bytes)?;
                 Ok(Some(receipt))
@@ -33,9 +29,8 @@ impl ReceiptStore {
         }
     }
 
-    /// Check if a receipt exists
-    pub fn has_receipt(&self, tx_hash: &Hash) -> Result<bool> {
-        Ok(self.db.contains_key(tx_hash)?)
+    pub fn has_receipt(&self, tx_hash: &Hash) -> Result<bool, Box<dyn Error>> {
+        Ok(self.db.contains(ColumnFamily::Receipts, tx_hash)?)
     }
 }
 
@@ -43,12 +38,12 @@ impl ReceiptStore {
 mod tests {
     use super::*;
     use common::types::ExecutionStatus;
-    use tempfile::tempdir;
+    use crate::db::MemDb;
 
     #[test]
     fn test_receipt_store() {
-        let dir = tempdir().unwrap();
-        let store = ReceiptStore::new(dir.path().join("receipts")).unwrap();
+        let db = Arc::new(MemDb::new());
+        let store = ReceiptStore::new(db);
 
         let receipt = TransactionReceipt::new(
             [1u8; 32],
@@ -64,7 +59,7 @@ mod tests {
 
         store.put_receipt(&receipt).unwrap();
         let retrieved = store.get_receipt(&[1u8; 32]).unwrap().unwrap();
-        
+
         assert_eq!(retrieved.tx_hash, receipt.tx_hash);
         assert_eq!(retrieved.block_height, 100);
         assert_eq!(retrieved.gas_used, 21000);

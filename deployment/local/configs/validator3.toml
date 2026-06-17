@@ -2,7 +2,7 @@
 chain_id = "modular-testnet-1"
 p2p_port = 26656
 rpc_port = 26657
-bootstrap_nodes = ["validator1:26656"]
+bootstrap_nodes = ["/dns4/validator1/tcp/26656", "/dns4/validator2/tcp/26656"]
 
 [consensus]
 block_time_ms = 3000

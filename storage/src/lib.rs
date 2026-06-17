@@ -3,9 +3,11 @@ pub mod trie;
 pub mod receipt_store;
 
 use common::traits::Storage;
-use db::{KeyValueStore, MemDb};
-use sled::Db;
+use db::KeyValueStore;
 use std::error::Error;
+use std::sync::Arc;
+
+pub use db::{ChainStore, ColumnFamily, WriteBatch, DbMetrics, DbError, MemDb};
 
 pub struct MemStore {
     db: Box<dyn KeyValueStore>,
@@ -27,77 +29,101 @@ impl MemStore {
 
 impl Storage for MemStore {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        self.db.get(key)
+        self.db.get(ColumnFamily::State, key)
     }
 
     fn put(&self, key: &[u8], value: &[u8]) -> Result<(), Box<dyn Error>> {
-        self.db.put(key, value)
+        self.db.put(ColumnFamily::State, key, value)
     }
 
     fn contains(&self, key: &[u8]) -> Result<bool, Box<dyn Error>> {
-        self.db.contains(key)
+        self.db.contains(ColumnFamily::State, key)
+    }
+
+    fn delete(&self, key: &[u8]) -> Result<(), Box<dyn Error>> {
+        self.db.delete(ColumnFamily::State, key)
+    }
+
+    fn write_batch(&self, operations: Vec<(Vec<u8>, Option<Vec<u8>>)>) -> Result<(), Box<dyn Error>> {
+        use crate::db::WriteBatch;
+        let mut batch = WriteBatch::new();
+        for (key, value) in operations {
+            match value {
+                Some(v) => batch.put(ColumnFamily::State, key, v),
+                None => batch.delete(ColumnFamily::State, key),
+            }
+        }
+        self.db.write_batch(batch)
     }
 }
 
-/// Persistent storage using sled key-value store
-pub struct PersistentStore {
-    db: Db,
-}
+#[cfg(feature = "sled-legacy")]
+mod sled_legacy {
+    use super::*;
+    use common::traits::Storage;
+    use sled::Db;
+    use std::error::Error;
 
-impl PersistentStore {
-    pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
-        let db = sled::open(path)?;
-        Ok(Self { db })
+    /// Persistent storage using sled key-value store
+    pub struct PersistentStore {
+        db: Db,
     }
 
-    pub fn iter(&self) -> sled::Iter {
-        self.db.iter()
-    }
-}
+    impl PersistentStore {
+        pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
+            let db = sled::open(path)?;
+            Ok(Self { db })
+        }
 
-impl Default for PersistentStore {
-    fn default() -> Self {
-        Self::new("node_db").unwrap()
-    }
-}
-
-impl Storage for PersistentStore {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
-        match self.db.get(key)? {
-            Some(ivec) => Ok(Some(ivec.to_vec())),
-            None => Ok(None),
+        pub fn iter(&self) -> sled::Iter {
+            self.db.iter()
         }
     }
-    fn put(&self, key: &[u8], value: &[u8]) -> Result<(), Box<dyn Error>> {
-        self.db.insert(key, value)?;
-        self.db.flush()?;
-        Ok(())
+
+    impl Default for PersistentStore {
+        fn default() -> Self {
+            Self::new("node_db").unwrap()
+        }
     }
-    fn contains(&self, key: &[u8]) -> Result<bool, Box<dyn Error>> {
-        Ok(self.db.contains_key(key)?)
+
+    impl Storage for PersistentStore {
+        fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>> {
+            match self.db.get(key)? {
+                Some(ivec) => Ok(Some(ivec.to_vec())),
+                None => Ok(None),
+            }
+        }
+        fn put(&self, key: &[u8], value: &[u8]) -> Result<(), Box<dyn Error>> {
+            self.db.insert(key, value)?;
+            self.db.flush()?;
+            Ok(())
+        }
+        fn contains(&self, key: &[u8]) -> Result<bool, Box<dyn Error>> {
+            Ok(self.db.contains_key(key)?)
+        }
     }
 }
 
-/// State storage for blockchain accounts
+#[cfg(feature = "sled-legacy")]
+pub use sled_legacy::PersistentStore;
+
+/// State storage using RocksDB (or fallback to MemDb)
 pub struct StateStore {
-    store: PersistentStore,
-}
-
-impl Default for StateStore {
-    fn default() -> Self {
-        Self::new("state_db").unwrap()
-    }
+    chain: std::sync::Arc<ChainStore>,
 }
 
 impl StateStore {
-    pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
-        Ok(Self {
-            store: PersistentStore::new(path)?,
-        })
+    pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
+        let store = ChainStore::open(path)?;
+        Ok(Self { chain: std::sync::Arc::new(store) })
+    }
+
+    pub fn new_mem() -> Self {
+        Self { chain: std::sync::Arc::new(ChainStore::new(std::sync::Arc::new(MemDb::new()))) }
     }
 
     pub fn get_account(&self, address: &[u8; 20]) -> Result<Option<common::types::Account>, Box<dyn Error>> {
-        match self.store.get(address)? {
+        match self.chain.get_state(address)? {
             Some(data) => {
                 let account: common::types::Account = serde_json::from_slice(&data)?;
                 Ok(Some(account))
@@ -108,13 +134,12 @@ impl StateStore {
 
     pub fn put_account(&self, address: &[u8; 20], account: &common::types::Account) -> Result<(), Box<dyn Error>> {
         let data = serde_json::to_vec(account)?;
-        self.store.put(address, &data)
+        self.chain.put_state(address, &data)
     }
 
     pub fn get_all_accounts(&self) -> Result<std::collections::HashMap<common::types::Address, common::types::Account>, Box<dyn Error>> {
         let mut accounts = std::collections::HashMap::new();
-        for item in self.store.iter() {
-            let (key, value) = item?;
+        for (key, value) in self.chain.iter_state()? {
             if key.len() == 20 {
                 let mut address = [0u8; 20];
                 address.copy_from_slice(&key);
@@ -126,46 +151,35 @@ impl StateStore {
     }
 
     pub fn root_hash(&self) -> Result<[u8; 32], Box<dyn Error>> {
-        use sha2::{Digest, Sha256};
         use common::merkle::MerkleTree;
-        
-        // Collect all account hashes as leaves
+        use sha2::{Digest, Sha256};
+
         let mut leaves = Vec::new();
-        
-        // Iterate through all keys in the store
-        // For production, you'd want to maintain a sorted list of accounts
-        let genesis = common::types::GenesisConfig::default();
-        for genesis_account in &genesis.accounts {
-            if let Some(account) = self.get_account(&genesis_account.address)? {
-                // Hash the account data: address + nonce + balance
+        let mut iter = self.chain.iter_state()?;
+        while let Some((key, value)) = iter.next() {
+            if key.len() == 20 {
+                let account: common::types::Account = serde_json::from_slice(&value)?;
                 let mut hasher = Sha256::new();
-                hasher.update(genesis_account.address);
+                hasher.update(&key);
                 hasher.update(account.nonce.to_le_bytes());
                 hasher.update(account.balance.to_le_bytes());
                 leaves.push(hasher.finalize().into());
             }
         }
-        
-        // If no accounts, return zero hash
+
         if leaves.is_empty() {
             return Ok([0u8; 32]);
         }
-        
-        // Sort leaves for deterministic root
         leaves.sort();
-        
-        // Compute Merkle root
         let tree = MerkleTree::new(leaves);
         Ok(tree.root())
     }
 
-    /// Compute state root from in-memory state
     pub fn compute_root(state: &std::collections::HashMap<common::types::Address, common::types::Account>) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
         use common::merkle::MerkleTree;
-        
+        use sha2::{Digest, Sha256};
+
         let mut leaves = Vec::new();
-        
         for (address, account) in state {
             let mut hasher = Sha256::new();
             hasher.update(address);
@@ -173,16 +187,13 @@ impl StateStore {
             hasher.update(account.balance.to_le_bytes());
             leaves.push(hasher.finalize().into());
         }
-        
         if leaves.is_empty() {
             return [0u8; 32];
         }
-        
         leaves.sort();
         MerkleTree::new(leaves).root()
     }
 
-    /// Initialize state from genesis configuration
     pub fn initialize_genesis(&self, genesis: &common::types::GenesisConfig) -> Result<(), Box<dyn Error>> {
         for genesis_account in &genesis.accounts {
             let account = common::types::Account {
@@ -201,9 +212,8 @@ pub struct TrieStateStore {
 }
 
 impl TrieStateStore {
-    pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
-        let trie_path = format!("{}/trie", path);
-        let trie = trie::PatriciaTrie::new(&trie_path)?;
+    pub fn new(db: Arc<dyn KeyValueStore>) -> Result<Self, Box<dyn Error>> {
+        let trie = trie::PatriciaTrie::new(db)?;
         Ok(Self {
             trie: std::sync::Arc::new(std::sync::Mutex::new(trie)),
         })
@@ -212,7 +222,7 @@ impl TrieStateStore {
 
 impl Default for TrieStateStore {
     fn default() -> Self {
-        Self::new("state_trie_db").unwrap()
+        Self::new(Arc::new(MemDb::new())).unwrap()
     }
 }
 
@@ -252,9 +262,7 @@ impl TrieStateStore {
     /// Compute state root from in-memory state
     pub fn compute_root(state: &std::collections::HashMap<common::types::Address, common::types::Account>) -> Result<[u8; 32], Box<dyn Error>> {
         // Create temporary trie
-        let temp_dir = tempfile::tempdir()?;
-        let temp_path = temp_dir.path().join("temp_trie");
-        let mut trie = trie::PatriciaTrie::new(temp_path.to_str().unwrap())?;
+        let mut trie = trie::PatriciaTrie::new(Arc::new(MemDb::new()))?;
         
         // Insert all accounts
         for (address, account) in state {
@@ -289,127 +297,107 @@ impl TrieStateStore {
 }
 
 pub fn init() {
-    println!("Storage initialized (use MemStore::new or PersistentStore::default)");
+    println!("Storage initialized — use ChainStore::open or MemStore::new");
 }
 
-/// Block storage for persisting blockchain history
-pub struct BlockStore {
-    store: PersistentStore,
-}
+/// Block storage (sled-backed, available with `sled-legacy` feature)
+#[cfg(feature = "sled-legacy")]
+pub mod block_store {
+    use super::sled_legacy::PersistentStore;
+    use std::error::Error;
 
-impl BlockStore {
-    pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
-        let store = PersistentStore::new(path)?;
-        Ok(Self { store })
+    pub struct BlockStore {
+        store: PersistentStore,
     }
 
-    /// Store a block by its hash
-    pub fn put_block(&self, block: &common::types::Block) -> Result<(), Box<dyn Error>> {
-        let hash = block.hash();
-        let data = serde_json::to_vec(block)?;
-        self.store.put(&hash, &data)?;
-        
-        // Also store by height for easy retrieval
-        let height_key = format!("height_{}", block.header.slot);
-        self.store.put(height_key.as_bytes(), &hash)?;
-        
-        Ok(())
-    }
-
-    /// Get a block by its hash
-    pub fn get_block_by_hash(&self, hash: &[u8; 32]) -> Result<Option<common::types::Block>, Box<dyn Error>> {
-        match self.store.get(hash)? {
-            Some(data) => {
-                let block: common::types::Block = serde_json::from_slice(&data)?;
-                Ok(Some(block))
-            }
-            None => Ok(None),
+    impl BlockStore {
+        pub fn new(path: &str) -> Result<Self, Box<dyn Error>> {
+            let store = PersistentStore::new(path)?;
+            Ok(Self { store })
         }
-    }
 
-    /// Get a block by its height (slot number)
-    pub fn get_block_by_height(&self, height: u64) -> Result<Option<common::types::Block>, Box<dyn Error>> {
-        let height_key = format!("height_{}", height);
-        match self.store.get(height_key.as_bytes())? {
-            Some(hash_data) => {
-                if hash_data.len() == 32 {
+        pub fn put_block(&self, block: &common::types::Block) -> Result<(), Box<dyn Error>> {
+            // ... (identical to original)
+            let hash = block.hash();
+            let data = serde_json::to_vec(block)?;
+            self.store.put(&hash, &data)?;
+            let height_key = format!("height_{}", block.header.slot);
+            self.store.put(height_key.as_bytes(), &hash)?;
+            Ok(())
+        }
+
+        pub fn get_block_by_hash(&self, hash: &[u8; 32]) -> Result<Option<common::types::Block>, Box<dyn Error>> {
+            match self.store.get(hash)? {
+                Some(data) => {
+                    let block: common::types::Block = serde_json::from_slice(&data)?;
+                    Ok(Some(block))
+                }
+                None => Ok(None),
+            }
+        }
+
+        pub fn get_block_by_height(&self, height: u64) -> Result<Option<common::types::Block>, Box<dyn Error>> {
+            let height_key = format!("height_{}", height);
+            match self.store.get(height_key.as_bytes())? {
+                Some(hash_data) if hash_data.len() == 32 => {
                     let mut hash = [0u8; 32];
                     hash.copy_from_slice(&hash_data);
                     self.get_block_by_hash(&hash)
-                } else {
-                    Ok(None)
                 }
+                _ => Ok(None),
             }
-            None => Ok(None),
         }
-    }
 
-    /// Get the latest block height
-    pub fn get_latest_height(&self) -> Result<Option<u64>, Box<dyn Error>> {
-        // Store latest height separately for quick access
-        match self.store.get(b"latest_height")? {
-            Some(data) => {
-                if data.len() == 8 {
-                    let height = u64::from_le_bytes(data.try_into().unwrap());
-                    Ok(Some(height))
-                } else {
-                    Ok(None)
+        pub fn get_latest_height(&self) -> Result<Option<u64>, Box<dyn Error>> {
+            match self.store.get(b"latest_height")? {
+                Some(data) if data.len() == 8 => {
+                    Ok(Some(u64::from_le_bytes(data.try_into().unwrap())))
                 }
+                _ => Ok(None),
             }
-            None => Ok(None),
         }
-    }
 
-    /// Update the latest block height
-    pub fn set_latest_height(&self, height: u64) -> Result<(), Box<dyn Error>> {
-        self.store.put(b"latest_height", &height.to_le_bytes())?;
-        Ok(())
-    }
+        pub fn set_latest_height(&self, height: u64) -> Result<(), Box<dyn Error>> {
+            self.store.put(b"latest_height", &height.to_le_bytes())?;
+            Ok(())
+        }
 
-    /// Mark a block as finalized
-    pub fn mark_finalized(&self, height: u64) -> Result<(), Box<dyn Error>> {
-        let key = format!("finalized_{}", height);
-        self.store.put(key.as_bytes(), &[1u8])?;
-        
-        // Update latest finalized height
-        if let Some(current_finalized) = self.get_latest_finalized_height()? {
-            if height > current_finalized {
+        pub fn mark_finalized(&self, height: u64) -> Result<(), Box<dyn Error>> {
+            let key = format!("finalized_{}", height);
+            self.store.put(key.as_bytes(), &[1u8])?;
+            if let Some(current) = self.get_latest_finalized_height()? {
+                if height > current {
+                    self.store.put(b"latest_finalized", &height.to_le_bytes())?;
+                }
+            } else {
                 self.store.put(b"latest_finalized", &height.to_le_bytes())?;
             }
-        } else {
-            self.store.put(b"latest_finalized", &height.to_le_bytes())?;
+            Ok(())
         }
-        
-        Ok(())
-    }
 
-    /// Check if a block is finalized
-    pub fn is_finalized(&self, height: u64) -> Result<bool, Box<dyn Error>> {
-        let key = format!("finalized_{}", height);
-        self.store.contains(key.as_bytes())
-    }
+        pub fn is_finalized(&self, height: u64) -> Result<bool, Box<dyn Error>> {
+            let key = format!("finalized_{}", height);
+            self.store.contains(key.as_bytes())
+        }
 
-    /// Get the latest finalized block height
-    pub fn get_latest_finalized_height(&self) -> Result<Option<u64>, Box<dyn Error>> {
-        match self.store.get(b"latest_finalized")? {
-            Some(data) => {
-                if data.len() == 8 {
-                    let height = u64::from_le_bytes(data.try_into().unwrap());
-                    Ok(Some(height))
-                } else {
-                    Ok(None)
+        pub fn get_latest_finalized_height(&self) -> Result<Option<u64>, Box<dyn Error>> {
+            match self.store.get(b"latest_finalized")? {
+                Some(data) if data.len() == 8 => {
+                    Ok(Some(u64::from_le_bytes(data.try_into().unwrap())))
                 }
+                _ => Ok(None),
             }
-            None => Ok(None),
         }
     }
 }
+
+#[cfg(feature = "sled-legacy")]
+pub use block_store::BlockStore;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use common::traits::Storage;
-    use tempfile;
 
     #[test]
     fn test_memstore_put_get() {
@@ -441,55 +429,23 @@ mod tests {
     }
 
     #[test]
-    fn test_persistent_store_put_get() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("db");
-        let store = PersistentStore::new(path.to_str().unwrap()).unwrap();
-        
-        let key = b"p_key";
-        let value = b"p_value";
-        store.put(key, value).unwrap();
-        let retrieved = store.get(key).unwrap();
-        assert_eq!(retrieved, Some(value.to_vec()));
-    }
-
-    #[test]
-    fn test_persistent_store_contains() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("db");
-        let store = PersistentStore::new(path.to_str().unwrap()).unwrap();
-        
-        let key = b"p_key";
-        assert!(!store.contains(key).unwrap());
-        store.put(key, b"v").unwrap();
-        assert!(store.contains(key).unwrap());
-    }
-
-    #[test]
-    fn test_state_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("state_db");
-        let store = StateStore::new(path.to_str().unwrap()).unwrap();
-        
+    fn test_state_store_mem() {
+        let store = StateStore::new_mem();
         let address = [1u8; 20];
         let account = common::types::Account::new(1000);
-        
+
         store.put_account(&address, &account).unwrap();
         let retrieved = store.get_account(&address).unwrap();
-        
+
         assert_eq!(retrieved, Some(account));
     }
 
     #[test]
-    fn test_genesis_initialization() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("genesis_state_db");
-        let store = StateStore::new(path.to_str().unwrap()).unwrap();
-        
+    fn test_genesis_initialization_mem() {
+        let store = StateStore::new_mem();
         let genesis = common::types::GenesisConfig::default();
         store.initialize_genesis(&genesis).unwrap();
-        
-        // Verify genesis accounts were created
+
         for genesis_account in &genesis.accounts {
             let account = store.get_account(&genesis_account.address).unwrap();
             assert!(account.is_some());
@@ -500,104 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn test_block_store() {
-        use common::types::{Block, Header};
-        
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test_block_db");
-        let block_store = BlockStore::new(path.to_str().unwrap()).unwrap();
-        
-        // Create a test block
-        let header = Header::new([0u8; 32], 1);
-        let block = Block::new(header, vec![]);
-        
-        // Store the block
-        block_store.put_block(&block).unwrap();
-        block_store.set_latest_height(1).unwrap();
-        
-        // Retrieve by hash
-        let hash = block.hash();
-        let retrieved = block_store.get_block_by_hash(&hash).unwrap();
-        assert!(retrieved.is_some());
-        assert_eq!(retrieved.unwrap().header.slot, 1);
-        
-        // Retrieve by height
-        let by_height = block_store.get_block_by_height(1).unwrap();
-        assert!(by_height.is_some());
-        assert_eq!(by_height.unwrap().header.slot, 1);
-        
-        // Check latest height
-        let latest = block_store.get_latest_height().unwrap();
-        assert_eq!(latest, Some(1));
-    }
-
-    #[test]
-    fn test_block_store_multiple_blocks() {
-        use common::types::{Block, Header};
-        
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test_multi_block_db");
-        let block_store = BlockStore::new(path.to_str().unwrap()).unwrap();
-        
-        // Store multiple blocks
-        for i in 0..5 {
-            let header = Header::new([i as u8; 32], i);
-            let block = Block::new(header, vec![]);
-            block_store.put_block(&block).unwrap();
-            block_store.set_latest_height(i).unwrap();
-        }
-        
-        // Retrieve each block by height
-        for i in 0..5 {
-            let block = block_store.get_block_by_height(i).unwrap();
-            assert!(block.is_some());
-            assert_eq!(block.unwrap().header.slot, i);
-        }
-        
-        // Check latest height
-        assert_eq!(block_store.get_latest_height().unwrap(), Some(4));
-    }
-
-    #[test]
-    fn test_block_finality() {
-        use common::types::{Block, Header};
-        
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("test_finality_db");
-        let block_store = BlockStore::new(path.to_str().unwrap()).unwrap();
-        
-        // Store a block
-        let header = Header::new([0u8; 32], 1);
-        let block = Block::new(header, vec![]);
-        block_store.put_block(&block).unwrap();
-        
-        // Initially not finalized
-        assert!(!block_store.is_finalized(1).unwrap());
-        assert_eq!(block_store.get_latest_finalized_height().unwrap(), None);
-        
-        // Mark as finalized
-        block_store.mark_finalized(1).unwrap();
-        
-        // Now finalized
-        assert!(block_store.is_finalized(1).unwrap());
-        assert_eq!(block_store.get_latest_finalized_height().unwrap(), Some(1));
-        
-        // Add and finalize another block
-        let header2 = Header::new([1u8; 32], 2);
-        let block2 = Block::new(header2, vec![]);
-        block_store.put_block(&block2).unwrap();
-        block_store.mark_finalized(2).unwrap();
-        
-        // Both finalized, latest is 2
-        assert!(block_store.is_finalized(1).unwrap());
-        assert!(block_store.is_finalized(2).unwrap());
-        assert_eq!(block_store.get_latest_finalized_height().unwrap(), Some(2));
-    }
-    
-    #[test]
     fn test_trie_state_store() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = TrieStateStore::new(dir.path().to_str().unwrap()).unwrap();
+        let store = TrieStateStore::new(Arc::new(MemDb::new())).unwrap();
         
         let address = [1u8; 20];
         let account = common::types::Account {
@@ -617,8 +477,7 @@ mod tests {
     
     #[test]
     fn test_trie_state_store_proof() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = TrieStateStore::new(dir.path().to_str().unwrap()).unwrap();
+        let store = TrieStateStore::new(Arc::new(MemDb::new())).unwrap();
         
         let address = [2u8; 20];
         let account = common::types::Account {

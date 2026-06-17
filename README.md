@@ -50,7 +50,7 @@ This will start:
 
 ### 2. Access the Dashboard
 Open your browser to view the real-time network status:
-- **Grafana Dashboard**: [http://localhost:3000](http://localhost:3000) (User: `admin`, Pass: `blockchain2024`)
+- **Grafana Dashboard**: [http://localhost:3000](http://localhost:3000) (User: `admin`, Pass: `nebula`)
 
 ### 3. Use the Tools
 We provide a built-in Block Explorer and Wallet for interacting with the chain.

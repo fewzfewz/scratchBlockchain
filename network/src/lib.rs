@@ -1,58 +1,123 @@
+//! # Network Module
+//!
+//! This module implements the peer-to-peer networking layer for the blockchain node.
+//! It uses libp2p for all networking functionality including:
+//!
+//! - **Gossipsub**: Floodsub-style pub/sub for transactions, blocks, and consensus messages
+//! - **Kademlia DHT**: Peer discovery and provider records
+//! - **Request-Response**: Direct block requests for synchronization
+//! - **Peer Reputation**: Track peer behavior and ban malicious peers
+//! - **Rate Limiting**: Prevent DoS attacks by limiting message frequency
+//! - **Peer Persistence**: Save and restore known peers across restarts
+//!
+//! ## Architecture
+//! ```
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                      NetworkService                          │
+//! ├─────────────┬─────────────┬─────────────┬───────────────────┤
+//! │ Gossipsub   │  Kademlia   │ Req-Resp    │ Connection Limits │
+//! │ (Broadcast) │ (Discovery) │ (Sync)      │ (Security)        │
+//! └─────────────┴─────────────┴─────────────┴───────────────────┘
+//!        │              │              │              │
+//!        └──────────────┴──────────────┴──────────────┘
+//!                           │
+//!                    ┌──────▼──────┐
+//!                    │   Swarm     │
+//!                    │  (libp2p)   │
+//!                    └─────────────┘
+//! ```
+
 mod behaviour;
-pub mod protocol;
-mod transport;
 pub mod peer_store;
+pub mod protocol;
 pub mod rate_limiter;
 pub mod reputation;
+mod transport;
 
 use behaviour::NodeBehaviour;
-use common::types::{Block, Transaction};
 use common::consensus_types::ConsensusMessage;
-use rate_limiter::{RateLimiter, RateLimitConfig, MessageType};
+use common::types::{Block, Transaction};
 use futures::StreamExt;
 use libp2p::{
-    gossipsub::{self, IdentTopic},
-    identity,
-    kad::{store::MemoryStore, Behaviour as Kademlia},
-    request_response::{self, ProtocolSupport, ResponseChannel},
     connection_limits,
+    gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
+    identity,
+    kad::{store::MemoryStore, Behaviour as Kademlia, KademliaConfig},
+    multiaddr::Protocol,
+    request_response::{self, ProtocolSupport, ResponseChannel},
     swarm::{Config, SwarmEvent},
     Multiaddr, PeerId, Swarm,
 };
 use protocol::{BlockExchangeProtocol, BlockRequest, BlockResponse};
+use rate_limiter::{MessageType, RateLimitConfig, RateLimiter};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::error::Error;
 use std::iter;
+use std::net::Ipv4Addr;
+use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tokio::sync::Mutex as TokioMutex;
+use tracing::{debug, error, info, warn};
 
-// Gossipsub topics
+// ============================================================================
+// Gossipsub Topics - Each message type gets its own topic for isolation
+// ============================================================================
+
+/// Topic for broadcasting new transactions
+/// Format: /blockchain/tx/{version}
 const TRANSACTION_TOPIC: &str = "/blockchain/tx/1.0.0";
+
+/// Topic for broadcasting new blocks
+/// Format: /blockchain/blocks/{version}
 const BLOCK_TOPIC: &str = "/blockchain/blocks/1.0.0";
+
+/// Topic for broadcasting consensus messages (votes, proposals)
+/// Format: /blockchain/consensus/{version}
 const CONSENSUS_TOPIC: &str = "/blockchain/consensus/1.0.0";
 
-// Network message types
+// ============================================================================
+// Message Types (Serializable for wire transmission)
+// ============================================================================
+
+/// Wrapper for transaction messages sent over gossip network
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransactionMessage {
+    /// The actual transaction
     pub transaction: Transaction,
 }
 
+/// Wrapper for block messages sent over gossip network
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockMessage {
+    /// The actual block
     pub block: Block,
 }
 
-// Events that the network layer sends to the node
+// ============================================================================
+// Network Events (sent from network layer to node)
+// ============================================================================
+
+/// Events that the network layer sends to the main node event loop
 #[derive(Debug)]
 pub enum NetworkEvent {
+    /// A new transaction was received from a peer
     TransactionReceived(Transaction),
+    
+    /// A new block was received from a peer
     BlockReceived {
         block: Block,
         source: PeerId,
     },
+    
+    /// A consensus message (vote/proposal) was received
     ConsensusMessageReceived(ConsensusMessage),
+    
+    /// Network is now listening on this address
     ListeningOn(Multiaddr),
+    
+    /// A block request was received from a peer
     BlockRequestReceived {
         peer: PeerId,
         request_id: request_response::RequestId,
@@ -60,6 +125,8 @@ pub enum NetworkEvent {
         limit: u32,
         channel: ResponseChannel<BlockResponse>,
     },
+    
+    /// A block response was received from a peer
     BlockResponseReceived {
         peer: PeerId,
         request_id: request_response::RequestId,
@@ -67,93 +134,179 @@ pub enum NetworkEvent {
     },
 }
 
-pub struct NetworkService {
-    pub swarm: Swarm<NodeBehaviour>,
-    command_receiver: mpsc::Receiver<NetworkCommand>,
-    event_sender: mpsc::Sender<NetworkEvent>,
-    pending_requests: HashSet<request_response::RequestId>,
-    rate_limiter: std::sync::Arc<std::sync::Mutex<RateLimiter>>,
-    reputation: reputation::PeerReputation,
-}
+// ============================================================================
+// Network Commands (sent from node to network layer)
+// ============================================================================
 
+/// Commands that the node can send to control the network layer
 #[derive(Debug)]
 pub enum NetworkCommand {
+    /// Start listening on a specific multiaddress
     StartListening(Multiaddr),
+    
+    /// Dial (connect to) a specific peer address
     Dial(Multiaddr),
+    
+    /// Broadcast a transaction to all peers
     BroadcastTransaction(Transaction),
+    
+    /// Broadcast a block to all peers
     BroadcastBlock(Block),
+    
+    /// Broadcast a consensus message to all peers
     BroadcastConsensusMessage(ConsensusMessage),
+    
+    /// Request blocks from a specific peer (for synchronization)
     RequestBlock {
         peer: PeerId,
         start_height: u64,
         limit: u32,
     },
+    
+    /// Send a block response back to a requesting peer
     SendBlockResponse {
         channel: ResponseChannel<BlockResponse>,
         blocks: Vec<Block>,
     },
+    
+    /// Save current peer list to disk
     SavePeers,
 }
 
-pub type NetworkServiceInit = (NetworkService, mpsc::Sender<NetworkCommand>, mpsc::Receiver<NetworkEvent>);
+// ============================================================================
+// NetworkService - Main Network Component
+// ============================================================================
+
+/// Main network service that manages all P2P communication
+pub struct NetworkService {
+    /// libp2p swarm that manages all protocols
+    swarm: Swarm<NodeBehaviour>,
+    
+    /// Channel for receiving commands from the node
+    command_receiver: mpsc::Receiver<NetworkCommand>,
+    
+    /// Channel for sending events to the node
+    event_sender: mpsc::Sender<NetworkEvent>,
+    
+    /// Track pending request IDs for timeout handling
+    pending_requests: HashSet<request_response::RequestId>,
+    
+    /// Rate limiter to prevent DoS attacks
+    rate_limiter: Arc<TokioMutex<RateLimiter>>,
+    
+    /// Peer reputation system (track good/bad behavior)
+    reputation: reputation::PeerReputation,
+    
+    /// Bootstrap nodes to connect to on startup
+    bootstrap_addresses: Vec<Multiaddr>,
+    
+    /// Persistent peer store (saves known peers to disk)
+    peer_store: peer_store::PeerStore,
+    
+    /// Path for reputation file (for persistence)
+    reputation_file: String,
+    
+    /// Reconnection interval for maintaining peer connections
+    reconnect_interval: tokio::time::Interval,
+    
+    /// Flag indicating if shutdown has been initiated
+    shutting_down: bool,
+}
+
+/// Return type for network service initialization
+pub type NetworkServiceInit = (
+    NetworkService,
+    mpsc::Sender<NetworkCommand>,
+    mpsc::Receiver<NetworkEvent>,
+);
 
 impl NetworkService {
-    pub fn new(bootstrap_nodes: Vec<String>) -> Result<NetworkServiceInit, Box<dyn Error>> {
+    /// Create a new network service
+    ///
+    /// # Arguments
+    /// * `bootstrap_nodes` - List of bootstrap node addresses (multiaddr strings)
+    /// * `peer_store_path` - Path to save/load peer list (JSON file)
+    ///
+    /// # Returns
+    /// * `Ok((service, command_sender, event_receiver))` - Network service and channels
+    /// * `Err` - If initialization fails
+    pub fn new(
+        bootstrap_nodes: Vec<String>,
+        peer_store_path: &str,
+    ) -> Result<NetworkServiceInit, Box<dyn Error>> {
+        // Generate or load local key pair
         let local_key = identity::Keypair::generate_ed25519();
         let local_peer_id = PeerId::from(local_key.public());
-        info!("Local peer id: {:?}", local_peer_id);
+        info!("🆔 Local peer id: {}", local_peer_id);
 
+        // Build transport layer with noise encryption and mplex multiplexing
         let transport = transport::build_transport(&local_key)?;
 
-        // Gossipsub config
+        // ====================================================================
+        // Gossipsub Configuration - For broadcasting messages
+        // ====================================================================
         let gossipsub_config = gossipsub::ConfigBuilder::default()
-            .heartbeat_interval(std::time::Duration::from_secs(1))
-            .validation_mode(gossipsub::ValidationMode::Strict)
-            // Peer scoring
-            .max_transmit_size(65536)
+            .heartbeat_interval(Duration::from_secs(1))      // Check peers every second
+            .validation_mode(ValidationMode::Strict)         // Validate all messages
+            .max_transmit_size(64 * 1024)                    // 64KB max message size
             .build()
-            .expect("Valid gossipsub config");
-        
+            .map_err(|e| format!("Failed to build gossipsub config: {}", e))?;
+
         let mut gossipsub = gossipsub::Behaviour::new(
-            gossipsub::MessageAuthenticity::Signed(local_key.clone()),
+            MessageAuthenticity::Signed(local_key.clone()),
             gossipsub_config,
         )?;
 
-        // Subscribe to topics
+        // Subscribe to all required topics
         let tx_topic = IdentTopic::new(TRANSACTION_TOPIC);
         let block_topic = IdentTopic::new(BLOCK_TOPIC);
         let consensus_topic = IdentTopic::new(CONSENSUS_TOPIC);
-        
+
         gossipsub.subscribe(&tx_topic)?;
         gossipsub.subscribe(&block_topic)?;
         gossipsub.subscribe(&consensus_topic)?;
-        
-        info!("Subscribed to transaction and block topics");
 
-        // Kademlia config
+        info!("📡 Subscribed to topics: tx, block, consensus");
+
+        // ====================================================================
+        // Kademlia Configuration - For peer discovery
+        // ====================================================================
+        let kademlia_config = KademliaConfig::default();
         let kademlia_store = MemoryStore::new(local_peer_id);
-        let kademlia = Kademlia::new(local_peer_id, kademlia_store);
+        let kademlia = Kademlia::with_config(local_peer_id, kademlia_store, kademlia_config);
 
-        // RequestResponse config
+        // ====================================================================
+        // Request-Response Configuration - For block synchronization
+        // ====================================================================
+        let request_response_config = request_response::Config::default()
+            .with_request_timeout(Duration::from_secs(30));  // 30 second timeout for block requests
+
         let request_response = request_response::Behaviour::new(
             iter::once((BlockExchangeProtocol(), ProtocolSupport::Full)),
-            request_response::Config::default(),
+            request_response_config,
         );
 
+        // ====================================================================
+        // Connection Limits - For DoS protection
+        // ====================================================================
+        let connection_limits_config = connection_limits::ConnectionLimits::default()
+            .with_max_pending_incoming(Some(10))           // Max 10 pending incoming connections
+            .with_max_pending_outgoing(Some(10))           // Max 10 pending outgoing connections
+            .with_max_established_incoming(Some(50))       // Max 50 established incoming
+            .with_max_established_outgoing(Some(50))       // Max 50 established outgoing
+            .with_max_established_per_peer(Some(5));       // Max 5 connections per peer
+
+        // ====================================================================
+        // Build the complete behaviour
+        // ====================================================================
         let behaviour = NodeBehaviour {
             gossipsub,
             kademlia,
             request_response,
-            connection_limits: connection_limits::Behaviour::new(
-                connection_limits::ConnectionLimits::default()
-                    .with_max_pending_incoming(Some(10))
-                    .with_max_pending_outgoing(Some(10))
-                    .with_max_established_incoming(Some(50))
-                    .with_max_established_outgoing(Some(50))
-                    .with_max_established_per_peer(Some(5)),
-            ),
+            connection_limits: connection_limits::Behaviour::new(connection_limits_config),
         };
 
+        // Create the swarm
         let swarm = Swarm::new(
             transport,
             behaviour,
@@ -161,14 +314,27 @@ impl NetworkService {
             Config::with_tokio_executor(),
         );
 
-        let (command_sender, command_receiver) = mpsc::channel(32);
-        let (event_sender, event_receiver) = mpsc::channel(100);
+        // Create communication channels
+        let (command_sender, command_receiver) = mpsc::channel(64);
+        let (event_sender, event_receiver) = mpsc::channel(256);
 
         // Initialize rate limiter
-        let rate_limiter = std::sync::Arc::new(std::sync::Mutex::new(
-            RateLimiter::new(RateLimitConfig::default())
-        ));
+        let rate_limiter = Arc::new(TokioMutex::new(RateLimiter::new(RateLimitConfig::default())));
 
+        // Load peer store
+        let peer_store = peer_store::PeerStore::new(peer_store_path)?;
+        
+        // Setup reputation persistence path
+        let reputation_file = format!("{}/reputation.json", 
+            peer_store_path.trim_end_matches("/peers.json"));
+
+        // Parse bootstrap addresses
+        let bootstrap_addresses: Vec<Multiaddr> = bootstrap_nodes
+            .into_iter()
+            .filter_map(|addr| Self::parse_bootstrap_addr(&addr))
+            .collect();
+
+        // Create the service
         let mut service = Self {
             swarm,
             command_receiver,
@@ -176,204 +342,374 @@ impl NetworkService {
             pending_requests: HashSet::new(),
             rate_limiter,
             reputation: reputation::PeerReputation::new(),
+            bootstrap_addresses,
+            peer_store,
+            reputation_file,
+            reconnect_interval: tokio::time::interval(Duration::from_secs(15)),
+            shutting_down: false,
         };
 
-        // Load peers from disk
-        service.load_peers();
+        // Attempt to connect to known peers immediately
+        service.reconnect_known_peers();
 
-        // Dial bootstrap nodes
-        for addr_str in bootstrap_nodes {
-            if let Ok(addr) = addr_str.parse::<Multiaddr>() {
-                info!("Dialing bootstrap node: {}", addr);
-                if let Err(e) = service.swarm.dial(addr) {
-                    warn!("Failed to dial bootstrap node: {}", e);
-                }
-            } else {
-                warn!("Invalid bootstrap node address: {}", addr_str);
-            }
-        }
-
-        Ok((
-            service,
-            command_sender,
-            event_receiver,
-        ))
+        Ok((service, command_sender, event_receiver))
     }
 
+    /// Run the network service main loop
+    /// 
+    /// This method runs indefinitely, processing swarm events and commands.
+    /// It should be spawned in a separate tokio task.
     pub async fn run(mut self) {
+        info!("🌐 Network service started");
+        
         loop {
+            // Check if we should shut down
+            if self.shutting_down {
+                info!("Network service shutting down");
+                break;
+            }
+            
             tokio::select! {
+                // Process swarm events (incoming messages, connections, etc.)
                 event = self.swarm.select_next_some() => {
                     self.handle_swarm_event(event).await;
                 },
-                command = self.command_receiver.recv() => match command {
-                    Some(NetworkCommand::StartListening(addr)) => {
-                        if let Err(e) = self.swarm.listen_on(addr) {
-                            warn!("Failed to listen on address: {}", e);
+                
+                // Process commands from the node
+                command = self.command_receiver.recv() => {
+                    match command {
+                        Some(cmd) => self.handle_network_command(cmd).await,
+                        None => {
+                            info!("Command channel closed, shutting down");
+                            break;
                         }
                     }
-                    Some(NetworkCommand::Dial(addr)) => {
-                        if let Err(e) = self.swarm.dial(addr) {
-                            warn!("Failed to dial address: {}", e);
-                        }
+                },
+                
+                // Periodic reconnection to known peers
+                _ = self.reconnect_interval.tick() => {
+                    if !self.shutting_down {
+                        self.reconnect_known_peers();
                     }
-                    Some(NetworkCommand::BroadcastTransaction(tx)) => {
-                        self.broadcast_transaction(tx);
-                    }
-                    Some(NetworkCommand::BroadcastBlock(block)) => {
-                        self.broadcast_block(block);
-                    }
-                    Some(NetworkCommand::BroadcastConsensusMessage(msg)) => {
-                        self.broadcast_consensus_message(msg);
-                    }
-                    Some(NetworkCommand::RequestBlock { peer, start_height, limit }) => {
-                        let request_id = self.swarm.behaviour_mut().request_response.send_request(&peer, BlockRequest { start_height, limit });
-                        self.pending_requests.insert(request_id);
-                    }
-                    Some(NetworkCommand::SendBlockResponse { channel, blocks }) => {
-                        if let Err(e) = self.swarm.behaviour_mut().request_response.send_response(channel, BlockResponse { blocks }) {
-                            warn!("Failed to send block response: {:?}", e);
-                        }
-                    }
-                    Some(NetworkCommand::SavePeers) => {
-                        self.save_peers();
-                    }
-                    None => return,
-                }
+                },
             }
         }
+        
+        // Save peers and reputation on shutdown
+        self.save_peers();
+        let _ = self.save_reputation();
+        info!("👋 Network service stopped");
+    }
+    
+    /// Gracefully shut down the network service
+    pub async fn shutdown(&mut self) -> Result<(), Box<dyn Error>> {
+        info!("Shutting down network service...");
+        self.shutting_down = true;
+        self.save_peers();
+        self.save_reputation()?;
+        Ok(())
     }
 
-    async fn handle_swarm_event<E: std::fmt::Debug>(&mut self, event: SwarmEvent<behaviour::NodeBehaviourEvent, E>) {
+    // ========================================================================
+    // Event Handlers
+    // ========================================================================
+
+    /// Handle incoming swarm events from libp2p
+    async fn handle_swarm_event<E: std::fmt::Debug>(
+        &mut self,
+        event: SwarmEvent<behaviour::NodeBehaviourEvent, E>,
+    ) {
         match event {
+            // New listening address - we can now accept connections
             SwarmEvent::NewListenAddr { address, .. } => {
-                info!("Listening on {:?}", address);
-                let _ = self.event_sender.send(NetworkEvent::ListeningOn(address)).await;
+                info!("🔊 Listening on {}", address);
+                let _ = self.event_sender
+                    .send(NetworkEvent::ListeningOn(address))
+                    .await;
             }
-            SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::Gossipsub(gossipsub::Event::Message {
-                propagation_source,
-                message_id,
-                message,
-            })) => {
-                debug!("Received message from {:?}: {:?}", propagation_source, message_id);
-                self.handle_gossipsub_message(message, propagation_source).await;
+            
+            // ================================================================
+            // Gossipsub Messages (broadcast messages)
+            // ================================================================
+            SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::Gossipsub(
+                gossipsub::Event::Message {
+                    propagation_source: source,
+                    message_id,
+                    message,
+                },
+            )) => {
+                debug!("📨 Received message from {}: {}", source, message_id);
+                self.handle_gossipsub_message(message, source).await;
             }
+            
+            // ================================================================
+            // Kademlia Events (peer discovery)
+            // ================================================================
             SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::Kademlia(event)) => {
-                debug!("Kademlia event: {:?}", event);
+                debug!("🔍 Kademlia event: {:?}", event);
             }
-            SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                info!("Connection established with peer: {:?}", peer_id);
-            }
-            SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
-                info!("Connection closed with peer {:?}: {:?}", peer_id, cause);
-            }
-            SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::RequestResponse(request_response::Event::Message { peer, message })) => {
-                match message {
-                    request_response::Message::Request { request_id, request, channel, .. } => {
-                        info!("Received block request from {:?}", peer);
-                        if let Err(e) = self.event_sender.send(NetworkEvent::BlockRequestReceived { peer, request_id, start_height: request.start_height, limit: request.limit, channel }).await {
-                             warn!("Failed to forward block request: {:?}", e);
-                        }
-                    }
-                    request_response::Message::Response { request_id, response } => {
-                        info!("Received block response from {:?}", peer);
-                        self.pending_requests.remove(&request_id);
-                        if let Err(e) = self.event_sender.send(NetworkEvent::BlockResponseReceived { peer, request_id, blocks: response.blocks }).await {
-                             warn!("Failed to forward block response: {:?}", e);
-                        }
+            
+            // ================================================================
+            // Request-Response Events (block synchronization)
+            // ================================================================
+            SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::RequestResponse(
+                request_response::Event::Message { peer, message },
+            )) => match message {
+                // Received a block request from a peer
+                request_response::Message::Request {
+                    request_id,
+                    request,
+                    channel,
+                    ..
+                } => {
+                    debug!("📥 Block request from {}: height {} limit {}", 
+                           peer, request.start_height, request.limit);
+                    
+                    if let Err(e) = self.event_sender
+                        .send(NetworkEvent::BlockRequestReceived {
+                            peer,
+                            request_id,
+                            start_height: request.start_height,
+                            limit: request.limit,
+                            channel,
+                        })
+                        .await
+                    {
+                        warn!("Failed to forward block request: {}", e);
                     }
                 }
-            }
-            SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::RequestResponse(request_response::Event::OutboundFailure { request_id, error, .. })) => {
-                warn!("Request {:?} failed: {:?}", request_id, error);
+                // Received a block response from a peer
+                request_response::Message::Response {
+                    request_id,
+                    response,
+                } => {
+                    debug!("📦 Block response from {}: {} blocks", peer, response.blocks.len());
+                    self.pending_requests.remove(&request_id);
+                    
+                    if let Err(e) = self.event_sender
+                        .send(NetworkEvent::BlockResponseReceived {
+                            peer,
+                            request_id,
+                            blocks: response.blocks,
+                        })
+                        .await
+                    {
+                        warn!("Failed to forward block response: {}", e);
+                    }
+                }
+            },
+            
+            // Request-response failures
+            SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::RequestResponse(
+                request_response::Event::OutboundFailure {
+                    request_id, error, ..
+                },
+            )) => {
+                warn!("❌ Request {} failed: {:?}", request_id, error);
                 self.pending_requests.remove(&request_id);
             }
+            
+            // ================================================================
+            // Connection Events (tracking peer connections)
+            // ================================================================
+            SwarmEvent::ConnectionEstablished {
+                peer_id, endpoint, ..
+            } => {
+                info!("🔗 Connection established with peer: {}", peer_id);
+                
+                // Add to peer store for future reconnection
+                let remote_addr = endpoint.get_remote_address();
+                self.peer_store.add_peer(remote_addr);
+                if let Err(e) = self.peer_store.save() {
+                    warn!("Failed to save peer store: {}", e);
+                }
+                
+                // Add address to Kademlia for discovery
+                self.swarm
+                    .behaviour_mut()
+                    .kademlia
+                    .add_address(&peer_id, remote_addr.clone());
+            }
+            
+            SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
+                info!("🔌 Connection closed with peer {}: {:?}", peer_id, cause);
+            }
+            
+            // Connection errors
             SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
-                warn!("Outgoing connection error to peer {:?}: {:?}", peer_id, error);
+                warn!("❌ Outgoing connection error to {:?}: {}", peer_id, error);
             }
-            SwarmEvent::IncomingConnectionError { local_addr, send_back_addr, error, .. } => {
-                warn!("Incoming connection error from {:?} to {:?}: {:?}", send_back_addr, local_addr, error);
+            
+            SwarmEvent::IncomingConnectionError {
+                local_addr,
+                send_back_addr,
+                error,
+                ..
+            } => {
+                debug!("⚠️ Incoming connection error from {} to {}: {}", 
+                       send_back_addr, local_addr, error);
             }
+            
             _ => {}
         }
     }
-
+    
+    /// Handle incoming gossip messages (transactions, blocks, consensus)
     async fn handle_gossipsub_message(&mut self, message: gossipsub::Message, source: PeerId) {
         let topic = message.topic.as_str();
         
+        // Check if peer is banned
+        if self.reputation.is_banned(&source) {
+            warn!("🚫 Ignoring message from banned peer: {}", source);
+            return;
+        }
+
         match topic {
             TRANSACTION_TOPIC => {
-                // Check reputation
-                if self.reputation.is_banned(&source) {
-                    warn!("Ignoring transaction from banned peer: {:?}", source);
-                    return;
-                }
-
-                // Check rate limit
+                // Rate limit check
                 {
-                    let mut limiter = self.rate_limiter.lock().unwrap();
+                    let mut limiter = self.rate_limiter.lock().await;
                     if let Err(e) = limiter.check_and_consume(&source, MessageType::Transaction) {
-                        warn!("Rate limit exceeded for transaction from {:?}: {}", source, e);
-                        self.reputation.report_bad_behavior(source, 5); // Minor penalty for rate limit
+                        warn!("⏱️ Rate limit exceeded for transaction from {}: {}", source, e);
+                        self.reputation.report_bad_behavior(source, 5);
                         return;
                     }
                 }
-                
+
                 match serde_json::from_slice::<TransactionMessage>(&message.data) {
                     Ok(tx_msg) => {
-                        info!("Received transaction from network");
-                        self.reputation.report_good_behavior(source); // Reward valid message
-                        if let Err(e) = self.event_sender.send(NetworkEvent::TransactionReceived(tx_msg.transaction)).await {
-                            warn!("Failed to forward transaction to node: {}", e);
+                        debug!("💰 Received transaction from {}", source);
+                        self.reputation.report_good_behavior(source);
+                        
+                        if let Err(e) = self.event_sender
+                            .send(NetworkEvent::TransactionReceived(tx_msg.transaction))
+                            .await
+                        {
+                            warn!("Failed to forward transaction: {}", e);
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to deserialize transaction message: {}", e);
-                        self.reputation.report_bad_behavior(source, 10); // Penalty for invalid format
+                        warn!("Failed to deserialize transaction: {}", e);
+                        self.reputation.report_bad_behavior(source, 10);
                     }
                 }
             }
+            
             BLOCK_TOPIC => {
                 match serde_json::from_slice::<BlockMessage>(&message.data) {
                     Ok(block_msg) => {
-                        info!("Received block from network");
-                        if let Err(e) = self.event_sender.send(NetworkEvent::BlockReceived { block: block_msg.block, source }).await {
-                            warn!("Failed to forward block to node: {}", e);
+                        info!("📦 Received block from {} at height {}", 
+                              source, block_msg.block.header.slot);
+                        
+                        if let Err(e) = self.event_sender
+                            .send(NetworkEvent::BlockReceived {
+                                block: block_msg.block,
+                                source,
+                            })
+                            .await
+                        {
+                            warn!("Failed to forward block: {}", e);
                         }
                     }
                     Err(e) => {
-                        warn!("Failed to deserialize block message: {}", e);
+                        warn!("Failed to deserialize block: {}", e);
+                        self.reputation.report_bad_behavior(source, 10);
                     }
                 }
             }
+            
             CONSENSUS_TOPIC => {
-                // Check rate limit
+                // Rate limit check
                 {
-                    let mut limiter = self.rate_limiter.lock().unwrap();
+                    let mut limiter = self.rate_limiter.lock().await;
                     if let Err(e) = limiter.check_and_consume(&source, MessageType::ConsensusMessage) {
-                        warn!("Rate limit exceeded for consensus message from {:?}: {}", source, e);
+                        warn!("⏱️ Rate limit exceeded for consensus message from {}: {}", source, e);
                         return;
                     }
                 }
-                
+
                 match serde_json::from_slice::<ConsensusMessage>(&message.data) {
                     Ok(msg) => {
-                        debug!("Received consensus message");
-                        if let Err(e) = self.event_sender.send(NetworkEvent::ConsensusMessageReceived(msg)).await {
+                        debug!("🗳️ Received consensus message from {}", source);
+                        
+                        if let Err(e) = self.event_sender
+                            .send(NetworkEvent::ConsensusMessageReceived(msg))
+                            .await
+                        {
                             warn!("Failed to forward consensus message: {}", e);
                         }
                     }
                     Err(e) => {
                         warn!("Failed to deserialize consensus message: {}", e);
+                        self.reputation.report_bad_behavior(source, 10);
                     }
                 }
             }
+            
             _ => {
-                debug!("Received message on unknown topic: {}", topic);
+                debug!("Unknown topic: {}", topic);
             }
         }
     }
-
+    
+    /// Handle network commands from the node
+    async fn handle_network_command(&mut self, command: NetworkCommand) {
+        match command {
+            NetworkCommand::StartListening(addr) => {
+                if let Err(e) = self.swarm.listen_on(addr) {
+                    warn!("Failed to listen on address: {}", e);
+                }
+            }
+            
+            NetworkCommand::Dial(addr) => {
+                if let Err(e) = self.swarm.dial(addr) {
+                    warn!("Failed to dial address: {}", e);
+                }
+            }
+            
+            NetworkCommand::BroadcastTransaction(tx) => {
+                self.broadcast_transaction(tx);
+            }
+            
+            NetworkCommand::BroadcastBlock(block) => {
+                self.broadcast_block(block);
+            }
+            
+            NetworkCommand::BroadcastConsensusMessage(msg) => {
+                self.broadcast_consensus_message(msg);
+            }
+            
+            NetworkCommand::RequestBlock { peer, start_height, limit } => {
+                let request_id = self.swarm
+                    .behaviour_mut()
+                    .request_response
+                    .send_request(&peer, BlockRequest { start_height, limit });
+                self.pending_requests.insert(request_id);
+                debug!("📤 Sent block request to {} (height {}+{})", peer, start_height, limit);
+            }
+            
+            NetworkCommand::SendBlockResponse { channel, blocks } => {
+                if let Err(e) = self.swarm
+                    .behaviour_mut()
+                    .request_response
+                    .send_response(channel, BlockResponse { blocks })
+                {
+                    warn!("Failed to send block response: {}", e);
+                }
+            }
+            
+            NetworkCommand::SavePeers => {
+                self.save_peers();
+                let _ = self.save_reputation();
+            }
+        }
+    }
+    
+    // ========================================================================
+    // Broadcasting Methods
+    // ========================================================================
+    
+    /// Broadcast a transaction to all peers via gossipsub
     fn broadcast_transaction(&mut self, tx: Transaction) {
         let msg = TransactionMessage { transaction: tx };
         let topic = IdentTopic::new(TRANSACTION_TOPIC);
@@ -383,7 +719,7 @@ impl NetworkService {
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
                     warn!("Failed to broadcast transaction: {}", e);
                 } else {
-                    info!("Broadcasted transaction to network");
+                    debug!("📡 Broadcasted transaction to network");
                 }
             }
             Err(e) => {
@@ -391,7 +727,8 @@ impl NetworkService {
             }
         }
     }
-
+    
+    /// Broadcast a block to all peers via gossipsub
     fn broadcast_block(&mut self, block: Block) {
         let msg = BlockMessage { block };
         let topic = IdentTopic::new(BLOCK_TOPIC);
@@ -401,7 +738,7 @@ impl NetworkService {
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
                     warn!("Failed to broadcast block: {}", e);
                 } else {
-                    info!("Broadcasted block to network");
+                    info!("📡 Broadcasted block to network");
                 }
             }
             Err(e) => {
@@ -409,7 +746,8 @@ impl NetworkService {
             }
         }
     }
-
+    
+    /// Broadcast a consensus message to all peers via gossipsub
     fn broadcast_consensus_message(&mut self, msg: ConsensusMessage) {
         let topic = IdentTopic::new(CONSENSUS_TOPIC);
         
@@ -418,7 +756,7 @@ impl NetworkService {
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
                     warn!("Failed to broadcast consensus message: {}", e);
                 } else {
-                    debug!("Broadcasted consensus message to network");
+                    debug!("📡 Broadcasted consensus message to network");
                 }
             }
             Err(e) => {
@@ -426,34 +764,147 @@ impl NetworkService {
             }
         }
     }
-
+    
+    // ========================================================================
+    // Peer Management
+    // ========================================================================
+    
+    /// Save current peers to disk
     pub fn save_peers(&mut self) {
-        let mut peers = Vec::new();
-        for bucket in self.swarm.behaviour_mut().kademlia.kbuckets() {
-            for entry in bucket.iter() {
-                peers.push(*entry.node.key.preimage());
-            }
-        }
-        let peer_data = serde_json::to_string(&peers).unwrap_or_default();
-        if let Err(e) = std::fs::write("peers.json", peer_data) {
+        if let Err(e) = self.peer_store.save() {
             warn!("Failed to save peers: {}", e);
         } else {
-            info!("Saved {} peers to disk", peers.len());
+            debug!("💾 Saved {} peers to disk", self.peer_store.len());
         }
     }
-
-    pub fn load_peers(&mut self) {
-        if let Ok(data) = std::fs::read_to_string("peers.json") {
-            if let Ok(peers) = serde_json::from_str::<Vec<PeerId>>(&data) {
-                info!("Loaded {} peers from disk", peers.len());
-                for peer in peers {
-                    self.swarm.behaviour_mut().kademlia.add_address(&peer, "/ip4/127.0.0.1/tcp/0".parse().unwrap()); // Placeholder address, in real world we'd save addrs too
-                }
+    
+    /// Save reputation data to disk
+    fn save_reputation(&self) -> Result<(), Box<dyn Error>> {
+        let reputation_data = self.reputation.export()?;
+        std::fs::write(&self.reputation_file, serde_json::to_string_pretty(&reputation_data)?)?;
+        debug!("💾 Saved reputation data to {}", self.reputation_file);
+        Ok(())
+    }
+    
+    /// Load reputation data from disk
+    fn load_reputation(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Ok(data) = std::fs::read_to_string(&self.reputation_file) {
+            let reputation_data: serde_json::Value = serde_json::from_str(&data)?;
+            self.reputation.import(reputation_data)?;
+            debug!("📂 Loaded reputation data from {}", self.reputation_file);
+        }
+        Ok(())
+    }
+    
+    /// Attempt to reconnect to known peers (bootstrap + saved)
+    fn reconnect_known_peers(&mut self) {
+        let mut seen = HashSet::new();
+        
+        // Connect to bootstrap nodes
+        for addr in &self.bootstrap_addresses {
+            if seen.insert(addr.to_string()) {
+                self.try_dial_known_addr(addr.clone());
             }
         }
+        
+        // Connect to saved peers
+        for addr in self.peer_store.get_peers() {
+            let addr_str = addr.to_string();
+            if seen.insert(addr_str) {
+                self.try_dial_known_addr(addr);
+            }
+        }
+    }
+    
+    /// Attempt to dial a known address (non-blocking)
+    fn try_dial_known_addr(&mut self, addr: Multiaddr) {
+        debug!("🔄 Attempting to connect to known peer: {}", addr);
+        if let Err(e) = self.swarm.dial(addr.clone()) {
+            debug!("Failed to dial {}: {}", addr, e);
+        }
+    }
+    
+    // ========================================================================
+    // Utility Methods
+    // ========================================================================
+    
+    /// Parse a bootstrap address string into a Multiaddr
+    /// Supports formats: "/ip4/1.2.3.4/tcp/9000" or "1.2.3.4:9000"
+    fn parse_bootstrap_addr(addr: &str) -> Option<Multiaddr> {
+        // Try parsing as Multiaddr directly
+        if let Ok(parsed) = addr.parse::<Multiaddr>() {
+            return Some(parsed);
+        }
+
+        // Try parsing as host:port format
+        let (host, port) = addr.rsplit_once(':')?;
+        
+        let multiaddr = if host.parse::<Ipv4Addr>().is_ok() {
+            format!("/ip4/{}/tcp/{}", host, port)
+        } else if host.parse::<std::net::Ipv6Addr>().is_ok() {
+            format!("/ip6/{}/tcp/{}", host, port)
+        } else {
+            format!("/dns4/{}/tcp/{}", host, port)
+        };
+
+        match multiaddr.parse::<Multiaddr>() {
+            Ok(parsed) => Some(parsed),
+            Err(error) => {
+                warn!("Invalid bootstrap node address '{}': {}", addr, error);
+                None
+            }
+        }
+    }
+    
+    /// Get the local peer ID
+    pub fn local_peer_id(&self) -> PeerId {
+        *self.swarm.local_peer_id()
+    }
+    
+    /// Get number of connected peers
+    pub fn connected_peers(&self) -> usize {
+        self.swarm.connected_peers().count()
     }
 }
 
+// ============================================================================
+// Module Initialization
+// ============================================================================
+
 pub fn init() {
-    println!("Network initialized (use NetworkService::new)");
+    println!("🌐 Network module initialized");
+    println!("   - Gossipsub (pub/sub)");
+    println!("   - Kademlia (DHT discovery)");
+    println!("   - Request-Response (block sync)");
+    println!("   - Rate limiting & reputation");
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_parse_bootstrap_addr() {
+        // IPv4 with port
+        let addr = NetworkService::parse_bootstrap_addr("192.168.1.1:9000");
+        assert!(addr.is_some());
+        assert_eq!(addr.unwrap().to_string(), "/ip4/192.168.1.1/tcp/9000");
+        
+        // Full multiaddr format
+        let addr = NetworkService::parse_bootstrap_addr("/ip4/10.0.0.1/tcp/9000");
+        assert!(addr.is_some());
+        
+        // DNS format
+        let addr = NetworkService::parse_bootstrap_addr("bootstrap.example.com:9000");
+        assert!(addr.is_some());
+        assert!(addr.unwrap().to_string().contains("dns4"));
+        
+        // Invalid address
+        let addr = NetworkService::parse_bootstrap_addr("not-an-address");
+        assert!(addr.is_none());
+    }
 }

@@ -1,79 +1,130 @@
+//! # Genesis Builder CLI Tool
+//!
+//! Command-line tool for generating genesis.json files for blockchain initialization.
+
 mod config;
 mod validation;
 mod builder;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use anyhow::Result;
 use std::fs;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(name = "genesis-builder")]
-#[command(about = "Generate genesis.json for blockchain initialization", long_about = None)]
+#[command(about = "Generate genesis.json for blockchain initialization")]
+#[command(version = "1.0.0")]
 struct Args {
-    /// Path to configuration file (TOML format)
-    #[arg(short, long)]
-    config: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Commands,
+}
 
-    /// Output file path
-    #[arg(short, long, default_value = "genesis.json")]
-    output: PathBuf,
+#[derive(Subcommand, Debug)]
+enum Commands {
+    /// Generate genesis file from configuration
+    Generate {
+        /// Path to configuration file (TOML format)
+        #[arg(short, long)]
+        config: PathBuf,
 
+        /// Output file path
+        #[arg(short, long, default_value = "genesis.json")]
+        output: PathBuf,
+    },
+    
     /// Validate configuration only (don't generate output)
-    #[arg(short, long)]
-    validate: bool,
+    Validate {
+        /// Path to configuration file (TOML format)
+        #[arg(short, long)]
+        config: PathBuf,
+    },
+    
+    /// Show example configuration template
+    Example,
+    
+    /// Show current configuration summary
+    Show,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
-
-    println!("Genesis Builder - Modular Blockchain");
-    println!("====================================\n");
-
-    // Load configuration
-    let config = if let Some(config_path) = args.config {
-        println!("Loading configuration from: {}", config_path.display());
-        let content = fs::read_to_string(&config_path)?;
-        config::GenesisConfig::from_toml(&content)?
-    } else {
-        println!("Error: Configuration file required");
-        println!("Usage: genesis-builder --config <path-to-config.toml>");
-        std::process::exit(1);
-    };
-
-    // Validate configuration
-    println!("Validating configuration...");
-    validation::Validator::validate_config(&config)?;
-    println!("✅ Configuration valid\n");
-
-    // Print summary
-    println!("Chain ID: {}", config.chain.chain_id);
-    println!("Timestamp: {}", config.chain.timestamp);
-    println!("Validators: {}", config.validators.len());
-    println!("Accounts: {}", config.accounts.len());
     
-    let total_stake: u128 = config.validators.iter()
-        .filter_map(|v| v.stake.parse::<u128>().ok())
-        .sum();
-    let total_supply: u128 = config.accounts.iter()
-        .filter_map(|a| a.balance.parse::<u128>().ok())
-        .sum();
-    println!("Total Stake: {}", total_stake);
-    println!("Total Supply: {}\n", total_supply);
+    println!("🔧 Genesis Builder - Modular Blockchain");
+    println!("========================================\n");
 
-    if args.validate {
-        println!("Validation complete! (--validate mode, no output generated)");
-        return Ok(());
+    match args.command {
+        Commands::Generate { config, output } => {
+            println!("📄 Loading configuration from: {}", config.display());
+            
+            // Load configuration
+            let config_content = fs::read_to_string(&config)?;
+            let genesis_config = config::GenesisConfig::from_toml(&config_content)?;
+            
+            // Validate configuration
+            println!("🔍 Validating configuration...");
+            validation::Validator::validate_config(&genesis_config)?;
+            println!("✅ Configuration valid\n");
+            
+            // Print summary
+            validation::Validator::print_summary(&genesis_config)?;
+            println!();
+            
+            // Build genesis
+            println!("🏗️  Building genesis configuration...");
+            let genesis = builder::GenesisBuilder::build(genesis_config)?;
+            
+            // Validate built genesis
+            builder::GenesisBuilder::validate_built(&genesis)?;
+            
+            // Convert to JSON
+            let json = builder::GenesisBuilder::to_json(&genesis)?;
+            
+            // Write output
+            fs::write(&output, json)?;
+            println!("✅ Genesis file generated: {}", output.display());
+            
+            // Print file size
+            let metadata = fs::metadata(&output)?;
+            println!("📦 File size: {} bytes", metadata.len());
+        }
+        
+        Commands::Validate { config } => {
+            println!("📄 Loading configuration from: {}", config.display());
+            
+            let config_content = fs::read_to_string(&config)?;
+            let genesis_config = config::GenesisConfig::from_toml(&config_content)?;
+            
+            println!("🔍 Validating configuration...");
+            validation::Validator::validate_config(&genesis_config)?;
+            println!("✅ Configuration is valid!\n");
+            
+            validation::Validator::print_summary(&genesis_config)?;
+            println!("\n✓ No issues found. Ready to generate genesis.");
+        }
+        
+        Commands::Example => {
+            println!("📝 Example configuration template:\n");
+            println!("{}", config::GenesisConfig::example_toml());
+            println!("\n💡 Save this to a .toml file and run:");
+            println!("   genesis-builder generate --config config.toml");
+        }
+        
+        Commands::Show => {
+            println!("ℹ️  Genesis Builder Help");
+            println!("=======================\n");
+            println!("Commands:");
+            println!("  generate --config <file> --output <file>  Generate genesis.json");
+            println!("  validate --config <file>                  Validate config only");
+            println!("  example                                   Show example config");
+            println!("  show                                      Show this help");
+            println!("\nExample workflow:");
+            println!("  1. genesis-builder example > config.toml");
+            println!("  2. Edit config.toml with your values");
+            println!("  3. genesis-builder validate --config config.toml");
+            println!("  4. genesis-builder generate --config config.toml --output genesis.json");
+        }
     }
-
-    // Build genesis
-    println!("Generating genesis configuration...");
-    let genesis = builder::GenesisBuilder::build(config)?;
-    let json = builder::GenesisBuilder::to_json(&genesis)?;
-
-    // Write output
-    fs::write(&args.output, json)?;
-    println!("✅ Genesis file generated: {}", args.output.display());
 
     Ok(())
 }

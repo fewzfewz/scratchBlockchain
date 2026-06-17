@@ -185,3 +185,104 @@ mod tests {
         assert_eq!(effective, 1_000_000_000);
     }
 }
+
+
+// Add after the existing code
+
+// =============================================================================
+// Transaction Type Validation (EIP-2718)
+// =============================================================================
+
+/// Transaction type as defined in EIP-2718
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionType {
+    /// Legacy transaction (pre-EIP-2718)
+    Legacy = 0x00,
+    /// EIP-2930: Access list transaction
+    AccessList = 0x01,
+    /// EIP-1559: Dynamic fee transaction
+    DynamicFee = 0x02,
+}
+
+impl TransactionType {
+    pub fn from_byte(byte: u8) -> Option<Self> {
+        match byte {
+            0x00 => Some(Self::Legacy),
+            0x01 => Some(Self::AccessList),
+            0x02 => Some(Self::DynamicFee),
+            _ => None,
+        }
+    }
+    
+    pub fn to_byte(&self) -> u8 {
+        *self as u8
+    }
+}
+
+impl TransactionValidator {
+    /// Validate transaction based on its type
+    pub fn validate_by_type(
+        &self,
+        tx: &Transaction,
+        tx_type: TransactionType,
+        access_list: &[(Address, Vec<[u8; 32]>)],
+    ) -> Result<()> {
+        match tx_type {
+            TransactionType::Legacy => {
+                // Legacy: no additional validation
+                Ok(())
+            }
+            TransactionType::AccessList => {
+                // EIP-2930: Validate access list
+                self.validate_access_list(access_list)
+            }
+            TransactionType::DynamicFee => {
+                // EIP-1559: Additional validation
+                if tx.max_fee_per_gas == 0 {
+                    return Err(anyhow!("Max fee per gas cannot be zero for EIP-1559 tx"));
+                }
+                if tx.max_priority_fee_per_gas == 0 {
+                    return Err(anyhow!("Max priority fee cannot be zero for EIP-1559 tx"));
+                }
+                Ok(())
+            }
+        }
+    }
+    
+    /// Validate access list (EIP-2930)
+    fn validate_access_list(&self, access_list: &[(Address, Vec<[u8; 32]>)]) -> Result<()> {
+        for (address, storage_keys) in access_list {
+            if address.len() != 20 {
+                return Err(anyhow!("Invalid address in access list"));
+            }
+            
+            for key in storage_keys {
+                if key.len() != 32 {
+                    return Err(anyhow!("Invalid storage key in access list"));
+                }
+            }
+        }
+        Ok(())
+    }
+    
+    /// Validate transaction gas price against EIP-1559 rules
+    pub fn validate_eip1559_gas(&self, tx: &Transaction, base_fee: u64) -> Result<()> {
+        if tx.max_fee_per_gas < base_fee {
+            return Err(anyhow!(
+                "Max fee per gas ({}) below base fee ({})",
+                tx.max_fee_per_gas,
+                base_fee
+            ));
+        }
+        
+        if tx.max_priority_fee_per_gas > tx.max_fee_per_gas {
+            return Err(anyhow!(
+                "Max priority fee ({}) exceeds max fee ({})",
+                tx.max_priority_fee_per_gas,
+                tx.max_fee_per_gas
+            ));
+        }
+        
+        Ok(())
+    }
+}

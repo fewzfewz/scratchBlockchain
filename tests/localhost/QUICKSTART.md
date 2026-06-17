@@ -4,7 +4,7 @@
 
 ### Step 1: Start Testnet
 ```bash
-cd /home/fewzan/.gemini/antigravity/scratch/deployment/local
+cd /home/fewzan/Projects/ScratchBlockchain/deployment/local
 ./setup.sh
 ```
 
