@@ -1,0 +1,28 @@
+{{ define "slack.title" -}}
+[{{ .Status | toUpper }}] {{ .GroupLabels.alertname }} — {{ .GroupLabels.instance }}
+{{- end }}
+
+{{ define "slack.text" -}}
+*Status:* {{ .Status }}
+*Cluster:* {{ .GroupLabels.cluster }}
+*Environment:* {{ .GroupLabels.environment }}
+*Instance:* {{ .GroupLabels.instance }}
+*Alert:* {{ .CommonAnnotations.summary }}
+
+*Description:*
+{{ .CommonAnnotations.description }}
+
+*Active Alerts:*
+{{ range .Alerts }}
+  • {{ .Annotations.summary }}
+    {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+    Started: {{ .StartsAt.Format "Jan 02 15:04:05 UTC" }}
+{{ end }}
+
+*Grafana:* https://grafana.testnet.modular-blockchain.io
+*Explorer:* https://explorer.testnet.modular-blockchain.io
+{{- end }}
+
+{{ define "pagerduty.description" -}}
+{{ .CommonAnnotations.summary }} — {{ .CommonAnnotations.description }}
+{{- end }}

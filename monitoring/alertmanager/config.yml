@@ -1,0 +1,75 @@
+# Alertmanager configuration for Modular Blockchain Testnet
+global:
+  resolve_timeout: 5m
+  # Slack configuration
+  slack_api_url: "${SLACK_WEBHOOK_URL}"
+  # PagerDuty configuration
+  pagerduty_url: "https://events.pagerduty.com/v2/enqueue"
+
+# Route all alerts through a default receiver pipeline
+route:
+  group_by: ['alertname', 'cluster', 'role', 'instance']
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: 'default'
+  routes:
+    # Critical alerts go to PagerDuty and Slack immediately
+    - match:
+        severity: critical
+      receiver: pagerduty-slack
+      repeat_interval: 1h
+    # Warning alerts go to Slack only
+    - match:
+        severity: warning
+      receiver: slack-only
+      repeat_interval: 4h
+    # Info alerts are logged only
+    - match:
+        severity: info
+      receiver: log-only
+      repeat_interval: 24h
+
+receivers:
+  # Default receiver (Slack)
+  - name: 'default'
+    slack_configs:
+      - channel: '#modular-alerts'
+        title: '{{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        fallback: '{{ .CommonAnnotations.summary }}'
+
+  # PagerDuty + Slack for critical alerts
+  - name: 'pagerduty-slack'
+    slack_configs:
+      - channel: '#modular-critical'
+        title: '🚨 CRITICAL: {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        color: 'danger'
+    pagerduty_configs:
+      - routing_key: "${PAGERDUTY_ROUTING_KEY}"
+        severity: critical
+        description: '{{ .CommonAnnotations.summary }}'
+        client: 'Modular Blockchain'
+        client_url: 'https://grafana.testnet.modular-blockchain.io'
+        images:
+          - src: 'https://grafana.testnet.modular-blockchain.io/render/d-solo/blockchain-overview?panelId=1'
+            href: 'https://grafana.testnet.modular-blockchain.io'
+
+  # Slack-only for warnings
+  - name: 'slack-only'
+    slack_configs:
+      - channel: '#modular-warnings'
+        title: '⚠️ WARNING: {{ template "slack.title" . }}'
+        text: '{{ template "slack.text" . }}'
+        color: 'warning'
+
+  # No-op for informational alerts
+  - name: 'log-only'
+    webhook_configs:
+      - url: 'http://localhost:9093/api/v2/alerts'
+
+# Notification templates
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
