@@ -1,0 +1,71 @@
+name: SDK CI
+
+on:
+  push:
+    paths:
+      - "sdk/javascript/**"
+    branches: [main]
+  pull_request:
+    paths:
+      - "sdk/javascript/**"
+    branches: [main]
+
+defaults:
+  run:
+    working-directory: sdk/javascript
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node-version: [18, 20, 22]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: sdk/javascript/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  publish:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: sdk/javascript
+
+      - name: Build
+        run: npm run build
+        working-directory: sdk/javascript
+
+      - name: Publish to npm
+        run: npm publish --access public
+        working-directory: sdk/javascript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

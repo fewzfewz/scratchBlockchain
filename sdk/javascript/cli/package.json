@@ -1,0 +1,27 @@
+{
+  "name": "@modular-blockchain/sdk-cli",
+  "version": "1.0.0",
+  "description": "CLI for scaffolding, deploying, and managing Modular Blockchain projects",
+  "bin": {
+    "modular": "./bin/modular.js"
+  },
+  "scripts": {
+    "test": "echo 'No tests yet'"
+  },
+  "keywords": ["blockchain", "modular", "cli", "scaffold"],
+  "license": "MIT",
+  "dependencies": {
+    "@modular-blockchain/sdk": "file:..",
+    "axios": "^1.16.1",
+    "chalk": "^5.6.2",
+    "commander": "^11.1.0",
+    "inquirer": "^9.2.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "files": [
+    "bin/",
+    "commands/"
+  ]
+}

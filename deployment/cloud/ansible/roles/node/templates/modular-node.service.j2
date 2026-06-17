@@ -1,0 +1,17 @@
+[Unit]
+Description=Modular Blockchain Node
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory={{ data_dir }}
+ExecStart=/usr/local/bin/modular-node start --config {{ data_dir }}/config.toml --genesis {{ data_dir }}/genesis.json
+Restart=always
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

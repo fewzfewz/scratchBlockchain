@@ -1,6 +1,8 @@
+use common::consensus_types::ValidatorInfo;
 use common::types::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use tracing::info;
 
 // ============================================================================
 // INFLATION & TOKENOMICS
@@ -672,21 +674,21 @@ impl GovernanceExecutor {
     /// Execute an approved governance action
     pub fn execute(&mut self, action: GovernanceAction) -> Result<(), String> {
         match action {
-            GovernanceAction::SetParameter { key, value } => {
-                self.set_parameter(&key, &value)?;
+            GovernanceAction::SetParameter { ref key, ref value } => {
+                self.set_parameter(key, value)?;
             }
-            GovernanceAction::UpdateValidatorSet { validators } => {
+            GovernanceAction::UpdateValidatorSet { ref validators } => {
                 self.update_validator_set(validators)?;
             }
-            GovernanceAction::TreasurySpend { recipient, amount } => {
-                self.staking.treasury.spend(amount)?;
+            GovernanceAction::TreasurySpend { recipient: _, ref amount } => {
+                self.staking.treasury.spend(*amount)?;
                 // Transfer to recipient logic here
             }
-            GovernanceAction::RuntimeUpgrade { version, code_hash: _ } => {
+            GovernanceAction::RuntimeUpgrade { ref version, code_hash: _ } => {
                 info!("Runtime upgrade to version {} approved", version);
             }
-            GovernanceAction::UpdateInflation { new_initial_reward, new_halving_interval } => {
-                let new_schedule = InflationSchedule::new(new_initial_reward, new_halving_interval, 50);
+            GovernanceAction::UpdateInflation { ref new_initial_reward, ref new_halving_interval } => {
+                let _new_schedule = InflationSchedule::new(*new_initial_reward, *new_halving_interval, 50);
                 // Apply new schedule - would need to update staking
                 info!("Inflation schedule updated");
             }
@@ -711,12 +713,13 @@ impl GovernanceExecutor {
         Ok(())
     }
     
-    fn update_validator_set(&mut self, validators: Vec<ValidatorInfo>) -> Result<(), String> {
-        // Update active validator set
+    fn update_validator_set(&mut self, validators: &[ValidatorInfo]) -> Result<(), String> {
+        // Update active validator set (match by public_key)
         for validator in validators {
-            if let Some(existing) = self.staking.validators.get_mut(&validator.address) {
-                existing.is_active = validator.is_active;
+            let existing = self.staking.validators.values_mut().find(|v| v.public_key == validator.public_key);
+            if let Some(existing) = existing {
                 existing.stake = validator.stake;
+                existing.is_active = !validator.slashed;
             }
         }
         Ok(())

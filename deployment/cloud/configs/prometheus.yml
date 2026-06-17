@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "alerts.yml"
+
+scrape_configs:
+  - job_name: "validators"
+    static_configs:
+      - targets:
+          - "bootstrap.testnet.modular-blockchain.io:9090"
+          - "validator1.testnet.modular-blockchain.io:9090"
+          - "validator2.testnet.modular-blockchain.io:9090"
+          - "validator3.testnet.modular-blockchain.io:9090"
+          - "validator4.testnet.modular-blockchain.io:9090"
+        labels:
+          role: validator
+
+  - job_name: "rpc_nodes"
+    static_configs:
+      - targets:
+          - "rpc1.testnet.modular-blockchain.io:9090"
+          - "rpc2.testnet.modular-blockchain.io:9090"
+        labels:
+          role: rpc

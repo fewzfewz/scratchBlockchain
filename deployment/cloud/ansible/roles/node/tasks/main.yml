@@ -1,0 +1,39 @@
+---
+- name: Ensure data directory exists
+  file:
+    path: "{{ data_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Copy node config
+  template:
+    src: "config.toml.j2"
+    dest: "{{ data_dir }}/config.toml"
+    mode: "0644"
+
+- name: Copy validator key (if present)
+  copy:
+    src: "{{ validator_key_src }}"
+    dest: "{{ data_dir }}/validator_key.json"
+    mode: "0600"
+  when: validator_key_src is defined
+
+- name: Copy genesis file
+  copy:
+    src: "{{ genesis_src }}"
+    dest: "{{ data_dir }}/genesis.json"
+    mode: "0644"
+  when: genesis_src is defined
+
+- name: Create systemd service
+  template:
+    src: "modular-node.service.j2"
+    dest: "/etc/systemd/system/modular-node.service"
+    mode: "0644"
+
+- name: Start node service
+  systemd:
+    name: modular-node
+    enabled: yes
+    state: started
+    daemon_reload: yes

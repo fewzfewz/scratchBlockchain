@@ -1,0 +1,25 @@
+all:
+  children:
+    bootstrap:
+      hosts:
+        bootstrap-node:
+          ansible_host: "{{ lookup('env', 'BOOTSTRAP_IP') }}"
+    validators:
+      hosts:
+        validator-1:
+          ansible_host: "{{ lookup('env', 'VALIDATOR1_IP') }}"
+        validator-2:
+          ansible_host: "{{ lookup('env', 'VALIDATOR2_IP') }}"
+        validator-3:
+          ansible_host: "{{ lookup('env', 'VALIDATOR3_IP') }}"
+        validator-4:
+          ansible_host: "{{ lookup('env', 'VALIDATOR4_IP') }}"
+    rpc_nodes:
+      hosts:
+        rpc-1:
+          ansible_host: "{{ lookup('env', 'RPC1_IP') }}"
+        rpc-2:
+          ansible_host: "{{ lookup('env', 'RPC2_IP') }}"
+  vars:
+    ansible_user: ubuntu
+    ansible_ssh_private_key_file: "{{ lookup('env', 'SSH_KEY_PATH') }}"

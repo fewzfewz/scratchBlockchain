@@ -1,110 +1,72 @@
-// ============================================================================
-// Core Types
-// ============================================================================
-
 export type BigNumberish = string | number | bigint;
 export type Address = string;
 export type Hash = string;
 export type HexString = string;
 
 // ============================================================================
-// Block Types
-// ============================================================================
-
-export interface Block {
-  number: number;
-  hash: Hash;
-  parentHash: Hash;
-  timestamp: number;
-  transactions: Hash[];
-  stateRoot: Hash;
-  validator: Address;
-  gasUsed?: string;
-  gasLimit?: string;
-  baseFeePerGas?: string;
-  size?: number;
-  transactionCount?: number;
-}
-
-export interface BlockHeader {
-  parentHash: Hash;
-  stateRoot: Hash;
-  extrinsicsRoot: Hash;
-  slot: number;
-  epoch: number;
-  validatorSetId: number;
-  gasUsed: string;
-  baseFee: string;
-  hash: Hash;
-}
-
-export interface BlockWithTransactions extends Block {
-  transactions: Transaction[];
-}
-
-// ============================================================================
-// Transaction Types
+// Transaction Types (aligned with Rust common::types::Transaction)
 // ============================================================================
 
 export interface TransactionRequest {
   to?: Address;
-  from?: Address;
-  nonce?: number;
   value?: BigNumberish;
   data?: HexString;
   gasLimit?: BigNumberish;
-  gasPrice?: BigNumberish;
   maxFeePerGas?: BigNumberish;
   maxPriorityFeePerGas?: BigNumberish;
   chainId?: number;
-  signature?: Signature;
+  nonce?: number;
 }
 
-export interface Transaction extends TransactionRequest {
-  hash: Hash;
-  blockNumber?: number;
-  blockHash?: Hash;
-  timestamp?: number;
-  transactionIndex?: number;
-  signature?: Signature;
-  from: Address;
-}
-
-export interface RawTransaction {
-  rlp: HexString;
-  hash: Hash;
-  from: Address;
+export interface Transaction {
+  sender: Address;
+  nonce: number;
+  payload: HexString;
+  signature: HexString;
+  gasLimit: number;
+  maxFeePerGas: number;
+  maxPriorityFeePerGas: number;
+  chainId: number | null;
+  to: Address | null;
+  value: number;
+  hash?: HexString;
 }
 
 export interface TransactionReceipt {
-  transactionHash: Hash;
-  blockNumber: number;
-  blockHash: Hash;
+  tx_hash: Hash;
+  block_hash: Hash;
+  block_height: number;
+  transaction_index: number;
+  gas_used: string;
+  cumulative_gas_used: string;
+  status: string;
   from: Address;
-  to?: Address;
-  status: number; // 1 = success, 0 = failure
-  gasUsed: string;
-  cumulativeGasUsed: string;
-  logs: Log[];
-  contractAddress?: Address;
-  transactionIndex: number;
-  effectiveGasPrice?: string;
+  to: Address | null;
+  contract_address: Address | null;
 }
 
-export interface Log {
-  address: Address;
-  topics: string[];
-  data: HexString;
-  blockNumber: number;
-  transactionHash: Hash;
-  logIndex: number;
-  removed?: boolean;
+// ============================================================================
+// Block Types
+// ============================================================================
+
+export interface BlockHeader {
+  parent_hash: Hash;
+  state_root: Hash;
+  transactions_root: Hash;
+  receipts_root: Hash;
+  number: number;
+  timestamp: number;
+  proposer: Address;
+  gas_used: string;
+  gas_limit: string;
+  base_fee: string;
+  extra_data: HexString;
 }
 
-export interface Signature {
-  r: string; // 32 bytes hex
-  s: string; // 32 bytes hex
-  v: number; // recovery ID
+export interface Block {
+  header: BlockHeader;
+  transactions: Transaction[];
+  hash: Hash;
 }
 
 // ============================================================================
@@ -115,16 +77,6 @@ export interface Account {
   address: Address;
   balance: string;
   nonce: number;
-  codeHash?: Hash;
-  code?: HexString;
-  storageRoot?: Hash;
-}
-
-export interface AccountInfo {
-  nonce: number;
-  balance: string;
-  storageRoot: Hash;
-  codeHash: Hash;
 }
 
 // ============================================================================
@@ -138,20 +90,13 @@ export interface PeerInfo {
   protocolVersion: string;
   bestHeight: number;
   latency?: number;
-  userAgent?: string;
 }
 
 export interface NodeStatus {
-  chainId: number;
   height: number;
-  finalizedHeight: number;
-  currentRound: number;
-  currentStep: string;
-  mempoolSize: number;
-  peerCount: number;
-  isValidator: boolean;
-  version: string;
-  uptime: number;
+  finalized_height: number | null;
+  mempool_size: number;
+  peer_count: number;
 }
 
 // ============================================================================
@@ -159,40 +104,33 @@ export interface NodeStatus {
 // ============================================================================
 
 export interface GasPriceResponse {
-  baseFee: string;
-  suggestedPriorityFeeLow: string;
-  suggestedPriorityFeeMedium: string;
-  suggestedPriorityFeeHigh: string;
-  blockHeight: number;
+  base_fee: string;
+  suggested_priority_fee_low: string;
+  suggested_priority_fee_medium: string;
+  suggested_priority_fee_high: string;
+  block_height: number;
 }
 
 export interface EstimateGasResponse {
-  estimatedGas: number;
-  baseFee: string;
-  totalCostEstimate: string;
-  estimatedPriorityFee: string;
+  estimated_gas: number;
+  base_fee: string;
+  total_cost_estimate: string;
+  estimated_priority_fee: string;
 }
 
 export interface FeeHistoryResponse {
-  baseFeePerGas: string[];
-  gasUsedRatio: number[];
-  oldestBlock: number;
-  reward?: string[][];
+  base_fee_per_gas: string[];
+  gas_used_ratio: number[];
+  oldest_block: number;
 }
 
 // ============================================================================
 // Mempool Types
 // ============================================================================
 
-export interface MempoolTransaction extends Transaction {
-  addedAt: number;
-  feePerGas: string;
-  priority: number;
-}
-
 export interface MempoolResponse {
   size: number;
-  transactions: MempoolTransaction[];
+  transactions: Transaction[];
 }
 
 // ============================================================================
@@ -246,60 +184,6 @@ export interface Delegation {
   createdHeight: number;
 }
 
-export interface SlashingEvent {
-  validator: Address;
-  reason: "DoubleSign" | "Downtime" | "InvalidStateTransition";
-  amountSlashed: string;
-  height: number;
-}
-
-// ============================================================================
-// MEV Types
-// ============================================================================
-
-export interface BuilderBid {
-  builderAddress: Address;
-  blockNumber: number;
-  bidAmount: string;
-  mevValue: string;
-  txCount: number;
-  timestamp: number;
-}
-
-export interface MEVAuctionResult {
-  blockNumber: number;
-  winner: Address;
-  winningBid: string;
-  totalBids: number;
-  mevExtracted: string;
-}
-
-// ============================================================================
-// Rollup Types
-// ============================================================================
-
-export interface RollupBatch {
-  batchId: number;
-  transactions: Transaction[];
-  prevStateRoot: Hash;
-  newStateRoot: Hash;
-  zkProof?: HexString;
-  daCommitment?: HexString;
-  timestamp: number;
-  submitter: Address;
-}
-
-export interface CrossRollupMessage {
-  fromRollup: string;
-  toRollup: string;
-  sender: Address;
-  recipient: Address;
-  data: HexString;
-  value: string;
-  nonce: number;
-  proof?: HexString;
-}
-
 // ============================================================================
 // Event Types
 // ============================================================================
@@ -317,12 +201,6 @@ export interface NewTransactionEvent {
 
 export interface FinalizedBlockEvent {
   blockHash: Hash;
-  blockNumber: number;
-}
-
-export interface LogEvent {
-  log: Log;
-  transactionHash: Hash;
   blockNumber: number;
 }
 
@@ -378,82 +256,11 @@ export interface LogFilter {
 
 export type Bytes = Uint8Array;
 
-export interface CallRequest extends TransactionRequest {
-  blockOverride?: number | "latest" | "pending";
-}
-
-export interface FeeMarketInfo {
-  baseFee: string;
-  nextBaseFee: string;
-  priorityFeeRange: {
-    min: string;
-    median: string;
-    max: string;
-  };
-  suggestedGasPrice: string;
-}
-
-// ============================================================================
-// Contract Types (for EVM compatibility)
-// ============================================================================
-
-export interface ContractCall {
-  contract: Address;
-  method: string;
-  args: any[];
-  value?: BigNumberish;
-  gasLimit?: BigNumberish;
-}
-
-export interface ContractDeploy {
-  bytecode: HexString;
-  args: any[];
-  value?: BigNumberish;
-  gasLimit?: BigNumberish;
-}
-
-export interface ContractEvent {
-  name: string;
-  signature: string;
-  topics: string[];
-  data: HexString;
-}
-
-// ============================================================================
-// Type Guards
-// ============================================================================
-
-export function isTransaction(x: any): x is Transaction {
-  return x && typeof x === "object" && "hash" in x && "from" in x;
-}
-
-export function isBlock(x: any): x is Block {
-  return x && typeof x === "object" && "number" in x && "hash" in x;
-}
-
-export function isReceipt(x: any): x is TransactionReceipt {
-  return x && typeof x === "object" && "transactionHash" in x && "status" in x;
-}
-
-// ============================================================================
-// Type Utilities
-// ============================================================================
-
-export type Optional<T, K extends keyof T> = Omit<T, K> & Partial<Pick<T, K>>;
-
-export type WithRequired<T, K extends keyof T> = T & { [P in K]-?: T[P] };
-
-export type Nullable<T> = T | null;
-
-export type AsyncOrSync<T> = T | Promise<T>;
-
 // ============================================================================
 // Constants
 // ============================================================================
 
-export const EMPTY_HASH =
-  "0x0000000000000000000000000000000000000000000000000000000000000000";
+export const EMPTY_HASH = "0x0000000000000000000000000000000000000000000000000000000000000000";
 export const EMPTY_ADDRESS = "0x0000000000000000000000000000000000000000";
 export const NATIVE_TOKEN_SYMBOL = "NBL";
 export const NATIVE_TOKEN_DECIMALS = 18;
-
