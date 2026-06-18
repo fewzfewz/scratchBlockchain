@@ -159,6 +159,86 @@ var ModularClient = class extends EventEmitter {
       return false;
     }
   }
+  // Governance
+  async getProposals() {
+    const response = await this.provider.request("get_proposals");
+    return response.proposals || [];
+  }
+  async getProposal(id) {
+    try {
+      const response = await this.provider.request("get_proposal", [id]);
+      return response.proposal || response;
+    } catch {
+      return null;
+    }
+  }
+  async createProposal(req) {
+    return await this.provider.request("create_proposal", [req]);
+  }
+  async vote(req) {
+    return await this.provider.request("cast_vote", [req]);
+  }
+  async getVotes(proposalId) {
+    const response = await this.provider.request("get_votes", [proposalId]);
+    return response.votes || [];
+  }
+  async getTreasury() {
+    try {
+      return await this.provider.request("get_treasury");
+    } catch {
+      return null;
+    }
+  }
+  async getGovParams() {
+    try {
+      return await this.provider.request("get_gov_params");
+    } catch {
+      return null;
+    }
+  }
+  async getDelegations(address) {
+    const response = await this.provider.request("get_delegations", [address]);
+    return response.delegations || [];
+  }
+  async delegate(delegator, validator, amount) {
+    return await this.provider.request("delegate_stake", [{ delegator, validator, amount }]);
+  }
+  async undelegate(delegator, validator, amount) {
+    return await this.provider.request("undelegate_stake", [{ delegator, validator, amount }]);
+  }
+  async getValidators() {
+    const response = await this.provider.request("get_validators");
+    return response.validators || [];
+  }
+  async executeProposal(proposalId) {
+    return await this.provider.request("execute_proposal", [proposalId]);
+  }
+  async getGovStats() {
+    try {
+      const [proposals, treasury, validators, params] = await Promise.all([
+        this.getProposals(),
+        this.getTreasury(),
+        this.getValidators(),
+        this.getGovParams()
+      ]);
+      const activeProposals = proposals.filter((p) => p.status === "Active");
+      const activeValidators = validators.filter((v) => v.isActive);
+      const totalStaked = validators.reduce((sum, v) => sum + BigInt(v.stake || "0"), 0n).toString();
+      const totalVotes = proposals.reduce((sum, p) => sum + BigInt(p.yesVotes || "0") + BigInt(p.noVotes || "0"), 0n).toString();
+      return {
+        totalProposals: proposals.length,
+        activeProposals: activeProposals.length,
+        totalVotes: Number(totalVotes),
+        totalDelegators: 0,
+        totalStaked,
+        votingPower: "0",
+        inflationRate: params ? 100 / Number(params.votingPeriod) * 365 * 24 * 60 * 60 / 6 : 0,
+        activeValidators: activeValidators.length
+      };
+    } catch {
+      return null;
+    }
+  }
   // Utilities
   getProvider() {
     return this.provider;
@@ -366,14 +446,28 @@ var HttpProvider = class {
       get_metrics: "/metrics",
       status: "/status",
       health: "/health",
-      fee_history: "/fee_history/"
+      fee_history: "/fee_history/",
+      // Governance GET endpoints
+      get_proposals: "/governance/proposals",
+      get_proposal: "/governance/proposals/",
+      get_treasury: "/governance/treasury",
+      get_gov_params: "/governance/params",
+      get_delegations: "/governance/delegations/",
+      get_validators: "/governance/validators",
+      get_votes: "/governance/votes/"
     };
     const post = {
       send_transaction: "/submit_tx",
       submit_tx: "/submit_tx",
       send_raw_transaction: "/submit_tx",
       connect_peer: "/connect_peer",
-      estimate_gas_post: "/estimate_gas"
+      estimate_gas_post: "/estimate_gas",
+      // Governance POST endpoints
+      create_proposal: "/governance/proposals",
+      cast_vote: "/governance/vote",
+      delegate_stake: "/governance/delegate",
+      undelegate_stake: "/governance/undelegate",
+      execute_proposal: "/governance/proposals/execute/"
     };
     if (post[method]) {
       return { method: "POST", path: post[method] };

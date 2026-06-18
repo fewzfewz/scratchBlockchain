@@ -4,3 +4,4 @@ export { HttpProvider } from "./providers/http";
 export { WebSocketProvider } from "./providers/websocket";
 export * from "./types/client";
 export * from "./types/provider";
+export * from "./types/governance";

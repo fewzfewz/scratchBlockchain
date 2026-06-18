@@ -74,6 +74,14 @@ export class HttpProvider implements Provider {
       status: "/status",
       health: "/health",
       fee_history: "/fee_history/",
+      // Governance GET endpoints
+      get_proposals: "/governance/proposals",
+      get_proposal: "/governance/proposals/",
+      get_treasury: "/governance/treasury",
+      get_gov_params: "/governance/params",
+      get_delegations: "/governance/delegations/",
+      get_validators: "/governance/validators",
+      get_votes: "/governance/votes/",
     };
 
     const post: Record<string, string> = {
@@ -82,6 +90,12 @@ export class HttpProvider implements Provider {
       send_raw_transaction: "/submit_tx",
       connect_peer: "/connect_peer",
       estimate_gas_post: "/estimate_gas",
+      // Governance POST endpoints
+      create_proposal: "/governance/proposals",
+      cast_vote: "/governance/vote",
+      delegate_stake: "/governance/delegate",
+      undelegate_stake: "/governance/undelegate",
+      execute_proposal: "/governance/proposals/execute/",
     };
 
     if (post[method]) {

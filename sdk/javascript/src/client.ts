@@ -12,6 +12,17 @@ import {
   NodeStatus,
   Account,
 } from "./types/client";
+import {
+  GovProposal,
+  GovVote,
+  TreasuryInfo,
+  GovParams,
+  DelegationInfo,
+  ValidatorInfo,
+  CreateProposalRequest,
+  VoteRequest,
+  GovStats,
+} from "./types/governance";
 import EventEmitter from "eventemitter3";
 
 export class ModularClient extends EventEmitter {
@@ -212,6 +223,99 @@ export class ModularClient extends EventEmitter {
       return response.status === "healthy";
     } catch {
       return false;
+    }
+  }
+
+  // Governance
+  async getProposals(): Promise<GovProposal[]> {
+    const response = await this.provider.request("get_proposals");
+    return response.proposals || [];
+  }
+
+  async getProposal(id: number): Promise<GovProposal | null> {
+    try {
+      const response = await this.provider.request("get_proposal", [id]);
+      return response.proposal || response;
+    } catch {
+      return null;
+    }
+  }
+
+  async createProposal(req: CreateProposalRequest): Promise<any> {
+    return await this.provider.request("create_proposal", [req]);
+  }
+
+  async vote(req: VoteRequest): Promise<any> {
+    return await this.provider.request("cast_vote", [req]);
+  }
+
+  async getVotes(proposalId: number): Promise<GovVote[]> {
+    const response = await this.provider.request("get_votes", [proposalId]);
+    return response.votes || [];
+  }
+
+  async getTreasury(): Promise<TreasuryInfo | null> {
+    try {
+      return await this.provider.request("get_treasury");
+    } catch {
+      return null;
+    }
+  }
+
+  async getGovParams(): Promise<GovParams | null> {
+    try {
+      return await this.provider.request("get_gov_params");
+    } catch {
+      return null;
+    }
+  }
+
+  async getDelegations(address: string): Promise<DelegationInfo[]> {
+    const response = await this.provider.request("get_delegations", [address]);
+    return response.delegations || [];
+  }
+
+  async delegate(delegator: string, validator: string, amount: string): Promise<any> {
+    return await this.provider.request("delegate_stake", [{ delegator, validator, amount }]);
+  }
+
+  async undelegate(delegator: string, validator: string, amount: string): Promise<any> {
+    return await this.provider.request("undelegate_stake", [{ delegator, validator, amount }]);
+  }
+
+  async getValidators(): Promise<ValidatorInfo[]> {
+    const response = await this.provider.request("get_validators");
+    return response.validators || [];
+  }
+
+  async executeProposal(proposalId: number): Promise<any> {
+    return await this.provider.request("execute_proposal", [proposalId]);
+  }
+
+  async getGovStats(): Promise<GovStats | null> {
+    try {
+      const [proposals, treasury, validators, params] = await Promise.all([
+        this.getProposals(),
+        this.getTreasury(),
+        this.getValidators(),
+        this.getGovParams(),
+      ]);
+      const activeProposals = proposals.filter((p) => p.status === "Active");
+      const activeValidators = validators.filter((v) => v.isActive);
+      const totalStaked = validators.reduce((sum, v) => sum + BigInt(v.stake || "0"), 0n).toString();
+      const totalVotes = proposals.reduce((sum, p) => sum + BigInt(p.yesVotes || "0") + BigInt(p.noVotes || "0"), 0n).toString();
+      return {
+        totalProposals: proposals.length,
+        activeProposals: activeProposals.length,
+        totalVotes: Number(totalVotes),
+        totalDelegators: 0,
+        totalStaked,
+        votingPower: "0",
+        inflationRate: params ? 100 / Number(params.votingPeriod) * 365 * 24 * 60 * 60 / 6 : 0,
+        activeValidators: activeValidators.length,
+      };
+    } catch {
+      return null;
     }
   }
 
