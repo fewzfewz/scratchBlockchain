@@ -1,0 +1,30 @@
+{
+  "name": "@modular-blockchain/cli",
+  "version": "1.0.0",
+  "description": "CLI tool for Modular Blockchain — init, deploy, generate, wallet, network",
+  "type": "module",
+  "bin": {
+    "modular": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm --clean",
+    "dev": "tsup src/index.ts --format esm --watch",
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "inquirer": "^9.2.12",
+    "ora": "^7.0.1",
+    "@modular-blockchain/sdk": "file:../../sdk/javascript"
+  },
+  "devDependencies": {
+    "tsup": "^7.2.0",
+    "typescript": "^5.3.3"
+  },
+  "files": [
+    "dist",
+    "templates"
+  ]
+}

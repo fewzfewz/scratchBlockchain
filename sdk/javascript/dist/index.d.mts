@@ -195,6 +195,107 @@ declare const EMPTY_ADDRESS = "0x0000000000000000000000000000000000000000";
 declare const NATIVE_TOKEN_SYMBOL = "NBL";
 declare const NATIVE_TOKEN_DECIMALS = 18;
 
+type ProposalStatus = "Active" | "Pending" | "Passed" | "Rejected" | "Executed" | "Failed";
+interface GovProposal {
+    id: number;
+    title: string;
+    description: string;
+    proposer: Address;
+    status: ProposalStatus;
+    yesVotes: string;
+    noVotes: string;
+    abstainVotes?: string;
+    startEpoch: number;
+    endEpoch: number;
+    deposit: string;
+    executed?: boolean;
+    executionData?: string;
+    actions?: GovAction[];
+}
+interface GovAction {
+    target: Address;
+    value: string;
+    signature: string;
+    calldata: string;
+}
+interface GovVote {
+    proposalId: number;
+    voter: Address;
+    support: "For" | "Against" | "Abstain";
+    weight: string;
+    reason?: string;
+    timestamp: number;
+}
+interface TreasuryInfo {
+    balance: string;
+    totalCollected: string;
+    totalSpent: string;
+    recentTransactions: TreasuryTransaction[];
+}
+interface TreasuryTransaction {
+    hash: string;
+    type: "deposit" | "spend" | "transfer";
+    amount: string;
+    from: Address;
+    to: Address;
+    reason: string;
+    timestamp: number;
+    height: number;
+}
+interface GovParams {
+    votingPeriod: number;
+    quorum: number;
+    proposalDeposit: string;
+    maxActions: number;
+    timelockPeriod: number;
+    minVotingPower: string;
+}
+interface DelegationInfo {
+    delegator: Address;
+    validator: Address;
+    amount: string;
+    rewards: string;
+    height: number;
+}
+interface ValidatorInfo {
+    address: Address;
+    publicKey: string;
+    stake: string;
+    commissionRate: number;
+    isActive: boolean;
+    blocksProduced: number;
+    blocksMissed: number;
+    delegatorCount: number;
+    totalDelegated: string;
+}
+interface CreateProposalRequest {
+    title: string;
+    description: string;
+    actions: GovAction[];
+    deposit: string;
+}
+interface VoteRequest {
+    proposalId: number;
+    support: "For" | "Against" | "Abstain";
+    voter: Address;
+    reason?: string;
+}
+interface DelegateRequest {
+    delegator: Address;
+    validator: Address;
+    amount: string;
+}
+interface GovStats {
+    totalProposals: number;
+    activeProposals: number;
+    totalVotes: number;
+    totalDelegators: number;
+    totalStaked: string;
+    votingPower: string;
+    inflationRate: number;
+    activeValidators: number;
+}
+
 declare class ModularClient extends EventEmitter {
     private provider;
     private options;
@@ -226,6 +327,19 @@ declare class ModularClient extends EventEmitter {
     getNodeStatus(): Promise<NodeStatus>;
     getMetrics(): Promise<string>;
     healthCheck(): Promise<boolean>;
+    getProposals(): Promise<GovProposal[]>;
+    getProposal(id: number): Promise<GovProposal | null>;
+    createProposal(req: CreateProposalRequest): Promise<any>;
+    vote(req: VoteRequest): Promise<any>;
+    getVotes(proposalId: number): Promise<GovVote[]>;
+    getTreasury(): Promise<TreasuryInfo | null>;
+    getGovParams(): Promise<GovParams | null>;
+    getDelegations(address: string): Promise<DelegationInfo[]>;
+    delegate(delegator: string, validator: string, amount: string): Promise<any>;
+    undelegate(delegator: string, validator: string, amount: string): Promise<any>;
+    getValidators(): Promise<ValidatorInfo[]>;
+    executeProposal(proposalId: number): Promise<any>;
+    getGovStats(): Promise<GovStats | null>;
     getProvider(): Provider;
 }
 
@@ -298,4 +412,4 @@ declare class WebSocketProvider extends EventEmitter implements Provider {
     private rejectAllPending;
 }
 
-export { Account, Address, BigNumberish, Block, BlockHeader, Bytes, ClientOptions, ConnectedWallet, Delegation, EMPTY_ADDRESS, EMPTY_HASH, EstimateGasResponse, FeeHistoryResponse, FinalizedBlockEvent, GasPriceResponse, Hash, HexString, HttpProvider, LogFilter, MempoolResponse, ModularClient, NATIVE_TOKEN_DECIMALS, NATIVE_TOKEN_SYMBOL, NewBlockEvent, NewTransactionEvent, NodeStatus, PeerInfo, Proposal, Provider, ProviderOptions, RPCError, RPCResponse, Subscription, Transaction, TransactionReceipt, TransactionRequest, Validator, Vote, Wallet, WebSocketProvider };
+export { Account, Address, BigNumberish, Block, BlockHeader, Bytes, ClientOptions, ConnectedWallet, CreateProposalRequest, DelegateRequest, Delegation, DelegationInfo, EMPTY_ADDRESS, EMPTY_HASH, EstimateGasResponse, FeeHistoryResponse, FinalizedBlockEvent, GasPriceResponse, GovAction, GovParams, GovProposal, GovStats, GovVote, Hash, HexString, HttpProvider, LogFilter, MempoolResponse, ModularClient, NATIVE_TOKEN_DECIMALS, NATIVE_TOKEN_SYMBOL, NewBlockEvent, NewTransactionEvent, NodeStatus, PeerInfo, Proposal, ProposalStatus, Provider, ProviderOptions, RPCError, RPCResponse, Subscription, Transaction, TransactionReceipt, TransactionRequest, TreasuryInfo, TreasuryTransaction, Validator, ValidatorInfo, Vote, VoteRequest, Wallet, WebSocketProvider };
