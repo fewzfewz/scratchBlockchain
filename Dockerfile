@@ -68,7 +68,7 @@ RUN apt-get update && \
     && apt-get clean
 
 # Create app user
-RUN adduser --disabled-password --gecos "" appuser
+RUN useradd -m -s /bin/sh appuser
 
 # Copy binary from builder
 COPY --from=builder /build/target/release/node /usr/local/bin/modular-node
