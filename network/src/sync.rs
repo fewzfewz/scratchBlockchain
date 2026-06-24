@@ -5,9 +5,9 @@
 //! - Warp sync (download from trusted checkpoint)
 //! - Historical block sync
 
-use common::types::{Block, BlockHash, Header};
+use common::types::{Block, Header};
 use libp2p::PeerId;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn, debug};
@@ -56,7 +56,7 @@ pub struct SyncManager {
     target_height: Arc<Mutex<Option<u64>>>,
     
     /// Pending block requests
-    pending_requests: HashMap<BlockHash, RequestInfo>,
+    pending_requests: HashMap<[u8; 32], RequestInfo>,
     
     /// Downloaded blocks (not yet applied)
     downloaded_blocks: HashMap<u64, Block>,
@@ -154,8 +154,9 @@ impl SyncManager {
         info!("Starting warp sync from checkpoint {} to {}", checkpoint, to);
         
         // Verify checkpoint
-        let checkpoint_block = self.request_block_at_height(checkpoint).await;
-        self.verify_checkpoint(&checkpoint_block);
+        if let Some(checkpoint_block) = self.request_block_at_height(checkpoint).await {
+            self.verify_checkpoint(&checkpoint_block);
+        }
         
         // Download from checkpoint to target
         for height in checkpoint..=to {

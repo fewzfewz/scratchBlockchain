@@ -1,5 +1,6 @@
 
 use common::types::{Block, Transaction};
+use consensus::bft::BftEngine;
 use consensus::FinalityGadget;
 use libp2p::{Multiaddr, PeerId};
 use mempool::Mempool;
@@ -67,10 +68,12 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("db");
 
+    use storage::MemDb;
     // Initialize components
     let block_store = Arc::new(BlockStore::new(db_path.join("blocks").to_str().unwrap()).unwrap());
-    let state_store = Arc::new(StateStore::new(db_path.join("state").to_str().unwrap()).unwrap());
-    let receipt_store = Arc::new(ReceiptStore::new(db_path.join("receipts").to_str().unwrap()).unwrap());
+    let state_store = Arc::new(StateStore::open(db_path.join("state").to_str().unwrap()).unwrap());
+    let receipt_kv: std::sync::Arc<storage::MemDb> = std::sync::Arc::new(storage::MemDb::new());
+    let receipt_store = Arc::new(ReceiptStore::new(receipt_kv));
     let mempool = Arc::new(Mempool::new(mempool::MempoolConfig::default()));
     
     // Create test validators
@@ -87,12 +90,12 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     let metrics = Arc::new(crate::metrics::Metrics::new());
 
     // Initialize network
-    let (mut network_service, network_cmd_sender, network_event_receiver) = NetworkService::new(vec![]).unwrap();
-    let peer_id = network_service.swarm.local_peer_id().clone();
+    let (mut network_service, network_cmd_sender, network_event_receiver) = NetworkService::new(vec![], "").unwrap();
+    let peer_id = network_service.local_peer_id().clone();
     
     // Listen on localhost
     let listen_addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}", p2p_port).parse().unwrap();
-    network_service.swarm.listen_on(listen_addr.clone()).unwrap();
+    network_cmd_sender.send(NetworkCommand::StartListening(listen_addr.clone())).await.unwrap();
 
     // Spawn network service
     tokio::spawn(async move {
@@ -118,21 +121,33 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
 
 
     // Start block producer (simplified for test)
-    use consensus::EnhancedConsensus;
+    use consensus::bft::BftEngine;
+    use execution::evm::EvmExecutor;
+    use crate::block_producer::{BlockExecutor, BlockProducerConfig};
     let signing_key = common::crypto::SigningKey::generate();
-    let consensus = Arc::new(Mutex::new(EnhancedConsensus::new(vec![consensus::ValidatorInfo {
+    let validators = vec![consensus::ValidatorInfo {
         public_key: signing_key.public_key(),
         stake: 100,
         slashed: false,
-    }])));
+    }];
+    let bft_engine = Arc::new(Mutex::new(BftEngine::new(
+        signing_key.public_key(),
+        validators,
+        1,
+        signing_key.clone(),
+    )));
+    let evm = EvmExecutor::new();
+    let chain_store = Arc::new(storage::ChainStore::new(Arc::new(storage::MemDb::new())));
+    let executor = BlockExecutor::new(evm, chain_store);
+    let validator_addr: [u8; 20] = <[u8; 20]>::try_from(&signing_key.public_key()[..20]).unwrap_or([0u8; 20]);
     
     let block_producer = crate::block_producer::BlockProducer::new(
         mempool.clone(),
-        consensus.clone(),
-        state_store.clone(),
-        block_store.clone(),
-        finality_gadget.clone(),
+        bft_engine,
+        executor,
         signing_key.clone(),
+        validator_addr,
+        BlockProducerConfig::default(),
     );
     
     // Note: BlockProducer doesn't have a start() method, 
@@ -179,8 +194,9 @@ pub fn create_mock_components() -> (
     let db_path = temp_dir.path();
     
     let block_store = Arc::new(BlockStore::new(db_path.join("blocks").to_str().unwrap()).unwrap());
-    let state_store = Arc::new(StateStore::new(db_path.join("state").to_str().unwrap()).unwrap());
-    let receipt_store = Arc::new(ReceiptStore::new(db_path.join("receipts").to_str().unwrap()).unwrap());
+    let state_store = Arc::new(StateStore::open(db_path.join("state").to_str().unwrap()).unwrap());
+    let receipt_kv: std::sync::Arc<storage::MemDb> = std::sync::Arc::new(storage::MemDb::new());
+    let receipt_store = Arc::new(ReceiptStore::new(receipt_kv));
     let mempool = Arc::new(Mempool::new(mempool::MempoolConfig::default()));
     
     // Create test validators

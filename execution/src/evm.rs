@@ -1,6 +1,6 @@
 use anyhow::Result;
 use revm::{
-    db::CacheDB,
+    db::{CacheDB, DatabaseRef},
     primitives::{
         AccountInfo, Address, Bytecode, Bytes, CreateScheme, ExecutionResult, Output,
         TransactTo, U256, B256,
@@ -35,8 +35,8 @@ pub struct StoredAccount {
 #[derive(Default)]
 pub struct InMemoryStore {
     accounts: RwLock<HashMap<Address, StoredAccount>>,
-    storage:  RwLock<HashMap<(Address, U256), U256>>,
-    code:     RwLock<HashMap<B256, Bytecode>>,
+    storage: RwLock<HashMap<(Address, U256), U256>>,
+    code: RwLock<HashMap<B256, Bytecode>>,
 }
 
 impl EvmStore for InMemoryStore {
@@ -47,7 +47,11 @@ impl EvmStore for InMemoryStore {
         self.accounts.write().unwrap().insert(address, account);
     }
     fn get_storage(&self, address: &Address, slot: &U256) -> Option<U256> {
-        self.storage.read().unwrap().get(&(*address, *slot)).copied()
+        self.storage
+            .read()
+            .unwrap()
+            .get(&(*address, *slot))
+            .copied()
     }
     fn put_storage(&self, address: Address, slot: U256, value: U256) {
         self.storage.write().unwrap().insert((address, slot), value);
@@ -76,7 +80,7 @@ impl EvmDb {
             block_hash_provider: None,
         }
     }
-    
+
     // FIX: Allow setting block hash provider for production
     pub fn with_block_hash_provider<F>(mut self, provider: F) -> Self
     where
@@ -104,10 +108,7 @@ impl Database for EvmDb {
     }
 
     fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        Ok(self
-            .store
-            .get_code(&code_hash)
-            .unwrap_or(Bytecode::new()))
+        Ok(self.store.get_code(&code_hash).unwrap_or(Bytecode::new()))
     }
 
     fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
@@ -118,7 +119,44 @@ impl Database for EvmDb {
     }
 
     fn block_hash(&mut self, number: U256) -> Result<B256, Self::Error> {
-        // FIX: Use provider if available, otherwise return zero
+        if let Some(provider) = &self.block_hash_provider {
+            let block_num: u64 = number.try_into().unwrap_or(0);
+            Ok(provider(block_num))
+        } else {
+            tracing::warn!("Block hash requested for {} but no provider set", number);
+            Ok(B256::ZERO)
+        }
+    }
+}
+
+impl DatabaseRef for EvmDb {
+    type Error = anyhow::Error;
+
+    fn basic(&self, address: Address) -> Result<Option<AccountInfo>, Self::Error> {
+        let info = self.store.get_account(&address).map(|a| {
+            let code = a.code_hash.and_then(|h| self.store.get_code(&h));
+            AccountInfo {
+                balance: a.balance,
+                nonce: a.nonce,
+                code_hash: a.code_hash.unwrap_or(revm::primitives::KECCAK_EMPTY),
+                code,
+            }
+        });
+        Ok(info)
+    }
+
+    fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
+        Ok(self.store.get_code(&code_hash).unwrap_or(Bytecode::new()))
+    }
+
+    fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
+        Ok(self
+            .store
+            .get_storage(&address, &index)
+            .unwrap_or(U256::ZERO))
+    }
+
+    fn block_hash(&self, number: U256) -> Result<B256, Self::Error> {
         if let Some(provider) = &self.block_hash_provider {
             let block_num: u64 = number.try_into().unwrap_or(0);
             Ok(provider(block_num))
@@ -182,7 +220,7 @@ pub struct SignedTransaction {
     pub gas_limit: u64,
     pub gas_price: U256,
     pub chain_id: u64,
-    pub signature: Option<[u8; 65]>,  // r, s, v
+    pub signature: Option<[u8; 65]>, // r, s, v
 }
 
 impl SignedTransaction {
@@ -208,7 +246,7 @@ impl SignedTransaction {
             signature: None,
         }
     }
-    
+
     // FIX: Add signature verification
     pub fn verify_signature(&self) -> Result<Address> {
         match &self.signature {
@@ -218,10 +256,10 @@ impl SignedTransaction {
                 let mut hash = Vec::new();
                 hash.extend_from_slice(&self.nonce.to_le_bytes());
                 hash.extend_from_slice(&self.gas_limit.to_le_bytes());
-                hash.extend_from_slice(&self.gas_price.to_le_bytes());
+                hash.extend_from_slice(&self.gas_price.to_le_bytes::<32>());
                 hash.extend_from_slice(&self.chain_id.to_le_bytes());
                 // ... full implementation would include all fields
-                
+
                 Ok(self.caller) // Placeholder
             }
             None => anyhow::bail!("Transaction not signed"),
@@ -241,9 +279,9 @@ pub struct EvmExecutor {
 impl EvmExecutor {
     pub fn new() -> Self {
         let store = Arc::new(InMemoryStore::default());
-        Self::with_store(store, 1)  // Default chain ID 1
+        Self::with_store(store, 1) // Default chain ID 1
     }
-    
+
     pub fn with_store(store: Arc<dyn EvmStore>, chain_id: u64) -> Self {
         let evm_db = EvmDb::new(store);
         Self {
@@ -251,19 +289,17 @@ impl EvmExecutor {
             chain_id,
         }
     }
-    
-    // FIX: Set block hash provider for historical lookups
+
     pub fn set_block_hash_provider<F>(&mut self, provider: F)
     where
         F: Fn(u64) -> B256 + Send + Sync + 'static,
     {
-        self.db.database = EvmDb::new(self.db.database.store.clone())
-            .with_block_hash_provider(provider);
+        self.db.db = EvmDb::new(self.db.db.store.clone()).with_block_hash_provider(provider);
     }
 
     pub fn set_balance(&mut self, address: &str, balance: u64) -> Result<()> {
-        let addr = Address::from_str(address)
-            .map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
+        let addr =
+            Address::from_str(address).map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
         self.db.insert_account_info(
             addr,
             AccountInfo {
@@ -275,20 +311,24 @@ impl EvmExecutor {
         );
         Ok(())
     }
-    
+
     // FIX: Add transaction validation before execution
     pub fn validate_transaction(&mut self, tx: &SignedTransaction) -> Result<()> {
         // 1. Check chain ID
         if tx.chain_id != self.chain_id {
-            anyhow::bail!("Invalid chain ID: expected {}, got {}", self.chain_id, tx.chain_id);
+            anyhow::bail!(
+                "Invalid chain ID: expected {}, got {}",
+                self.chain_id,
+                tx.chain_id
+            );
         }
-        
+
         // 2. Check signature
         let recovered = tx.verify_signature()?;
         if recovered != tx.caller {
             anyhow::bail!("Signature verification failed");
         }
-        
+
         // 3. Check nonce
         let account = self.db.basic(tx.caller)?;
         if let Some(acc) = account {
@@ -296,28 +336,32 @@ impl EvmExecutor {
                 anyhow::bail!("Invalid nonce: expected {}, got {}", acc.nonce, tx.nonce);
             }
         } else if tx.nonce != 0 {
-            anyhow::bail!("Invalid nonce for new account: expected 0, got {}", tx.nonce);
+            anyhow::bail!(
+                "Invalid nonce for new account: expected 0, got {}",
+                tx.nonce
+            );
         }
-        
+
         // 4. Check balance for gas + value
         let account = self.db.basic(tx.caller)?;
         let balance = account.map(|a| a.balance).unwrap_or(U256::ZERO);
         let total_cost = tx.value + (tx.gas_price * U256::from(tx.gas_limit));
         if balance < total_cost {
-            anyhow::bail!("Insufficient balance: need {}, have {}", total_cost, balance);
+            anyhow::bail!(
+                "Insufficient balance: need {}, have {}",
+                total_cost,
+                balance
+            );
         }
-        
+
         Ok(())
     }
-    
+
     // FIX: Execute transaction with validation
-    pub fn execute_transaction(
-        &mut self,
-        tx: SignedTransaction,
-    ) -> Result<TransactionReceipt> {
+    pub fn execute_transaction(&mut self, tx: SignedTransaction) -> Result<TransactionReceipt> {
         // Validate first
         self.validate_transaction(&tx)?;
-        
+
         let mut evm = EVM::new();
         evm.database(&mut self.db);
 
@@ -326,8 +370,8 @@ impl EvmExecutor {
         evm.env.tx.data = tx.data;
         evm.env.tx.gas_limit = tx.gas_limit;
         evm.env.tx.gas_price = tx.gas_price;
-        evm.env.tx.nonce = Some(tx.nonce);  // FIX: Set nonce
-        evm.env.tx.chain_id = Some(tx.chain_id);  // FIX: Set chain ID
+        evm.env.tx.nonce = Some(tx.nonce); // FIX: Set nonce
+        evm.env.tx.chain_id = Some(tx.chain_id); // FIX: Set chain ID
 
         if let Some(to_addr) = tx.to {
             evm.env.tx.transact_to = TransactTo::Call(to_addr);
@@ -394,11 +438,11 @@ impl EvmExecutor {
         }
         Ok(receipts)
     }
-    
+
     // Helper to get account nonce (for transaction construction)
     pub fn get_nonce(&mut self, address: &str) -> Result<u64> {
-        let addr = Address::from_str(address)
-            .map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
+        let addr =
+            Address::from_str(address).map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
         let account = self.db.basic(addr)?;
         Ok(account.map(|a| a.nonce).unwrap_or(0))
     }
@@ -414,7 +458,7 @@ impl Default for EvmExecutor {
 // Supporting types
 // =============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TransactionReceipt {
     pub success: bool,
     pub gas_used: u64,
@@ -433,7 +477,7 @@ mod tests {
     use super::*;
 
     const ALICE: &str = "0x0000000000000000000000000000000000000001";
-    const BOB:   &str = "0x0000000000000000000000000000000000000002";
+    const BOB: &str = "0x0000000000000000000000000000000000000002";
 
     fn make_test_tx(caller: &str, to: Option<&str>, value: u64, nonce: u64) -> SignedTransaction {
         let caller_addr = Address::from_str(caller).unwrap();
@@ -486,7 +530,7 @@ mod tests {
     fn test_invalid_nonce_rejected() {
         let mut executor = EvmExecutor::new();
         executor.set_balance(ALICE, 1_000_000).unwrap();
-        
+
         // Wrong nonce (should be 0, using 5)
         let tx = make_test_tx(ALICE, Some(BOB), 100, 5);
         let result = executor.execute_transaction(tx);
@@ -498,11 +542,11 @@ mod tests {
     fn test_nonce_increments() {
         let mut executor = EvmExecutor::new();
         executor.set_balance(ALICE, 1_000_000).unwrap();
-        
+
         // First tx with nonce 0
         let tx1 = make_test_tx(ALICE, Some(BOB), 100, 0);
         executor.execute_transaction(tx1).unwrap();
-        
+
         // Second tx must use nonce 1
         let tx2 = make_test_tx(ALICE, Some(BOB), 100, 1);
         let result = executor.execute_transaction(tx2);

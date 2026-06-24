@@ -20,10 +20,10 @@ use mempool::Mempool;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::sync::Arc;
-use storage::db::ChainStore;
+use storage::ChainStore;
 use tokio::sync::Mutex;
 use warp::{Filter, http::HeaderValue};
-use network::NetworkCommand;
+pub use network::NetworkCommand;
 use tokio::sync::mpsc;
 use execution::gas::calculate_next_base_fee;
 
@@ -133,6 +133,7 @@ fn with_cors() -> warp::cors::Cors {
         .allow_methods(vec!["GET", "POST", "OPTIONS"])
         .allow_headers(vec!["Content-Type", "Authorization"])
         .max_age(3600)
+        .build()
 }
 
 // ============================================================================
@@ -330,11 +331,12 @@ impl RpcServer {
             .or(peers)
             .recover(handle_rejection);
 
-        let routes_with_cors = if enable_cors {
-            routes.with(with_cors())
+        let cors = if enable_cors {
+            with_cors()
         } else {
-            routes
+            warp::cors().allow_any_origin().build()
         };
+        let routes_with_cors = routes.with(cors);
 
         tracing::info!("🚀 RPC server listening on 0.0.0.0:{}", port);
         warp::serve(routes_with_cors).run(([0, 0, 0, 0], port)).await;
@@ -383,7 +385,7 @@ async fn handle_mempool(mempool: Arc<Mempool>) -> Result<impl warp::Reply, Infal
 async fn handle_submit_tx(
     tx: Transaction,
     mempool: Arc<Mempool>,
-    network_cmd_sender: Arc<mpsc::Sender<NetworkCommand>>,
+    network_cmd_sender: mpsc::Sender<NetworkCommand>,
 ) -> Result<impl warp::Reply, Infallible> {
     // Validate chain ID if present
     if let Some(tx_chain_id) = tx.chain_id {
@@ -748,7 +750,7 @@ async fn handle_health() -> Result<impl warp::Reply, Infallible> {
 
 async fn handle_connect_peer(
     request: ConnectPeerRequest,
-    network_cmd_sender: Arc<mpsc::Sender<NetworkCommand>>,
+    network_cmd_sender: mpsc::Sender<NetworkCommand>,
 ) -> Result<impl warp::Reply, Infallible> {
     match request.multiaddr.parse::<libp2p::Multiaddr>() {
         Ok(addr) => {

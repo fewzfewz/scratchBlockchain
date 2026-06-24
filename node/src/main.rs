@@ -30,7 +30,7 @@ use rewards::{RewardManager, RewardConfig};
 // External imports
 use common::consensus_types::{ConsensusMessage, Proposal, Vote, Step};
 use common::traits::Consensus;
-use common::types::{Block, Transaction, BlockHash, Header};
+use common::types::{Block, Transaction, Header};
 use common::crypto::SigningKey;
 
 use consensus::bft::{BftEngine, BftEvent};
@@ -42,7 +42,7 @@ use network::{NetworkCommand, NetworkEvent, NetworkService};
 
 use mempool::Mempool;
 
-use storage::db::{ChainStore, ColumnFamily, WriteBatch};
+use storage::{ChainStore, ColumnFamily, WriteBatch};
 use storage::trie::PatriciaTrie;
 use storage::receipt_store::ReceiptStore;
 
@@ -131,9 +131,9 @@ enum Commands {
 struct BftPersistedState {
     height: u64,
     round: u64,
-    locked_block_hash: Option<BlockHash>,
+    locked_block_hash: Option<[u8; 32]>,
     locked_round: u64,
-    valid_block_hash: Option<BlockHash>,
+    valid_block_hash: Option<[u8; 32]>,
     valid_round: u64,
     last_saved: u64,
 }
@@ -178,15 +178,14 @@ struct Node {
     config: NodeConfig,
     chain_store: Arc<ChainStore>,
     receipt_store: Arc<ReceiptStore>,
-    state_trie: Arc<Mutex<MerklePatriciaTrie>>,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
     
     // Consensus
     bft_engine: Arc<Mutex<BftEngine>>,
     finality_gadget: Arc<Mutex<FinalityGadget>>,
     
     // Execution
-    evm_executor: EvmExecutor,
-    block_executor: BlockExecutor,
+    block_executor: Arc<Mutex<BlockExecutor>>,
     block_producer: Arc<Mutex<BlockProducer>>,
     
     // Economic components
@@ -238,15 +237,16 @@ impl Node {
             let genesis_config: common::types::GenesisConfig = serde_json::from_str(&genesis_content)?;
             
             // Initialize genesis accounts in state trie
-            for (address, account) in genesis_config.accounts {
-                let addr_bytes = hex::decode(address.trim_start_matches("0x"))?;
+            for account in genesis_config.accounts {
                 let account_json = serde_json::to_vec(&account)?;
-                state_trie.lock().await.insert(&addr_bytes, &account_json)?;
+                state_trie.lock().await.insert(&account.address, &account_json)?;
             }
             
             // Store genesis block
             let genesis_block = Block::genesis();
-            chain_store.put_block(&genesis_block)?;
+            let block_hash = genesis_block.hash();
+            let block_data = serde_json::to_vec(&genesis_block)?;
+            chain_store.put_block(&block_hash, &block_data)?;
             chain_store.set_latest_height(0)?;
         }
         
@@ -279,12 +279,12 @@ impl Node {
         // 6. Initialize Mempool
         // ================================================================
         let mempool_config = mempool::MempoolConfig {
-            max_size: config.security.max_tx_per_block * 2,
-            max_tx_size_bytes: config.security.max_tx_size_bytes,
-            min_fee_per_gas: 1,
-            chain_id: config.network.chain_id.clone(),
+            max_capacity: (config.security.max_tx_per_block * 2) as usize,
+            max_per_sender: 100,
+            min_fee_per_gas: 1_000_000_000,
+            chain_id: Some(1),
         };
-        let mempool = Arc::new(Mempool::new(mempool_config, chain_store.clone()));
+        let mempool = Arc::new(Mempool::new(mempool_config));
         
         // ================================================================
         // 7. Initialize BFT Engine
@@ -303,14 +303,10 @@ impl Node {
         let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators.clone())));
         
         // ================================================================
-        // 9. Initialize EVM Executor
+        // 9. Initialize Block Executor
         // ================================================================
-        let evm_executor = EvmExecutor::with_trie(state_trie.clone());
-        
-        // ================================================================
-        // 10. Initialize Block Executor
-        // ================================================================
-        let block_executor = BlockExecutor::new(evm_executor.clone(), chain_store.clone());
+        let block_executor = BlockExecutor::new(EvmExecutor::new(), chain_store.clone());
+        let block_executor = Arc::new(Mutex::new(block_executor));
         
         // ================================================================
         // 11. Initialize Block Producer
@@ -321,10 +317,11 @@ impl Node {
             target_gas_utilization: 0.5,
         };
         
+        let producer_executor = BlockExecutor::new(EvmExecutor::new(), chain_store.clone());
         let block_producer = Arc::new(Mutex::new(BlockProducer::new(
             mempool.clone(),
             bft_engine.clone(),
-            block_executor.clone(),
+            producer_executor,
             signing_key.clone(),
             public_key.clone().try_into().unwrap_or([0u8; 20]),
             block_producer_config,
@@ -357,7 +354,7 @@ impl Node {
         // Set network channel for block producer
         {
             let mut producer = block_producer.lock().await;
-            producer.set_network_channel(network_cmd_sender.clone());
+            producer.set_network_channel((*network_cmd_sender).clone());
         }
         
         // Spawn network task
@@ -381,7 +378,7 @@ impl Node {
             mempool.clone(),
             chain_store.clone(),
             metrics.clone(),
-            network_cmd_sender.clone(),
+            (*network_cmd_sender).clone(),
         );
         
         let rpc_port = config.network.rpc_port;
@@ -398,7 +395,6 @@ impl Node {
             state_trie,
             bft_engine,
             finality_gadget,
-            evm_executor,
             block_executor,
             block_producer,
             reward_manager,
@@ -417,9 +413,11 @@ impl Node {
         info!("🎉 Node fully initialized, starting consensus...");
         
         // Start first round
+        let current_round;
         let mut pending_events = {
             let mut engine = self.bft_engine.lock().await;
-            engine.start_round(engine.round)
+            current_round = engine.round;
+            engine.start_round(current_round)
         };
         
         let mut interval = interval(Duration::from_millis(1));
@@ -482,7 +480,7 @@ impl Node {
                 info!("🔒 Finalizing block at height {}", block.header.slot);
                 
                 // Execute and commit block
-                let receipts = self.block_executor.execute_and_commit(&block)?;
+                let receipts = self.block_executor.lock().await.execute_and_commit(&block)?;
                 
                 // Calculate total fees
                 let total_fees: u64 = receipts.iter()
@@ -573,7 +571,7 @@ impl Node {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match event {
             NetworkEvent::TransactionReceived(tx) => {
-                if let Err(e) = self.mempool.validate_and_add_transaction(tx).await {
+                if let Err(e) = self.mempool.add_transaction(tx) {
                     debug!("Transaction rejected: {}", e);
                 }
             }
@@ -600,14 +598,6 @@ impl Node {
                 info!("🔊 Network listening on {}", addr);
             }
             
-            NetworkEvent::PeerConnected(peer) => {
-                info!("Peer connected: {}", peer);
-            }
-            
-            NetworkEvent::PeerDisconnected(peer) => {
-                info!("Peer disconnected: {}", peer);
-            }
-            
             _ => {}
         }
         
@@ -621,7 +611,8 @@ impl Node {
         _source: libp2p::PeerId,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Check if we already have this block
-        if self.chain_store.contains_block(&block.hash())? {
+        let block_hash = block.hash();
+        if self.chain_store.get_block(&block_hash)?.is_some() {
             debug!("Block already known, ignoring");
             return Ok(());
         }
@@ -635,7 +626,7 @@ impl Node {
         }
         
         // Execute block
-        let receipts = self.block_executor.execute_and_commit(&block)?;
+        let receipts = self.block_executor.lock().await.execute_and_commit(&block)?;
         
         // Verify state root
         let computed_root = {
@@ -652,13 +643,13 @@ impl Node {
         let proposer = block.header.validator_set_id.to_le_bytes().to_vec();
         let voters = vec![];
         
-        {
+        let rewards = {
             let mut rm = self.reward_manager.lock().await;
-            let rewards = rm.process_block(&block, proposer, &voters, total_fees);
-            for (validator, amount) in rewards {
-                if amount > 0 {
-                    self.apply_reward(&validator, amount as u64).await?;
-                }
+            rm.process_block(&block, proposer, &voters, total_fees)
+        };
+        for (validator, amount) in rewards {
+            if amount > 0 {
+                self.apply_reward(&validator, amount as u64).await?;
             }
         }
         
@@ -676,9 +667,11 @@ impl Node {
     async fn get_latest_block(&self) -> Result<Block, Box<dyn std::error::Error>> {
         match self.chain_store.get_latest_height()? {
             Some(height) => {
-                self.chain_store
+                let data = self.chain_store
                     .get_block_by_height(height)?
-                    .ok_or_else(|| format!("Block not found at height {}", height).into())
+                    .ok_or_else(|| format!("Block not found at height {}", height))?;
+                let block: Block = serde_json::from_slice(&data)?;
+                Ok(block)
             }
             None => Ok(Block::genesis()),
         }
@@ -706,7 +699,7 @@ impl Node {
             None => common::types::Account::default(),
         };
         
-        account.balance += amount;
+        account.balance += amount as u128;
         trie.insert(&address, &serde_json::to_vec(&account)?)?;
         
         Ok(())
@@ -748,6 +741,8 @@ impl Node {
 // Helper Functions
 // ============================================================================
 
+use warp::Filter;
+
 /// Load or generate validator key
 fn load_or_generate_key(key_path: &PathBuf) -> Result<SigningKey, Box<dyn std::error::Error>> {
     if key_path.exists() {
@@ -756,7 +751,7 @@ fn load_or_generate_key(key_path: &PathBuf) -> Result<SigningKey, Box<dyn std::e
         let secret_hex = key_json["secret_key"].as_str().ok_or("Missing secret_key")?;
         let secret_bytes = hex::decode(secret_hex.trim())?;
         let secret_array: [u8; 32] = secret_bytes.as_slice().try_into()?;
-        Ok(SigningKey::from_bytes(&secret_array))
+        Ok(SigningKey::from_bytes(&secret_array)?)
     } else {
         let signing_key = SigningKey::generate();
         
@@ -794,41 +789,43 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
     };
     let faucet = Arc::new(Mutex::new(node::faucet::Faucet::new(config)));
     
-    let faucet_clone = faucet.clone();
-    let route = warp::post()
-        .and(warp::path("faucet"))
-        .and(warp::body::json())
-        .and_then(move |req: serde_json::Value| {
-            let faucet = faucet_clone.clone();
-            async move {
-                let address = match req.get("address").and_then(|v| v.as_str()) {
-                    Some(addr) => addr,
-                    None => return Ok(warp::reply::json(&serde_json::json!({ "error": "Missing address" }))),
-                };
-                
-                let addr_bytes = match hex::decode(address.strip_prefix("0x").unwrap_or(address)) {
-                    Ok(bytes) => bytes,
-                    Err(_) => return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid hex" }))),
-                };
-                
-                let addr_array: [u8; 20] = match addr_bytes.try_into() {
-                    Ok(arr) => arr,
-                    Err(_) => return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid address length" }))),
-                };
-                
-                let mut faucet_guard = faucet.lock().await;
-                match faucet_guard.request_tokens(addr_array) {
-                    Ok(amount) => {
-                        info!("💸 Dripped {} tokens to {}", amount, address);
-                        Ok(warp::reply::json(&serde_json::json!({ 
-                            "status": "success", 
-                            "amount": amount.to_string()
-                        })))
+    let route = {
+        let faucet = faucet.clone();
+        warp::path("faucet")
+            .and(warp::post())
+            .and(warp::body::json())
+            .and_then(move |req: serde_json::Value| {
+                let faucet = faucet.clone();
+                async move {
+                    let address = match req.get("address").and_then(|v| v.as_str()) {
+                        Some(addr) => addr,
+                        None => return Ok::<warp::reply::Json, warp::Rejection>(warp::reply::json(&serde_json::json!({ "error": "Missing address" }))),
+                    };
+                    
+                    let addr_bytes = match hex::decode(address.strip_prefix("0x").unwrap_or(address)) {
+                        Ok(bytes) => bytes,
+                        Err(_) => return Ok::<warp::reply::Json, warp::Rejection>(warp::reply::json(&serde_json::json!({ "error": "Invalid hex" }))),
+                    };
+                    
+                    let addr_array: [u8; 20] = match addr_bytes.try_into() {
+                        Ok(arr) => arr,
+                        Err(_) => return Ok::<warp::reply::Json, warp::Rejection>(warp::reply::json(&serde_json::json!({ "error": "Invalid address length" }))),
+                    };
+                    
+                    let mut faucet_guard = faucet.lock().await;
+                    match faucet_guard.request_tokens(addr_array) {
+                        Ok(amount) => {
+                            info!("💸 Dripped {} tokens to {}", amount, address);
+                            Ok::<warp::reply::Json, warp::Rejection>(warp::reply::json(&serde_json::json!({ 
+                                "status": "success", 
+                                "amount": amount.to_string()
+                            })))
+                        }
+                        Err(e) => Ok::<warp::reply::Json, warp::Rejection>(warp::reply::json(&serde_json::json!({ "error": e }))),
                     }
-                    Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
                 }
-            }
-        });
+            })
+    };
     
     info!("🌊 Faucet listening on http://0.0.0.0:3000/faucet");
     warp::serve(route).run(([0, 0, 0, 0], 3000)).await;
@@ -844,7 +841,6 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
     tracing_subscriber::fmt()
-        .with_env_filter("modular_node=info,libp2p=warn")
         .with_target(true)
         .with_thread_ids(true)
         .init();

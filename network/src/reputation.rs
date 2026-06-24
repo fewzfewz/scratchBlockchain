@@ -8,10 +8,8 @@
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs;
-use std::path::Path;
 use std::time::{Duration, Instant};
-use tracing::{info, warn};
+use tracing::info;
 
 /// Peer reputation score
 /// Range: -100 to 100

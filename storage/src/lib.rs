@@ -101,6 +101,21 @@ mod sled_legacy {
         fn contains(&self, key: &[u8]) -> Result<bool, Box<dyn Error>> {
             Ok(self.db.contains_key(key)?)
         }
+        fn delete(&self, key: &[u8]) -> Result<(), Box<dyn Error>> {
+            self.db.remove(key)?;
+            self.db.flush()?;
+            Ok(())
+        }
+        fn write_batch(&self, operations: Vec<(Vec<u8>, Option<Vec<u8>>)>) -> Result<(), Box<dyn Error>> {
+            for (key, value) in operations {
+                match value {
+                    Some(v) => { self.db.insert(key, v)?; }
+                    None => { self.db.remove(key)?; }
+                }
+            }
+            self.db.flush()?;
+            Ok(())
+        }
     }
 }
 
@@ -304,6 +319,7 @@ pub fn init() {
 #[cfg(feature = "sled-legacy")]
 pub mod block_store {
     use super::sled_legacy::PersistentStore;
+    use common::traits::Storage;
     use std::error::Error;
 
     pub struct BlockStore {

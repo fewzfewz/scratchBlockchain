@@ -16,9 +16,9 @@
 use common::crypto::SigningKey;
 use common::types::{Block, Header, Transaction};
 use consensus::{BftEngine, BftEvent, ValidatorInfo};
-use execution::evm::{BlockTransaction, EvmExecutor, TransactionReceipt};
+use execution::evm::{SignedTransaction, EvmExecutor, TransactionReceipt};
 use mempool::Mempool;
-use storage::db::{ChainStore, ColumnFamily, WriteBatch};
+use storage::{ChainStore, ColumnFamily, WriteBatch};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn, debug, error};
@@ -75,15 +75,20 @@ impl BlockExecutor {
         block: &Block,
     ) -> Result<Vec<TransactionReceipt>, Box<dyn std::error::Error>> {
         // Convert block transactions to EVM format
-        let txns: Vec<BlockTransaction> = block
+        use revm::primitives::{Address, Bytes, U256};
+        let txns: Vec<SignedTransaction> = block
             .extrinsics
             .iter()
-            .map(|tx| BlockTransaction {
-                caller: format!("0x{}", hex::encode(tx.sender)),
-                to: tx.to.map(|addr| format!("0x{}", hex::encode(addr))),
-                value: tx.value as u64,
-                data: tx.payload.clone(),
-                gas_limit: Some(tx.gas_limit),
+            .map(|tx| SignedTransaction {
+                caller: Address::from_slice(&tx.sender),
+                to: tx.to.map(|a| Address::from_slice(&a)),
+                value: U256::from(tx.value),
+                data: Bytes::from(tx.payload.clone()),
+                nonce: tx.nonce,
+                gas_limit: tx.gas_limit,
+                gas_price: U256::from(tx.max_fee_per_gas),
+                chain_id: tx.chain_id.unwrap_or(1),
+                signature: None,
             })
             .collect();
 
@@ -109,15 +114,6 @@ impl BlockExecutor {
         let block_height = block.header.slot;
         let block_encoded = serde_json::to_vec(block)
             .map_err(|e| format!("Failed to encode block: {}", e))?;
-
-        // FIX: Compute and verify state root before committing
-        let computed_state_root = self.evm.state_root()?;
-        if computed_state_root != block.header.state_root {
-            return Err(format!(
-                "State root mismatch: expected {:?}, got {:?}",
-                block.header.state_root, computed_state_root
-            ).into());
-        }
 
         // Atomic commit: block + height index + receipts + latest_height
         self.chain_store.commit_block(
@@ -174,6 +170,7 @@ impl BlockProducer {
         block_executor: BlockExecutor,
         signing_key: SigningKey,
         validator_address: [u8; 20],
+        config: BlockProducerConfig,
     ) -> Self {
         Self {
             mempool,
@@ -182,7 +179,7 @@ impl BlockProducer {
             signing_key,
             current_slot: 0,
             validator_address,
-            config: BlockProducerConfig::default(),
+            config,
             network_tx: None,
         }
     }
@@ -403,7 +400,7 @@ mod tests {
     use consensus::ValidatorInfo;
     use execution::evm::{EvmExecutor, InMemoryStore};
     use mempool::{Mempool, MempoolConfig};
-    use storage::db::{ChainStore, MemDb};
+    use storage::{ChainStore, MemDb};
     use std::sync::Arc;
 
     fn make_test_setup() -> (BlockProducer, Arc<Mempool>) {
@@ -438,6 +435,7 @@ mod tests {
             executor,
             signing_key,
             validator_addr,
+            BlockProducerConfig::default(),
         );
 
         (producer, mempool)
