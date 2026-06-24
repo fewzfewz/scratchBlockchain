@@ -11,9 +11,11 @@ services:
     ports:
       - "9933:9933"   # RPC
       - "30333:30333" # P2P
+    command: ["start", "--config", "/config/testnet.toml"]
     volumes:
       - node1-data:/data
       - ./config:/config:ro
+      - ./genesis.json:/genesis.json:ro
     environment:
       - NODE_NAME=node1
       - RUST_LOG=info
@@ -40,9 +42,11 @@ services:
     ports:
       - "9934:9933"   # RPC
       - "30334:30333" # P2P
+    command: ["start", "--config", "/config/testnet.toml"]
     volumes:
       - node2-data:/data
       - ./config:/config:ro
+      - ./genesis.json:/genesis.json:ro
     environment:
       - NODE_NAME=node2
       - RUST_LOG=info
@@ -71,9 +75,11 @@ services:
     ports:
       - "9935:9933"   # RPC
       - "30335:30333" # P2P
+    command: ["start", "--config", "/config/testnet.toml"]
     volumes:
       - node3-data:/data
       - ./config:/config:ro
+      - ./genesis.json:/genesis.json:ro
     environment:
       - NODE_NAME=node3
       - RUST_LOG=info
