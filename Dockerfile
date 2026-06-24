@@ -57,9 +57,9 @@ RUN apt-get update && \
 RUN cargo build --release -p node
 
 # Runtime image - use minimal base
-FROM debian:bookworm-slim
+FROM rust:1.90-slim
 
-# Install only runtime dependencies
+# Install only runtime dependencies needed by the binary
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
