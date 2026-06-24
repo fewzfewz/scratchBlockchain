@@ -247,6 +247,7 @@ impl Node {
             let block_hash = genesis_block.hash();
             let block_data = serde_json::to_vec(&genesis_block)?;
             chain_store.put_block(&block_hash, &block_data)?;
+            chain_store.put_block_height(0, &block_hash)?;
             chain_store.set_latest_height(0)?;
         }
         
