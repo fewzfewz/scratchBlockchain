@@ -56,11 +56,11 @@ impl UserOperation {
             payload: self.call_data.clone(),
             signature: self.signature.clone(),
             gas_limit: self.call_gas_limit + self.verification_gas_limit,
-            max_fee_per_gas: 1_000_000_000, // Default 1 Gwei
+            max_fee_per_gas: 1_000_000_000,        // Default 1 Gwei
             max_priority_fee_per_gas: 100_000_000, // Default 0.1 Gwei
-            chain_id: Some(1), // Default chain ID
-            to: None, // Account abstraction doesn't have explicit 'to'
-            value: 0, // Value is in call_data
+            chain_id: Some(1),                     // Default chain ID
+            to: None,                              // Account abstraction doesn't have explicit 'to'
+            value: 0,                              // Value is in call_data
         }
     }
 }
@@ -109,8 +109,7 @@ impl Bundler {
     /// Remove operations that have been included
     pub fn remove_operations(&mut self, ops: &[UserOperation]) {
         let op_hashes: Vec<[u8; 32]> = ops.iter().map(|op| op.hash()).collect();
-        self.operations
-            .retain(|op| !op_hashes.contains(&op.hash()));
+        self.operations.retain(|op| !op_hashes.contains(&op.hash()));
     }
 
     /// Get number of pending operations

@@ -184,6 +184,16 @@ pub struct LoggingConfig {
     pub file_path: String,
 }
 
+impl Default for LoggingConfig {
+    fn default() -> Self {
+        Self {
+            level: default_log_level(),
+            format: default_log_format(),
+            file_path: String::new(),
+        }
+    }
+}
+
 /// Security configuration
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct SecurityConfig {
@@ -206,6 +216,18 @@ pub struct SecurityConfig {
     /// Maximum gas per block (default: 30 million)
     #[serde(default = "default_max_gas_per_block")]
     pub max_gas_per_block: u64,
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            max_tx_size_bytes: default_max_tx_size_bytes(),
+            max_block_size_bytes: default_max_block_size_bytes(),
+            max_tx_per_block: default_max_tx_per_block(),
+            dos_protection_enabled: default_true(),
+            max_gas_per_block: default_max_gas_per_block(),
+        }
+    }
 }
 
 // ============================================================================

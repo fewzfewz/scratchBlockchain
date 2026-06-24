@@ -8,17 +8,17 @@ impl GasCosts {
     pub const TRANSACTION: u64 = 21_000;
     pub const CREATE: u64 = 32_000;
     pub const CALL: u64 = 700;
-    
+
     // Memory operations
     pub const MEMORY_WORD: u64 = 3;
     pub const MEMORY_EXPANSION: u64 = 512;
-    
+
     // Storage operations
     pub const SLOAD: u64 = 2_100;
     pub const SSTORE_SET: u64 = 20_000;
     pub const SSTORE_RESET: u64 = 5_000;
     pub const SSTORE_REFUND: u64 = 15_000;
-    
+
     // Computational operations
     pub const ADD: u64 = 3;
     pub const MUL: u64 = 5;
@@ -28,13 +28,13 @@ impl GasCosts {
     pub const EXP: u64 = 10;
     pub const SHA3: u64 = 30;
     pub const SHA3_WORD: u64 = 6;
-    
+
     // Account operations
     pub const BALANCE: u64 = 700;
     pub const EXTCODESIZE: u64 = 700;
     pub const EXTCODECOPY: u64 = 700;
     pub const BLOCKHASH: u64 = 20;
-    
+
     // Logging
     pub const LOG: u64 = 375;
     pub const LOG_TOPIC: u64 = 375;
@@ -61,8 +61,12 @@ impl GasMeter {
     /// Consume gas for an operation
     pub fn consume(&mut self, amount: u64) -> Result<()> {
         if self.gas_used + amount > self.gas_limit {
-            return Err(anyhow!("Out of gas: used {} + {} > limit {}", 
-                self.gas_used, amount, self.gas_limit));
+            return Err(anyhow!(
+                "Out of gas: used {} + {} > limit {}",
+                self.gas_used,
+                amount,
+                self.gas_limit
+            ));
         }
         self.gas_used += amount;
         Ok(())
@@ -111,7 +115,7 @@ pub fn calculate_next_base_fee(
     }
 
     let gas_used_ratio = parent_gas_used as f64 / parent_gas_limit as f64;
-    
+
     if gas_used_ratio > TARGET_GAS_USED {
         // Increase base fee
         let delta = parent_base_fee / BASE_FEE_MAX_CHANGE_DENOMINATOR;
@@ -134,15 +138,15 @@ mod tests {
     #[test]
     fn test_gas_meter_basic() {
         let mut meter = GasMeter::new(100);
-        
+
         assert!(meter.consume(50).is_ok());
         assert_eq!(meter.used(), 50);
         assert_eq!(meter.remaining(), 50);
-        
+
         assert!(meter.consume(50).is_ok());
         assert_eq!(meter.used(), 100);
         assert_eq!(meter.remaining(), 0);
-        
+
         // Should fail - out of gas
         assert!(meter.consume(1).is_err());
     }
@@ -152,7 +156,7 @@ mod tests {
         let mut meter = GasMeter::new(100);
         meter.consume(80).unwrap();
         meter.refund(20);
-        
+
         // Refund capped at 50% of gas used
         // Used: 80. Max refund: 40. Actual refund: 20.
         // Final: 80 - 20 = 60.
@@ -164,11 +168,11 @@ mod tests {
         // Block half full - base fee stays same
         let base_fee = calculate_next_base_fee(5_000_000, 10_000_000, 1_000_000_000);
         assert_eq!(base_fee, 1_000_000_000);
-        
+
         // Block more than half full - base fee increases
         let base_fee = calculate_next_base_fee(8_000_000, 10_000_000, 1_000_000_000);
         assert!(base_fee > 1_000_000_000);
-        
+
         // Block less than half full - base fee decreases
         let base_fee = calculate_next_base_fee(2_000_000, 10_000_000, 1_000_000_000);
         assert!(base_fee < 1_000_000_000);

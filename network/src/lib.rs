@@ -32,6 +32,7 @@ pub mod peer_store;
 pub mod protocol;
 pub mod rate_limiter;
 pub mod reputation;
+pub mod sync;
 mod transport;
 
 use behaviour::NodeBehaviour;
@@ -42,8 +43,7 @@ use libp2p::{
     connection_limits,
     gossipsub::{self, IdentTopic, MessageAuthenticity, ValidationMode},
     identity,
-    kad::{store::MemoryStore, Behaviour as Kademlia, KademliaConfig},
-    multiaddr::Protocol,
+    kad::{store::MemoryStore, Behaviour as Kademlia, Config as KademliaConfig},
     request_response::{self, ProtocolSupport, ResponseChannel},
     swarm::{Config, SwarmEvent},
     Multiaddr, PeerId, Swarm,
@@ -59,7 +59,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex as TokioMutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // ============================================================================
 // Gossipsub Topics - Each message type gets its own topic for isolation
@@ -181,6 +181,9 @@ pub enum NetworkCommand {
 pub struct NetworkService {
     /// libp2p swarm that manages all protocols
     swarm: Swarm<NodeBehaviour>,
+
+    /// Local peer ID (stored separately because Swarm::local_peer_id is private)
+    local_peer_id: PeerId,
     
     /// Channel for receiving commands from the node
     command_receiver: mpsc::Receiver<NetworkCommand>,
@@ -278,8 +281,8 @@ impl NetworkService {
         // ====================================================================
         // Request-Response Configuration - For block synchronization
         // ====================================================================
-        let request_response_config = request_response::Config::default()
-            .with_request_timeout(Duration::from_secs(30));  // 30 second timeout for block requests
+        let mut request_response_config = request_response::Config::default();
+        request_response_config.set_request_timeout(Duration::from_secs(30));  // 30 second timeout for block requests
 
         let request_response = request_response::Behaviour::new(
             iter::once((BlockExchangeProtocol(), ProtocolSupport::Full)),
@@ -337,6 +340,7 @@ impl NetworkService {
         // Create the service
         let mut service = Self {
             swarm,
+            local_peer_id,
             command_receiver,
             event_sender,
             pending_requests: HashSet::new(),
@@ -694,7 +698,7 @@ impl NetworkService {
                     .request_response
                     .send_response(channel, BlockResponse { blocks })
                 {
-                    warn!("Failed to send block response: {}", e);
+                    warn!("Failed to send block response: {:?}", e);
                 }
             }
             
@@ -787,6 +791,7 @@ impl NetworkService {
     }
     
     /// Load reputation data from disk
+    #[allow(dead_code)]
     fn load_reputation(&mut self) -> Result<(), Box<dyn Error>> {
         if let Ok(data) = std::fs::read_to_string(&self.reputation_file) {
             let reputation_data: serde_json::Value = serde_json::from_str(&data)?;
@@ -800,18 +805,20 @@ impl NetworkService {
     fn reconnect_known_peers(&mut self) {
         let mut seen = HashSet::new();
         
-        // Connect to bootstrap nodes
-        for addr in &self.bootstrap_addresses {
+        // Clone to avoid borrow conflict with try_dial_known_addr
+        let bootstrap_addresses = self.bootstrap_addresses.clone();
+        for addr in &bootstrap_addresses {
             if seen.insert(addr.to_string()) {
                 self.try_dial_known_addr(addr.clone());
             }
         }
         
         // Connect to saved peers
-        for addr in self.peer_store.get_peers() {
+        let peer_addresses = self.peer_store.get_peers();
+        for addr in &peer_addresses {
             let addr_str = addr.to_string();
             if seen.insert(addr_str) {
-                self.try_dial_known_addr(addr);
+                self.try_dial_known_addr(addr.clone());
             }
         }
     }
@@ -858,7 +865,7 @@ impl NetworkService {
     
     /// Get the local peer ID
     pub fn local_peer_id(&self) -> PeerId {
-        *self.swarm.local_peer_id()
+        self.local_peer_id
     }
     
     /// Get number of connected peers

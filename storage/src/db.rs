@@ -591,9 +591,9 @@ pub mod rocks {
             // Bloom filters for fast point lookups
             let mut cf_opts = Options::default();
             if config.enable_bloom_filters {
-                let mut bloom_opts = rocksdb::BloomFilterOptions::default();
-                bloom_opts.set_bits_per_key(10.0);
-                cf_opts.set_bloom_filter(&bloom_opts);
+                let mut bb_opts = rocksdb::BlockBasedOptions::default();
+                bb_opts.set_bloom_filter(10.0, false);
+                cf_opts.set_block_based_table_factory(&bb_opts);
             }
             cf_opts.set_write_buffer_size(config.write_buffer_size_mb * 1024 * 1024);
             
@@ -745,12 +745,13 @@ pub mod rocks {
             end_key: &[u8],
         ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
             let handle = self.cf_handle(cf)?;
+            let end_key_owned = end_key.to_vec();
             let iter = self.db.iterator_cf(handle, IteratorMode::From(start_key, Direction::Forward));
             
             let mapped = iter
-                .take_while(|item| {
+                .take_while(move |item| {
                     if let Ok((key, _)) = item {
-                        key.as_ref() <= end_key
+                        key.as_ref() <= end_key_owned.as_slice()
                     } else {
                         false
                     }
@@ -765,7 +766,7 @@ pub mod rocks {
         
         fn flush(&self) -> Result<(), Box<dyn Error>> {
             self.db
-                .flush_wal()
+                .flush_wal(true)
                 .map_err(|e| DbError::new(format!("RocksDB flush error: {}", e)))?;
             Ok(())
         }
