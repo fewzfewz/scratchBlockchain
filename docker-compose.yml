@@ -11,7 +11,7 @@ services:
     ports:
       - "9933:9933"   # RPC
       - "30333:30333" # P2P
-    command: ["start", "--config", "/config/testnet.toml"]
+    command: ["start", "--config", "/config/testnet.toml", "--genesis", "/genesis.json"]
     volumes:
       - node1-data:/data
       - ./config:/config:ro
@@ -42,7 +42,7 @@ services:
     ports:
       - "9934:9933"   # RPC
       - "30334:30333" # P2P
-    command: ["start", "--config", "/config/testnet.toml"]
+    command: ["start", "--config", "/config/testnet.toml", "--genesis", "/genesis.json"]
     volumes:
       - node2-data:/data
       - ./config:/config:ro
@@ -75,7 +75,7 @@ services:
     ports:
       - "9935:9933"   # RPC
       - "30335:30333" # P2P
-    command: ["start", "--config", "/config/testnet.toml"]
+    command: ["start", "--config", "/config/testnet.toml", "--genesis", "/genesis.json"]
     volumes:
       - node3-data:/data
       - ./config:/config:ro
