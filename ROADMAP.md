@@ -2,11 +2,16 @@
 
 ## 🎯 Project Status: **Development** → **Testnet Preparation**
 
+**Last Updated**: June 25, 2026  
+**Node RPC**: `http://localhost:9933`  
+**Frontend SPA**: `http://localhost:5173` (9 pages, dark/light mode)  
+**API Docs**: Interactive Swagger UI at `/api-docs`
+
 This document outlines the journey from our current development codebase to a fully functional public mainnet.
 
 ---
 
-## ⚠️ Phase 1-8: CODE WRITTEN (Compilation Fixes + Integration Needed)
+## ⚠️ Phase 1-8: Core Infrastructure (COMPILED + INTEGRATED)
 
 ### Core Infrastructure ✅
 - [x] High-performance Rust node implementation
@@ -31,9 +36,15 @@ This document outlines the journey from our current development codebase to a fu
 - [x] Backup and restore procedures
 
 ### User Interfaces ✅
-- [x] **Block Explorer** - Real-time blockchain visualization
-- [x] **Web Wallet** - Ed25519 key management and transaction signing
-- [x] **Documentation Site** - Comprehensive API reference
+- [x] **Unified SPA** — React app with 9 pages (Wallet, Explorer, Faucet, Governance, Docs, API Docs, SDK Portal, Dev Portal, Home)
+- [x] **Wallet** — Ed25519 key generation, address derivation, tx signing, balance/nonce queries
+- [x] **Explorer** — Dashboard, validators list, staking tab
+- [x] **Faucet** — Direct node RPC integration, no separate backend process
+- [x] **Governance** — Proposal creation/voting with light/dark mode
+- [x] **API Docs** — Interactive Swagger UI for all 17 RPC endpoints
+- [x] **Docs** — Human-readable reference with curl examples
+- [x] **Dark/Light Theme** — Toggle persisted in localStorage, CSS variables
+- [x] **Mobile Responsive** — Hamburger menu sidebar
 
 ### Tokenomics & Governance (Basic) ✅
 - [x] Block reward distribution (inflation)
@@ -298,16 +309,15 @@ This document outlines the journey from our current development codebase to a fu
 
 ## 📞 Contact & Resources
 
-- **GitHub**: [Your Repository URL]
-- **Discord**: [Your Discord Server]
-- **Twitter**: [Your Twitter Handle]
-- **Documentation**: `docs/index.html`
-- **Block Explorer**: `explorer/index.html`
+- **GitHub**: [github.com/anomalyco/scratchBlockchain]
+- **Frontend**: `http://localhost:5173`
+- **Node RPC**: `http://localhost:9933` (17 endpoints)
+- **API Docs**: `http://localhost:5173/api-docs` (interactive Swagger UI)
 
 ---
 
-**Last Updated**: June 16, 2026  
-**Current Phase**: Phase 1-8 Code Written (Compilation Fixes Needed), Phase 9-15 Not Started
+**Last Updated**: June 25, 2026  
+**Current Phase**: Core infrastructure compiled, UIs built, RPC endpoints live — testnet preparation
 
 ---
 

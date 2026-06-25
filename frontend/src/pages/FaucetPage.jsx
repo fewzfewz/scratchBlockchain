@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Droplets, CheckCircle, AlertCircle, Clock, Copy, WifiOff } from 'lucide-react'
 
-const FAUCET_URL = 'http://localhost:3006'
+const RPC_URL = 'http://localhost:9933'
 const DRIP_AMOUNT = 100
 const COOLDOWN_MS = 24 * 60 * 60 * 1000
 
@@ -18,8 +18,8 @@ export default function FaucetPage() {
   const [backendOnline, setBackendOnline] = useState(true)
 
   useEffect(() => {
-    window.fetch(`${FAUCET_URL}/faucet`, { method: 'OPTIONS' })
-      .then(() => setBackendOnline(true))
+    window.fetch(`${RPC_URL}/health`)
+      .then(r => { if (r.ok) setBackendOnline(true); else setBackendOnline(false) })
       .catch(() => setBackendOnline(false))
   }, [])
 
@@ -52,15 +52,17 @@ export default function FaucetPage() {
     setStatusType('info')
     try {
       if (backendOnline) {
-        const res = await window.fetch(`${FAUCET_URL}/faucet`, {
+        const res = await window.fetch(`${RPC_URL}/faucet/request`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ address }),
         })
         const data = await res.json()
-        if (!res.ok || data.status !== 'success') {
-          throw new Error(data.error || 'Request failed')
+        if (data.error) {
+          throw new Error(data.error)
         }
+      } else {
+        throw new Error('Node not reachable')
       }
       const newRemaining = remaining - 1
       const newTotal = totalDistributed + DRIP_AMOUNT
@@ -112,7 +114,7 @@ export default function FaucetPage() {
         {!backendOnline && (
           <div className="mb-4 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Faucet backend not detected at {FAUCET_URL}. Using local simulation — tokens won't be reflected on-chain. Start the faucet server with: <code className="text-xs font-mono">cargo run --bin node faucet</code></span>
+            <span>Node not reachable at {RPC_URL}. Start the node first.</span>
           </div>
         )}
 
