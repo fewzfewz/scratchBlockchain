@@ -372,6 +372,17 @@ impl RpcServer {
             .and(with_arc(chain_store.clone()))
             .and_then(|address, _, chain_store| handle_delegations(address, chain_store));
 
+        // POST /faucet/request - Request test tokens (directly credits the account)
+        let faucet_request = warp::path!("faucet" / "request")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, req: serde_json::Value, chain_store: Arc<ChainStore>| async move {
+                handle_faucet_request(req, chain_store).await
+            });
+
         // ====================================================================
         // Combine Routes with CORS
         // ====================================================================
@@ -389,6 +400,7 @@ impl RpcServer {
             .or(fee_history)
             .or(validators)
             .or(delegations)
+            .or(faucet_request)
             .or(metrics_route)
             .or(health)
             .or(connect_peer)
@@ -924,6 +936,58 @@ async fn handle_delegations(
             Ok(warp::reply::json(&DelegationsResponse { delegations: vec![], address: address_str }))
         }
     }
+}
+
+// ============================================================================
+// Faucet Handler
+// ============================================================================
+
+/// Directly credit an account with test tokens (dev faucet, no transaction needed)
+async fn handle_faucet_request(
+    req: serde_json::Value,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let address = match req.get("address").and_then(|v| v.as_str()) {
+        Some(addr) => addr.trim_start_matches("0x"),
+        None => return Ok(warp::reply::json(&serde_json::json!({"error": "Missing address"}))),
+    };
+
+    let addr_bytes = match hex::decode(address) {
+        Ok(b) if b.len() == 20 => b,
+        _ => return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid address"}))),
+    };
+
+    let drip_amount: u128 = req.get("amount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000_000_000_000_000_000u128); // default 100 tokens
+
+    // Read current account state
+    let mut balance = 0u128;
+    if let Ok(Some(encoded)) = chain_store.get_state(&addr_bytes) {
+        if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
+            if let Some(b) = acc.get("balance").and_then(|v| v.as_str()) {
+                balance = b.parse::<u128>().unwrap_or(0);
+            }
+        }
+    }
+
+    balance += drip_amount;
+
+    let account = serde_json::json!({
+        "balance": balance.to_string(),
+        "nonce": 0,
+    });
+
+    if let Err(e) = chain_store.put_state(&addr_bytes, &serde_json::to_vec(&account).unwrap()) {
+        return Ok(warp::reply::json(&serde_json::json!({"error": e.to_string()})));
+    }
+
+    Ok(warp::reply::json(&serde_json::json!({
+        "status": "success",
+        "amount": drip_amount.to_string(),
+        "balance": balance.to_string(),
+    })))
 }
 
 // ============================================================================

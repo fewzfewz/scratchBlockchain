@@ -5,14 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.2.0] - 2026-06-25
 
-### Planned for v0.2.0
-- Dynamic inflation schedule
-- Robust staking with delegation
-- Ethereum bridge deployment
-- JavaScript/TypeScript SDK
-- Enhanced governance mechanisms
+### Added
+
+#### Frontend (Unified React SPA)
+- **Single-page application**: All 7 separate frontends unified into one React SPA (Vite + Tailwind + React Router)
+- **Dark/light theme**: Toggle via Sun/Moon icon, persisted in localStorage, CSS variables on `:root` / `.dark`
+- **Mobile sidebar**: Hamburger menu with all navigation links
+- **Wallet page**: Ed25519 key pair generation via TweetNaCl, 20-byte address derivation (SHA-256 of pubkey), token transfer signing, EIP-1559 gas params, pre-filled test addresses
+- **Faucet page**: Requests tokens directly from node's `POST /faucet/request` endpoint (no separate backend), offline detection banner, local request limit tracking
+- **Explorer page**: Dashboard (chain status), Validators (genesis validators from state trie), Staking tab — all with light/dark mode
+- **Governance page**: Proposals list, vote creation modal, create proposal form — light/dark compatible
+- **Docs page**: 9-section human-readable API reference with real `curl` response examples
+- **API Docs page**: Interactive Swagger UI (lazy-loaded) — try all 17 RPC endpoints from the browser
+- **SDK Portal page**: JavaScript SDK reference
+- **Navbar**: Chain status indicator, theme toggle, links to all 9 pages
+
+#### Node RPC
+- `GET /validators` — Returns genesis validators from state trie (seeded at startup)
+- `GET /block/latest` — Retrieve the most recent block
+- `GET /delegations/{address}` — Query delegations for an address
+- `POST /faucet/request` — Directly credit an account with test tokens in the state trie
+
+#### OpenAPI Specification
+- `docs/openapi.yaml` — Complete OpenAPI 3.0 spec for all 17 endpoints with schemas and example responses
+
+### Changed
+
+- **Rate limiting**: Now reads from `config.api.rate_limit` instead of hardcoded 100 req/s (default 200 req/s)
+- **Rejection handler**: Rate-limit rejections return 429; all other unrecognized rejections return 400 (was incorrectly defaulting to 429)
+- `submit_tx` endpoint now has rate limiting applied
+- Genesis validators are written to the state trie at startup (`/validators` returns 3 genesis validators from `genesis.json`)
+- Wallet address: Now correctly uses SHA-256(pubkey)[0..20] as the 20-byte address instead of the raw 32-byte public key
+- `start-frontends.sh` — Only serves unified SPA + faucet (which is now built into the node)
+- `README.md` — Fully rewritten with quick start, port mapping, RPC table, troubleshooting table, project structure
+
+### Fixed
+
+- **TweetNaCl library not loaded**: Added `tweetnacl` import in WalletPage instead of relying on global `nacl` variable
+- **Faucet never credited tokens**: `POST /faucet/request` now writes directly to the state trie (old separate faucet backend at port 3006 only checked cooldown limits, never modified state)
+- **429 on transaction submit**: JSON parse errors returned 429 due to catch-all in rejection handler; now correctly returns 400; `submit_tx` also had no rate limiter applied
+- **Balance always 0**: Wallet was using 32-byte public key as address; Rust `Address` is 20 bytes; now derives 20-byte address
+
+### Dependencies
+
+- Frontend: Added `tweetnacl` (key generation), `swagger-ui-react` (API docs), `lucide-react` (icons)
+- Rust: No new crate dependencies
+
+### Known Limitations
+
+- No WebSocket support (HTTP-only polling)
+- No EVM contract deployment UI
+- No transaction history page
+- Rust build requires ~5 GB disk space
 
 ---
 

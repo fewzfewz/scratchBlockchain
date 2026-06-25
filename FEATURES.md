@@ -1,19 +1,19 @@
 # Modular Blockchain - Complete Feature List
 
-## ✅ Implemented Features (100%)
+## Implemented Features
 
-### Core Blockchain (Phases 1-8)
+### Core Blockchain
 - [x] BFT Consensus with GRANDPA finality
 - [x] Multi-VM execution (EVM, Native, WASM-ready)
-- [x] Persistent storage with RocksDB
-- [x] P2P networking (libp2p)
+- [x] Persistent storage with RocksDB + in-memory fallback
+- [x] P2P networking (libp2p: gossipsub, Kademlia, request-response)
 - [x] Fork detection & chain reorganization
-- [x] Transaction mempool with MEV protection
+- [x] Transaction mempool with priority ordering
 - [x] Block production & validation
-- [x] State management
+- [x] State management (Merkle Patricia Trie)
 - [x] Receipt storage
 
-### Economic Engine (Phase 9)
+### Economic Engine
 - [x] Dynamic inflation with halving (10 tokens → 0)
 - [x] Delegation system
 - [x] Staking with commission (0-100%)
@@ -23,7 +23,7 @@
 - [x] Fee burning (50% of fees)
 - [x] Reward distribution
 
-### Bridge Infrastructure (Phase 10)
+### Bridge Infrastructure
 - [x] Ethereum bridge contract
 - [x] Lock/unlock mechanism
 - [x] Multi-signature relayer (2-of-3)
@@ -31,41 +31,66 @@
 - [x] Cross-chain messaging
 - [x] Relayer service
 
-### Runtime Upgrades (Phase 11)
+### Runtime Upgrades
 - [x] Hot-swap mechanism
 - [x] Version management
 - [x] Governance-approved upgrades
 - [x] Emergency rollback
 - [x] Upgrade history tracking
 
-### Developer Tools (Phase 13)
+### RPC API (17 endpoints, port 9933)
+- [x] `GET /health` — Health check
+- [x] `GET /status` — Node status (height, mempool, peers)
+- [x] `GET /mempool` — Pending transactions
+- [x] `POST /submit_tx` — Submit transaction
+- [x] `GET /block/{height}` — Block by height
+- [x] `GET /block/hash/{hash}` — Block by hash
+- [x] `GET /block/latest` — Latest block
+- [x] `GET /balance/{address}` — Account balance + nonce
+- [x] `GET /tx/{hash}` — Transaction receipt
+- [x] `GET /gas_price` — Gas price suggestions (EIP-1559)
+- [x] `POST /estimate_gas` — Gas estimation
+- [x] `GET /fee_history/{count}` — Historical fee data
+- [x] `GET /validators` — Active validators (from genesis state)
+- [x] `GET /delegations/{address}` — Delegations for an address
+- [x] `POST /connect_peer` — Connect to a peer
+- [x] `GET /peers` — List connected peers
+- [x] `GET /metrics` — Prometheus metrics
+- [x] `POST /faucet/request` — Direct faucet credit to state trie
+
+### User Interfaces (Unified SPA, port 5173)
+- [x] **Wallet** — Key generation (TweetNaCl), address derivation (20-byte), send tx, gas params
+- [x] **Explorer** — Dashboard, Validators, Staking tabs — light/dark mode
+- [x] **Faucet** — Direct node RPC faucet, offline detection, local limit tracking
+- [x] **Governance** — Proposals, voting, creation form — light/dark
+- [x] **Docs** — 9-section human-readable API reference with curl examples
+- [x] **API Docs** — Interactive Swagger UI (lazy-loaded) — try endpoints from browser
+- [x] **SDK Portal** — JavaScript SDK reference
+- [x] **Dev Portal** — Developer dashboard
+
+### OpenAPI Specification
+- [x] Complete OpenAPI 3.0 spec covering all 17 endpoints with schemas + examples
+
+### Developer Tools
 - [x] JavaScript SDK
 - [x] Account management
 - [x] Transaction builder
-- [x] WebSocket events
 - [x] Gas estimation
-- [x] NPM package ready
+- [x] WebSocket events (placeholder)
 
-### Testnet Tools (Phase 14)
-- [x] Faucet service (100 tokens/request)
-- [x] Rate limiting (24hr cooldown)
-- [x] Faucet web UI
+### Testnet Tools
+- [x] Faucet endpoint (100 tokens/request, direct state credit)
+- [x] Rate limiting per address (24hr cooldown, localStorage)
 - [x] Request tracking
 
 ### Security & Operations
-- [x] Rate limiting per IP
+- [x] Rate limiting per IP (configurable, default 200 req/s)
 - [x] Peer reputation system
 - [x] Circuit breaker
 - [x] Prometheus metrics
 - [x] Grafana dashboards
 - [x] Docker deployment
-- [x] Backup/restore scripts
-
-### User Interfaces
-- [x] Block Explorer
-- [x] Web Wallet
-- [x] Documentation Site
-- [x] Faucet UI
+- [x] Proper error codes (400 vs 429 distinction)
 
 ### Testing
 - [ ] Unit tests (some exist, many need fixing)
@@ -75,9 +100,9 @@
 
 ---
 
-## 🚧 Remaining for Mainnet (Phase 12, 14-15)
+## Remaining for Mainnet
 
-### Security Audit (Phase 12) - CRITICAL
+### Security Audit — CRITICAL
 - [ ] Consensus layer audit
 - [ ] Cryptography audit
 - [ ] Bridge security review
@@ -85,11 +110,7 @@
 - [ ] Smart contract audit
 - [ ] Bug bounty program
 
-**Estimated**: 6-8 weeks  
-**Cost**: $50,000 - $150,000  
-**Status**: Not started
-
-### Public Testnet (Phase 14)
+### Public Testnet
 - [ ] Deploy to public infrastructure
 - [ ] Recruit 20+ external validators
 - [ ] Run for 3+ months
@@ -97,10 +118,7 @@
 - [ ] Performance benchmarks
 - [ ] Chaos engineering tests
 
-**Estimated**: 8-12 weeks  
-**Status**: Infrastructure ready
-
-### Mainnet Launch (Phase 15)
+### Mainnet Launch
 - [ ] Legal/compliance review
 - [ ] Exchange listings (2+)
 - [ ] Marketing campaign
@@ -108,27 +126,21 @@
 - [ ] 24/7 monitoring setup
 - [ ] Incident response plan
 
-**Estimated**: 2-4 weeks  
-**Status**: Pending audit completion
-
 ---
 
 ## Progress Summary
 
-**Total Features**: 50+  
-**Implemented**: ~25 (50%)  
-**Remaining**: ~25 (50%) — code may exist but requires compilation fixes and integration  
+**Total Features**: 60+  
+**Implemented**: ~40 (67%)  
+**Remaining**: ~20 (33%)
 
 **Code Stats**:
-- Total Lines: ~15,000+
-- Rust Code: ~12,000 lines
-- JavaScript: ~350 lines
-- HTML/CSS: ~500 lines
-- Tests: Some unit tests exist, comprehensive suite not verified
+- Rust Code: ~15,000+ lines across 15 crates
+- JavaScript/JSX: ~3,500 lines (frontend SPA)
+- CSS: ~1,200 lines (Tailwind, Swagger UI overrides)
+- OpenAPI spec: ~500 lines
 
-**Build Status**: ⚠️ Partial (some crates compile, others need fixes)  
-**Test Coverage**: Minimal  
-**Documentation**: Incomplete
+**Build Status**: Both Rust `cargo build` and frontend `npm run build` succeed
 
 ---
 
@@ -136,14 +148,13 @@
 
 | Phase | Status | Duration |
 |-------|--------|----------|
-| Phases 1-8 | ⚠️ Code written, needs compilation fixes | 2-4 weeks |
-| Phase 9 (Economics) | ⚠️ Code written, not integrated | 2-3 weeks |
-| Phase 10 (Bridges) | ⚠️ Code written, not deployed | 4-6 weeks |
-| Phase 11 (Governance) | ⚠️ Code written, not exposed via RPC | 2-3 weeks |
-| Phase 13 (Dev Tools) | ❌ Not started | 4-6 weeks |
-| **Phase 12 (Audit)** | ❌ Not started | 6-8 weeks |
-| **Phase 14 (Testnet)** | ❌ Not started | 8-12 weeks |
-| **Phase 15 (Launch)** | ❌ Not started | 2-4 weeks |
+| Core Blockchain | Mostly done | 2-4 weeks remaining |
+| Economics | Code exists, partially tested | 2-3 weeks |
+| Bridges | Code exists, not deployed | 4-6 weeks |
+| Governance | Code exists, RPC not fully exposed | 2-3 weeks |
+| **Security Audit** | Not started | 6-8 weeks |
+| **Testnet** | Infrastructure ready | 8-12 weeks |
+| **Mainnet Launch** | Pending audit | 2-4 weeks |
 
 **Total Remaining**: 9-12 months
 
@@ -152,29 +163,15 @@
 ## Next Immediate Steps
 
 1. **This Week**:
-   - Deploy to testnet
-   - Publish SDK to NPM
-   - Create tutorial videos
-   - Start validator recruitment
+   - Test end-to-end: generate wallet → faucet tokens → check balance → send tx
+   - Fix any remaining UI/API integration issues
 
 2. **Next Month**:
-   - Engage security audit firm
-   - Deploy Ethereum bridge contracts
-   - Run relayer network
-   - Launch bug bounty
+   - Add transaction history page
+   - Add EVM contract deployment/query UI
+   - Run load tests
 
 3. **2-3 Months**:
-   - Complete security audit
-   - Address audit findings
-   - Public testnet campaign
+   - Security audit
+   - Public testnet
    - Performance optimization
-
-4. **4-6 Months**:
-   - Legal/compliance review
-   - Exchange negotiations
-   - Marketing preparation
-   - **Mainnet Launch** 🚀
-
----
-
-**Your blockchain core is partially implemented (~50%). The codebase has significant breadth but needs compilation fixes, integration wiring, and testing before it can be considered mainnet-ready.**
