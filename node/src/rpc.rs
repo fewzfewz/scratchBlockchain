@@ -85,6 +85,37 @@ struct ErrorResponse {
     error: String,
 }
 
+#[derive(Debug, Serialize)]
+struct ValidatorInfo {
+    address: String,
+    public_key: String,
+    stake: String,
+    commission_rate: u64,
+    is_active: bool,
+    blocks_produced: u64,
+    blocks_missed: u64,
+    delegator_count: u64,
+    total_delegated: String,
+}
+
+#[derive(Debug, Serialize)]
+struct ValidatorsResponse {
+    validators: Vec<ValidatorInfo>,
+    count: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct DelegationInfo {
+    validator_address: String,
+    amount: String,
+}
+
+#[derive(Debug, Serialize)]
+struct DelegationsResponse {
+    delegations: Vec<DelegationInfo>,
+    address: String,
+}
+
 // ============================================================================
 // Economic/Phase 9 Response Types
 // ============================================================================
@@ -145,6 +176,7 @@ pub struct RpcServer {
     chain_store: Arc<ChainStore>,
     metrics: Arc<crate::metrics::Metrics>,
     network_cmd_sender: mpsc::Sender<NetworkCommand>,
+    rate_limit: u32,
 }
 
 impl RpcServer {
@@ -153,12 +185,14 @@ impl RpcServer {
         chain_store: Arc<ChainStore>,
         metrics: Arc<crate::metrics::Metrics>,
         network_cmd_sender: mpsc::Sender<NetworkCommand>,
+        rate_limit: u32,
     ) -> Self {
         Self {
             mempool,
             chain_store,
             metrics,
             network_cmd_sender,
+            rate_limit,
         }
     }
 
@@ -174,10 +208,11 @@ impl RpcServer {
         let metrics = self.metrics.clone();
         let network_cmd_sender = self.network_cmd_sender.clone();
 
-        // Rate limiter: 100 requests/second per IP
+        // Rate limiter: requests/second per IP (configurable via node config)
+        let rl = NonZeroU32::new(self.rate_limit).unwrap_or(NonZeroU32::new(200).unwrap());
         let rate_limiter = Arc::new(
             RateLimiter::<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>::keyed(
-                Quota::per_second(NonZeroU32::new(100).unwrap()),
+                Quota::per_second(rl),
             ),
         );
 
@@ -189,7 +224,7 @@ impl RpcServer {
                  addr: Option<std::net::SocketAddr>| async move {
                     if let Some(addr) = addr {
                         if limiter.check_key(&addr.ip()).is_err() {
-                            return Err(warp::reject::reject());
+                            return Err(warp::reject::custom(RateLimited));
                         }
                     }
                     Ok(())
@@ -220,12 +255,17 @@ impl RpcServer {
 
         // POST /submit_tx - Submit a new transaction
         let submit_tx = warp::path("submit_tx")
+            .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(mempool.clone()))
             .and(with_arc(network_cmd_sender.clone()))
-            .and_then(handle_submit_tx);
+            .and_then(
+                |_, tx: Transaction, mempool: Arc<Mempool>, network_cmd_sender: mpsc::Sender<NetworkCommand>| async move {
+                    handle_submit_tx(tx, mempool, network_cmd_sender).await
+                },
+            );
 
         // GET /block/{height} - Get block by height
         let block_by_height = warp::path!("block" / u64)
@@ -311,6 +351,27 @@ impl RpcServer {
             .and(with_arc(network_cmd_sender.clone()))
             .and_then(|_, _network_cmd| handle_peers());
 
+        // GET /validators - List active validators
+        let validators = warp::path("validators")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, chain_store| handle_validators(chain_store));
+
+        // GET /block/latest - Get the latest block
+        let block_latest = warp::path!("block" / "latest")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, chain_store| handle_block_latest(chain_store));
+
+        // GET /delegations/{address} - Get delegations for an address
+        let delegations = warp::path!("delegations" / String)
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|address, _, chain_store| handle_delegations(address, chain_store));
+
         // ====================================================================
         // Combine Routes with CORS
         // ====================================================================
@@ -320,11 +381,14 @@ impl RpcServer {
             .or(submit_tx)
             .or(block_by_height)
             .or(block_by_hash)
+            .or(block_latest)
             .or(balance)
             .or(tx_receipt)
             .or(gas_price)
             .or(estimate_gas)
             .or(fee_history)
+            .or(validators)
+            .or(delegations)
             .or(metrics_route)
             .or(health)
             .or(connect_peer)
@@ -781,9 +845,95 @@ async fn handle_peers() -> Result<impl warp::Reply, Infallible> {
     }))
 }
 
+async fn handle_validators(
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    // Try to read validators from state under a well-known key
+    let validators_key = b"validators";
+    match chain_store.get_state(validators_key) {
+        Ok(Some(encoded)) => {
+            if let Ok(vals) = serde_json::from_slice::<Vec<ValidatorInfo>>(&encoded) {
+                let count = vals.len();
+                Ok(warp::reply::json(&ValidatorsResponse { validators: vals, count }))
+            } else {
+                Ok(warp::reply::json(&ValidatorsResponse { validators: vec![], count: 0 }))
+            }
+        }
+        _ => {
+            // No validators stored yet; return empty list
+            Ok(warp::reply::json(&ValidatorsResponse { validators: vec![], count: 0 }))
+        }
+    }
+}
+
+async fn handle_block_latest(
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let latest = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
+    if latest == 0 {
+        return Ok(warp::reply::json(&BlockResponse {
+            block: None,
+            error: Some("No blocks have been produced yet".into()),
+        }));
+    }
+    match chain_store.get_block_hash_by_height(latest) {
+        Ok(Some(hash_bytes)) if hash_bytes.len() == 32 => {
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&hash_bytes);
+            match chain_store.get_block(&hash) {
+                Ok(Some(encoded)) => {
+                    let val: serde_json::Value =
+                        serde_json::from_slice(&encoded).unwrap_or(serde_json::Value::Null);
+                    Ok(warp::reply::json(&BlockResponse { block: Some(val), error: None }))
+                }
+                Ok(None) => Ok(warp::reply::json(&BlockResponse {
+                    block: None,
+                    error: Some(format!("Block data missing for height {}", latest)),
+                })),
+                Err(e) => Ok(warp::reply::json(&BlockResponse {
+                    block: None,
+                    error: Some(e.to_string()),
+                })),
+            }
+        }
+        Ok(_) => Ok(warp::reply::json(&BlockResponse {
+            block: None,
+            error: Some(format!("No block at height {}", latest)),
+        })),
+        Err(e) => Ok(warp::reply::json(&BlockResponse {
+            block: None,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+async fn handle_delegations(
+    address_str: String,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let delegations_key = [b"delegations/", address_str.as_bytes()].concat();
+    match chain_store.get_state(&delegations_key) {
+        Ok(Some(encoded)) => {
+            if let Ok(dels) = serde_json::from_slice::<Vec<DelegationInfo>>(&encoded) {
+                Ok(warp::reply::json(&DelegationsResponse { delegations: dels, address: address_str }))
+            } else {
+                Ok(warp::reply::json(&DelegationsResponse { delegations: vec![], address: address_str }))
+            }
+        }
+        _ => {
+            Ok(warp::reply::json(&DelegationsResponse { delegations: vec![], address: address_str }))
+        }
+    }
+}
+
 // ============================================================================
 // Error Handling
 // ============================================================================
+
+/// Custom rejection type for rate limiting (so we can distinguish from other errors)
+#[derive(Debug)]
+struct RateLimited;
+impl warp::reject::Reject for RateLimited {}
 
 async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infallible> {
     let (status, message) = if err.is_not_found() {
@@ -794,8 +944,12 @@ async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infa
         (warp::http::StatusCode::PAYLOAD_TOO_LARGE, "Request body too large (max 1MB)".to_string())
     } else if err.find::<warp::reject::InvalidQuery>().is_some() {
         (warp::http::StatusCode::BAD_REQUEST, "Invalid query parameters".to_string())
-    } else {
+    } else if err.find::<RateLimited>().is_some() {
         (warp::http::StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string())
+    } else {
+        #[cfg(debug_assertions)]
+        tracing::warn!("Unhandled rejection: {:?}", err);
+        (warp::http::StatusCode::BAD_REQUEST, "Bad request".to_string())
     };
 
     Ok(warp::reply::with_status(

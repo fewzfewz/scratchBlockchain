@@ -33,35 +33,30 @@ docker-compose build
 echo -e "\n${YELLOW}🚀 Starting services...${NC}"
 docker-compose up -d
 
-# Wait for services to be healthy
+# Wait for services to be healthy with retry
 echo -e "\n${YELLOW}⏳ Waiting for services to be healthy...${NC}"
-sleep 10
 
-# Check node health
-echo -e "\n${YELLOW}🏥 Checking node health...${NC}"
-for port in 9933 9934 9935; do
-    if curl -sf http://localhost:$port/health > /dev/null; then
-        echo -e "${GREEN}✅ Node on port $port is healthy${NC}"
-    else
-        echo -e "${RED}❌ Node on port $port is not responding${NC}"
-    fi
-done
+wait_for_service() {
+    local label=$1
+    local url=$2
+    local retries=10
+    local delay=3
+    for i in $(seq 1 $retries); do
+        if curl -sf "$url" > /dev/null 2>&1; then
+            echo -e "${GREEN}✅ $label is healthy${NC}"
+            return 0
+        fi
+        sleep $delay
+    done
+    echo -e "${RED}❌ $label is not responding${NC}"
+    return 1
+}
 
-# Check Prometheus
-echo -e "\n${YELLOW}📊 Checking Prometheus...${NC}"
-if curl -sf http://localhost:9090/-/healthy > /dev/null; then
-    echo -e "${GREEN}✅ Prometheus is healthy${NC}"
-else
-    echo -e "${RED}❌ Prometheus is not responding${NC}"
-fi
-
-# Check Grafana
-echo -e "\n${YELLOW}📈 Checking Grafana...${NC}"
-if curl -sf http://localhost:3000/api/health > /dev/null; then
-    echo -e "${GREEN}✅ Grafana is healthy${NC}"
-else
-    echo -e "${RED}❌ Grafana is not responding${NC}"
-fi
+wait_for_service "Node on port 9933" "http://localhost:9933/health"
+wait_for_service "Node on port 9934" "http://localhost:9934/health"
+wait_for_service "Node on port 9935" "http://localhost:9935/health"
+wait_for_service "Prometheus" "http://localhost:9090/-/healthy"
+wait_for_service "Grafana" "http://localhost:3000/api/health"
 
 echo -e "\n${GREEN}✨ Deployment complete!${NC}"
 echo -e "\n📍 Access points:"

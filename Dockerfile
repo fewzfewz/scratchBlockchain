@@ -57,18 +57,19 @@ RUN apt-get update && \
 RUN cargo build --release -p node
 
 # Runtime image - use minimal base
-FROM debian:bookworm-slim
+FROM rust:1.90-slim
 
-# Install only runtime dependencies
+# Install only runtime dependencies needed by the binary
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     ca-certificates \
+    curl \
     libssl3 \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get clean
 
 # Create app user
-RUN adduser --disabled-password --gecos "" appuser
+RUN useradd -m -s /bin/sh appuser
 
 # Copy binary from builder
 COPY --from=builder /build/target/release/node /usr/local/bin/modular-node

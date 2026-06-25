@@ -57,16 +57,16 @@ echo ""
 # Start nodes
 echo -e "${BLUE}Starting nodes...${NC}"
 for i in $(seq 0 $((NODES-1))); do
-    P2P_PORT=$((BASE_P2P_PORT + i))
-    RPC_PORT=$((BASE_RPC_PORT + i))
+    mkdir -p "$DATA_DIR/node$i"
+    CONFIG_FILE="$DATA_DIR/node$i/config.toml"
+    GENESIS_FILE="$DATA_DIR/genesis.json"
     
-    echo "  Starting node $i (P2P: $P2P_PORT, RPC: $RPC_PORT)"
+    echo "  Starting node $i (config: $CONFIG_FILE)"
     
     # Start node in background
     ./target/release/node start \
-        --p2p-port $P2P_PORT \
-        --rpc-port $RPC_PORT \
-        --data-dir "$DATA_DIR/node$i" \
+        --config "$CONFIG_FILE" \
+        --genesis "$GENESIS_FILE" \
         > "$DATA_DIR/node$i/output.log" 2>&1 &
     
     echo $! > "$DATA_DIR/node$i/pid"
@@ -77,12 +77,15 @@ echo -e "${GREEN}✓ All nodes started${NC}"
 echo ""
 
 # Start faucet service
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 echo -e "${BLUE}Starting faucet service...${NC}"
-cd faucet
-python3 -m http.server 8080 > ../testnet-data/faucet.log 2>&1 &
-echo $! > ../testnet-data/faucet.pid
-cd ..
-echo -e "${GREEN}✓ Faucet started on http://localhost:8080${NC}"
+"$PROJECT_ROOT/target/release/node" faucet > "$DATA_DIR/faucet-backend.log" 2>&1 &
+echo $! > "$DATA_DIR/faucet-backend.pid"
+python3 -m http.server 8082 --directory "$PROJECT_ROOT/faucet" > "$DATA_DIR/faucet-frontend.log" 2>&1 &
+echo $! > "$DATA_DIR/faucet-frontend.pid"
+echo -e "${GREEN}✓ Faucet backend on http://localhost:3006/faucet${NC}"
+echo -e "${GREEN}✓ Faucet frontend on http://localhost:8082${NC}"
 echo ""
 
 # Start monitoring
@@ -107,15 +110,21 @@ echo "Services:"
 echo "  • Node 0 RPC: http://localhost:9933"
 echo "  • Node 1 RPC: http://localhost:9934"
 echo "  • Node 2 RPC: http://localhost:9935"
-echo "  • Faucet UI: http://localhost:8080"
-echo "  • Block Explorer: http://localhost:8081"
-echo "  • Wallet: http://localhost:8082"
+echo "  • Faucet Frontend: http://localhost:8082"
+echo "  • Faucet Backend: http://localhost:3006/faucet"
+echo "  • Block Explorer: http://localhost:5173"
+echo "  • Wallet: http://localhost:8081"
+echo "  • Developer Portal: http://localhost:8083"
+echo "  • Docs: http://localhost:8084"
+echo "  • SDK Portal: http://localhost:8085"
+echo "  • Governance: http://localhost:3002"
 echo "  • Prometheus: http://localhost:9090"
 echo "  • Grafana: http://localhost:3000"
 echo ""
 echo "Logs:"
 echo "  • Node logs: $DATA_DIR/node*/output.log"
-echo "  • Faucet log: $DATA_DIR/faucet.log"
+echo "  • Faucet backend log: $DATA_DIR/faucet-backend.log"
+echo "  • Faucet frontend log: $DATA_DIR/faucet-frontend.log"
 echo ""
 echo "Management:"
 echo "  • Stop all: ./scripts/stop-all.sh"

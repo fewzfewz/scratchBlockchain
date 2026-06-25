@@ -242,11 +242,34 @@ impl Node {
                 state_trie.lock().await.insert(&account.address, &account_json)?;
             }
             
+            // Initialize genesis validators in state trie (for /validators RPC)
+            let validator_infos: Vec<serde_json::Value> = genesis_config
+                .validators
+                .iter()
+                .map(|v| {
+                    serde_json::json!({
+                        "address": format!("0x{}", hex::encode(v.address)),
+                        "public_key": v.public_key,
+                        "stake": v.stake.to_string(),
+                        "commission_rate": (v.commission_rate * 100.0) as u64,
+                        "is_active": true,
+                        "blocks_produced": 0u64,
+                        "blocks_missed": 0u64,
+                        "delegator_count": 0u64,
+                        "total_delegated": "0",
+                    })
+                })
+                .collect();
+            let validators_json = serde_json::to_vec(&validator_infos)?;
+            state_trie.lock().await.insert(b"validators", &validators_json)?;
+            info!("✅ Initialized {} validators in state trie", validator_infos.len());
+            
             // Store genesis block
             let genesis_block = Block::genesis();
             let block_hash = genesis_block.hash();
             let block_data = serde_json::to_vec(&genesis_block)?;
             chain_store.put_block(&block_hash, &block_data)?;
+            chain_store.put_block_height(0, &block_hash)?;
             chain_store.set_latest_height(0)?;
         }
         
@@ -379,6 +402,7 @@ impl Node {
             chain_store.clone(),
             metrics.clone(),
             (*network_cmd_sender).clone(),
+            config.api.rate_limit,
         );
         
         let rpc_port = config.network.rpc_port;
@@ -827,8 +851,8 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
             })
     };
     
-    info!("🌊 Faucet listening on http://0.0.0.0:3000/faucet");
-    warp::serve(route).run(([0, 0, 0, 0], 3000)).await;
+    info!("🌊 Faucet listening on http://0.0.0.0:3006/faucet");
+    warp::serve(route).run(([0, 0, 0, 0], 3006)).await;
     
     Ok(())
 }
