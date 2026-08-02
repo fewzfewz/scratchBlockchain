@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
-import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Fingerprint, Coins, Fuel, Sliders, ExternalLink, ShieldAlert, Droplets, FlaskConical } from 'lucide-react'
+import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Fingerprint, Coins, Fuel, Sliders, ExternalLink, ShieldAlert, Droplets, FlaskConical, Plus, Check, History, ArrowUpRight, GripVertical, Coins as TokensIcon } from 'lucide-react'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b }
 const weiToNbl = (wei) => { const n = String(wei || '0'); if (n === '0') return '0.0000'; const p = n.padStart(19, '0'); return (p.slice(0, -18) || '0') + '.' + p.slice(-18, -14) }
+const weiToFull = (wei) => { const n = String(wei || '0'); if (n === '0') return '0'; const p = n.padStart(19, '0'); return (p.slice(0, -18) || '0') + '.' + p.slice(-18) }
 
 const TEST_ADDRESSES = [
   '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',
@@ -20,7 +21,7 @@ const addrFromPub = async (pubBytes) => {
 }
 
 export default function WalletPage() {
-  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem('nebula_rpc_url') || 'http://localhost:9933')
+  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545')
   const [keyPair, setKeyPair] = useState(null)
   const [pubKey, setPubKey] = useState('')
   const [address, setAddress] = useState('')
@@ -38,6 +39,19 @@ export default function WalletPage() {
   const [settingsUrl, setSettingsUrl] = useState(apiUrl)
   const [nodeStatus, setNodeStatus] = useState('checking')
 
+  // Multi-account
+  const [accounts, setAccounts] = useState([])
+  const [activeAccountIdx, setActiveAccountIdx] = useState(0)
+  const [showNewAccount, setShowNewAccount] = useState(false)
+  const [newAccountName, setNewAccountName] = useState('')
+
+  // Tx history
+  const [txHistory, setTxHistory] = useState([])
+  const [showHistory, setShowHistory] = useState(false)
+
+  // Tokens tab
+  const [walletTab, setWalletTab] = useState('balance') // balance | tokens
+
   useEffect(() => {
     loadSavedKey()
     checkNodeStatus()
@@ -52,47 +66,120 @@ export default function WalletPage() {
       const balInterval = setInterval(updateBalance, 10000)
       return () => clearInterval(balInterval)
     }
-  }, [keyPair])
+  }, [keyPair, address])
+
+  useEffect(() => {
+    if (address) {
+      const saved = JSON.parse(localStorage.getItem(`nebula_tx_history_${address}`) || '[]')
+      setTxHistory(saved)
+    }
+  }, [address])
+
+  useEffect(() => {
+    const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
+    setAccounts(saved)
+    const active = parseInt(localStorage.getItem('nebula_active_account') || '0')
+    if (saved.length > 0 && saved[active]) {
+      setActiveAccountIdx(active)
+    }
+  }, [])
 
   const showMsg = (msg, type = 'info') => { setStatus(msg); setStatusType(type); if (type === 'success') setTimeout(() => { setStatus(s => s === msg ? '' : s) }, 5000) }
 
   const copy = async (val, msg) => { try { await navigator.clipboard.writeText(val); showMsg(msg, 'success') } catch { showMsg('Failed to copy', 'error') } }
 
-  const generateKeyPair = async () => {
+  const switchAccount = async (idx) => {
+    const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
+    if (!saved[idx]) return
+    const acc = saved[idx]
+    const kp = { publicKey: fromHex(acc.pub), secretKey: fromHex(acc.priv) }
+    setKeyPair(kp); setPubKey(acc.pub); setAddress(acc.addr); setPrivKey(acc.priv)
+    setActiveAccountIdx(idx)
+    localStorage.setItem('nebula_wallet_pub', acc.pub)
+    localStorage.setItem('nebula_wallet_priv', acc.priv)
+    localStorage.setItem('nebula_wallet_addr', acc.addr)
+    localStorage.setItem('nebula_active_account', String(idx))
+    showMsg(`Switched to ${acc.name || 'Account ' + (idx + 1)}`, 'success')
+  }
+
+  const saveAccount = (name, pub, priv, addr) => {
+    const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
+    saved.push({ name, pub, priv, addr, created: Date.now() })
+    localStorage.setItem('nebula_accounts', JSON.stringify(saved))
+    setAccounts(saved)
+    const idx = saved.length - 1
+    setActiveAccountIdx(idx)
+    localStorage.setItem('nebula_active_account', String(idx))
+  }
+
+  const deleteAccount = (idx) => {
+    if (accounts.length <= 1) { showMsg('Cannot delete the last account', 'error'); return }
+    if (!confirm(`Delete "${accounts[idx].name || 'Account ' + (idx + 1)}"?`)) return
+    const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
+    saved.splice(idx, 1)
+    localStorage.setItem('nebula_accounts', JSON.stringify(saved))
+    setAccounts(saved)
+    const nextIdx = Math.min(idx, saved.length - 1)
+    switchAccount(nextIdx)
+  }
+
+  const generateKeyPair = async (name) => {
     try {
       const kp = nacl.sign.keyPair()
       const pub = toHex(kp.publicKey)
       const priv = toHex(kp.secretKey)
       const addrBytes = await addrFromPub(kp.publicKey)
       const addr = toHex(addrBytes)
-      setPubKey(pub); setAddress(addr); setPrivKey(priv); setKeyPair(kp)
+      setKeyPair(kp); setPubKey(pub); setAddress(addr); setPrivKey(priv)
       localStorage.setItem('nebula_wallet_priv', priv)
       localStorage.setItem('nebula_wallet_pub', pub)
       localStorage.setItem('nebula_wallet_addr', addr)
-      showMsg('New wallet generated! Save your private key securely.', 'success')
+      saveAccount(name || `Account ${accounts.length + 1}`, pub, priv, addr)
+      showMsg('New wallet generated!', 'success')
     } catch { showMsg('Failed to generate keypair', 'error') }
   }
 
   const loadSavedKey = async () => {
+    const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
+    if (saved.length > 0) {
+      const active = parseInt(localStorage.getItem('nebula_active_account') || '0')
+      const acc = saved[active] || saved[0]
+      try {
+        const kp = { publicKey: fromHex(acc.pub), secretKey: fromHex(acc.priv) }
+        setKeyPair(kp); setPubKey(acc.pub); setAddress(acc.addr); setPrivKey(acc.priv)
+        setActiveAccountIdx(saved.indexOf(acc))
+        return
+      } catch {}
+    }
+    // Fallback to legacy single-account storage
     const priv = localStorage.getItem('nebula_wallet_priv')
     const pub = localStorage.getItem('nebula_wallet_pub')
     let addr = localStorage.getItem('nebula_wallet_addr')
     if (!priv || !pub) return
     try {
       const kp = { publicKey: fromHex(pub), secretKey: fromHex(priv) }
-      if (!addr) {
-        const addrBytes = await addrFromPub(kp.publicKey)
-        addr = toHex(addrBytes)
-        localStorage.setItem('nebula_wallet_addr', addr)
-      }
+      if (!addr) { const addrBytes = await addrFromPub(kp.publicKey); addr = toHex(addrBytes); localStorage.setItem('nebula_wallet_addr', addr) }
       setKeyPair(kp); setPubKey(pub); setAddress(addr); setPrivKey(priv)
+      saveAccount('Account 1', pub, priv, addr)
     } catch { localStorage.removeItem('nebula_wallet_priv'); localStorage.removeItem('nebula_wallet_pub') }
   }
 
   const clearWallet = () => {
-    if (!confirm('Clear wallet? Make sure you saved your private key!')) return
-    localStorage.removeItem('nebula_wallet_priv'); localStorage.removeItem('nebula_wallet_pub'); localStorage.removeItem('nebula_wallet_addr')
-    setKeyPair(null); setPubKey(''); setAddress(''); setPrivKey(''); setBalance('0.0000'); showMsg('Wallet cleared.', 'info')
+    if (!confirm('Clear current wallet?')) return
+    const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
+    if (saved.length > 1) {
+      const idx = activeAccountIdx
+      saved.splice(idx, 1)
+      localStorage.setItem('nebula_accounts', JSON.stringify(saved))
+      setAccounts(saved)
+      switchAccount(Math.min(idx, saved.length - 1))
+      showMsg('Account removed.', 'info')
+    } else {
+      localStorage.removeItem('nebula_accounts'); localStorage.removeItem('nebula_active_account')
+      localStorage.removeItem('nebula_wallet_priv'); localStorage.removeItem('nebula_wallet_pub'); localStorage.removeItem('nebula_wallet_addr')
+      setKeyPair(null); setPubKey(''); setAddress(''); setPrivKey(''); setBalance('0.0000')
+      setAccounts([]); showMsg('Wallet cleared.', 'info')
+    }
   }
 
   const fetchNonce = async () => {
@@ -156,6 +243,27 @@ export default function WalletPage() {
     return await sha256(await sha256(h))
   }
 
+  const addTxToHistory = (hash, toAddr, amt) => {
+    const entry = { hash, to: toAddr, amount: amt, timestamp: Date.now(), status: 'pending' }
+    const updated = [entry, ...txHistory].slice(0, 50)
+    setTxHistory(updated)
+    localStorage.setItem(`nebula_tx_history_${address}`, JSON.stringify(updated))
+    // Check receipt after a delay
+    setTimeout(async () => {
+      try {
+        const r = await window.fetch(`${apiUrl}/tx/${hash}`)
+        if (r.ok) {
+          const d = await r.json()
+          const finalStatus = d.receipt?.status ? 'confirmed' : 'failed'
+          const hist = JSON.parse(localStorage.getItem(`nebula_tx_history_${address}`) || '[]')
+          const updatedHist = hist.map(t => t.hash === hash ? { ...t, status: finalStatus } : t)
+          localStorage.setItem(`nebula_tx_history_${address}`, JSON.stringify(updatedHist))
+          setTxHistory(updatedHist)
+        }
+      } catch {}
+    }, 5000)
+  }
+
   const sendTx = async (e) => {
     e.preventDefault()
     if (!keyPair) { showMsg('Generate a wallet first', 'error'); return }
@@ -178,13 +286,27 @@ export default function WalletPage() {
       })
       const text = await r.text()
       if (r.ok) {
-        showMsg(`Transaction sent! Hash: ${text.replace(/^"|"$/g, '').slice(0, 8)}...${text.slice(-8)}`, 'success')
+        const hash = text.replace(/^"|"$/g, '')
+        showMsg(`Transaction sent! Hash: ${hash.slice(0, 8)}...${hash.slice(-8)}`, 'success')
         setAmount('')
         setNonce(n + 1)
+        addTxToHistory(hash, recipient, amt)
         setTimeout(() => { updateBalance(); fetchNonce() }, 3000)
       } else showMsg('Transaction failed: ' + text, 'error')
     } catch (e) { showMsg('Error: ' + e.message, 'error') }
   }
+
+  const formatTime = (ts) => {
+    const d = new Date(ts)
+    const now = new Date()
+    const diff = now - d
+    if (diff < 60000) return 'Just now'
+    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`
+    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`
+    return d.toLocaleDateString()
+  }
+
+  const shorten = (s) => s ? s.slice(0, 6) + '...' + s.slice(-4) : ''
 
   return (
     <div className="relative min-h-screen">
@@ -193,7 +315,7 @@ export default function WalletPage() {
       <div className="fixed w-[30rem] h-[30rem] rounded-full opacity-25 pointer-events-none"
         style={{ right: '-10rem', bottom: '-12rem', background: 'radial-gradient(circle, rgba(251,146,60,0.32), transparent 70%)' }} />
 
-      <div className="relative z-10 max-w-4xl mx-auto px-4 py-8">
+      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8">
         <div className="flex items-center justify-between mb-6">
           <div>
             <p className="text-xs uppercase tracking-widest text-blue-400 dark:text-blue-400 font-medium">Scratch Blockchain</p>
@@ -219,7 +341,8 @@ export default function WalletPage() {
           </div>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-4">
+        <div className="grid md:grid-cols-[1fr_1.2fr] gap-4">
+          {/* ─── Left Column ─── */}
           <div className="p-5 rounded-2xl glass animate-fade-in">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -227,14 +350,34 @@ export default function WalletPage() {
                 <h2 className="text-lg font-semibold text-slate-900 dark:text-white mt-1">Account keys</h2>
               </div>
               <div className="flex gap-2">
-                <button onClick={generateKeyPair} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-xs font-medium hover:opacity-90 transition-all">
-                  <RefreshCw className="w-3.5 h-3.5" /> Generate
+                <button onClick={() => { setNewAccountName(''); setShowNewAccount(true) }} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-xs font-medium hover:opacity-90 transition-all">
+                  <Plus className="w-3.5 h-3.5" /> New
                 </button>
-                <button onClick={clearWallet} className="p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white" title="Clear wallet">
+                <button onClick={clearWallet} className="p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white" title="Remove account">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
             </div>
+
+            {/* Account selector */}
+            {accounts.length > 1 && (
+              <div className="mb-4">
+                <label className="text-xs uppercase text-slate-500 dark:text-slate-400 mb-2 block">Switch account</label>
+                <div className="flex flex-wrap gap-2">
+                  {accounts.map((acc, idx) => (
+                    <button key={idx} onClick={() => switchAccount(idx)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium transition-all ${
+                        idx === activeAccountIdx
+                          ? 'bg-blue-500/20 text-blue-600 dark:text-blue-300 border border-blue-500/30'
+                          : 'bg-slate-200/50 dark:bg-slate-700/50 text-slate-600 dark:text-slate-400 border border-slate-300/50 dark:border-slate-600/50 hover:bg-slate-300/50 dark:hover:bg-slate-600/50'
+                      }`}>
+                      {idx === activeAccountIdx && <Check className="w-3 h-3" />}
+                      {acc.name || `Acc ${idx + 1}`}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="mb-3">
               <label className="flex items-center gap-1.5 text-xs uppercase text-slate-500 dark:text-slate-400 mb-2"><Fingerprint className="w-3 h-3" /> Address (20 bytes)</label>
@@ -288,31 +431,64 @@ export default function WalletPage() {
             </div>
           </div>
 
+          {/* ─── Right Column ─── */}
           <div className="space-y-4">
+            {/* Balance + Tokens tabs */}
             <div className="p-5 rounded-2xl glass animate-fade-in">
               <div className="flex items-center justify-between mb-4">
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-blue-500 dark:text-blue-300 flex items-center gap-1"><Coins className="w-3 h-3" /> Balance</p>
-                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white mt-1">Spendable funds</h2>
+                <div className="flex gap-4">
+                  <button onClick={() => setWalletTab('balance')}
+                    className={`text-xs uppercase tracking-wider flex items-center gap-1 pb-1 border-b-2 transition-all ${
+                      walletTab === 'balance' ? 'text-blue-500 dark:text-blue-300 border-blue-500' : 'text-slate-500 dark:text-slate-400 border-transparent'
+                    }`}>
+                    <Coins className="w-3 h-3" /> Balance
+                  </button>
+                  <button onClick={() => setWalletTab('tokens')}
+                    className={`text-xs uppercase tracking-wider flex items-center gap-1 pb-1 border-b-2 transition-all ${
+                      walletTab === 'tokens' ? 'text-blue-500 dark:text-blue-300 border-blue-500' : 'text-slate-500 dark:text-slate-400 border-transparent'
+                    }`}>
+                    <TokensIcon className="w-3 h-3" /> Tokens
+                  </button>
                 </div>
                 <button onClick={() => { updateBalance(); fetchNonce(); showMsg('Balance refreshed', 'success') }} className="p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">
                   <RefreshCw className="w-3.5 h-3.5" />
                 </button>
               </div>
 
-              <div className="flex items-baseline gap-2 mb-4">
-                <h3 className="text-4xl font-bold text-slate-900 dark:text-white">{balance}</h3>
-                <span className="text-slate-500 dark:text-slate-400">NBL</span>
-              </div>
-
-              <div className="space-y-2 pt-4 border-t border-slate-200 dark:border-slate-700/50">
-                {[['Available:', `${balance} NBL`], ['Reserved (gas):', '0.0000 NBL']].map(([l, v]) => (
-                  <div key={l} className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">{l}</span><strong className="text-slate-800 dark:text-white">{v}</strong></div>
-                ))}
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-500 mt-4">Balance from <code className="text-xs text-slate-600 dark:text-slate-400">{apiUrl}</code></p>
+              {walletTab === 'balance' ? (
+                <>
+                  <div className="flex items-baseline gap-2 mb-4">
+                    <h3 className="text-4xl font-bold text-slate-900 dark:text-white">{balance}</h3>
+                    <span className="text-slate-500 dark:text-slate-400">NBL</span>
+                  </div>
+                  <div className="space-y-2 pt-4 border-t border-slate-200 dark:border-slate-700/50">
+                    {[['Available:', `${balance} NBL`], ['Reserved (gas):', '0.0000 NBL']].map(([l, v]) => (
+                      <div key={l} className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">{l}</span><strong className="text-slate-800 dark:text-white">{v}</strong></div>
+                    ))}
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-500 mt-4">Balance from <code className="text-xs text-slate-600 dark:text-slate-400">{apiUrl}</code></p>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-100 dark:bg-slate-700/40">
+                    <div className="flex items-center gap-3">
+                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-cyan-600 flex items-center justify-center text-white text-xs font-bold">N</div>
+                      <div>
+                        <strong className="text-sm text-slate-800 dark:text-white block">Nebula (NBL)</strong>
+                        <span className="text-xs text-slate-500 dark:text-slate-400">Native token</span>
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <strong className="text-sm text-slate-800 dark:text-white block">{balance}</strong>
+                      <span className="text-xs text-slate-500 dark:text-slate-400">~$0.00</span>
+                    </div>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 italic text-center">More tokens will appear here as you receive them.</p>
+                </div>
+              )}
             </div>
 
+            {/* Send form */}
             <div className="p-5 rounded-2xl glass animate-fade-in">
               <div className="flex items-center justify-between mb-4">
                 <div>
@@ -374,10 +550,85 @@ export default function WalletPage() {
                 }`}>{status}</div>
               )}
             </div>
+
+            {/* ─── Transaction History ─── */}
+            <div className="p-5 rounded-2xl glass animate-fade-in">
+              <button onClick={() => setShowHistory(!showHistory)} className="flex items-center justify-between w-full">
+                <div className="flex items-center gap-2">
+                  <History className="w-4 h-4 text-blue-500 dark:text-blue-300" />
+                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Transaction History</h2>
+                  {txHistory.length > 0 && (
+                    <span className="text-xs bg-blue-500/20 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-full">{txHistory.length}</span>
+                  )}
+                </div>
+                <span className={`text-slate-400 transition-transform ${showHistory ? 'rotate-90' : ''}`}>▸</span>
+              </button>
+
+              {showHistory && (
+                <div className="mt-4 space-y-2 max-h-80 overflow-y-auto">
+                  {txHistory.length === 0 ? (
+                    <p className="text-sm text-slate-500 dark:text-slate-400 italic text-center py-4">No transactions yet. Send funds to see history.</p>
+                  ) : (
+                    txHistory.map((tx, i) => (
+                      <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-100 dark:bg-slate-700/40 hover:bg-slate-200/50 dark:hover:bg-slate-700/60 transition-colors">
+                        <div className="flex items-center gap-3 min-w-0">
+                          <div className={`w-2 h-2 rounded-full shrink-0 ${
+                            tx.status === 'confirmed' ? 'bg-emerald-400' :
+                            tx.status === 'failed' ? 'bg-red-400' :
+                            'bg-amber-400 animate-pulse'
+                          }`} />
+                          <div className="min-w-0">
+                            <div className="flex items-center gap-2">
+                              <code className="text-xs font-mono text-slate-600 dark:text-slate-300">{shorten(tx.hash)}</code>
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                                tx.status === 'confirmed' ? 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-400' :
+                                tx.status === 'failed' ? 'bg-red-500/20 text-red-600 dark:text-red-400' :
+                                'bg-amber-500/20 text-amber-600 dark:text-amber-400'
+                              }`}>{tx.status || 'pending'}</span>
+                            </div>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 truncate max-w-[200px]">To: {shorten(tx.to)}</p>
+                          </div>
+                        </div>
+                        <div className="text-right shrink-0 ml-3">
+                          <strong className={`text-sm ${
+                            parseFloat(tx.amount) > 0 ? 'text-red-500 dark:text-red-400' : 'text-emerald-500'
+                          }`}>{parseFloat(tx.amount) > 0 ? '-' : '+'}{Math.abs(tx.amount).toFixed(4)}</strong>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-500">{formatTime(tx.timestamp)}</p>
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       </div>
 
+      {/* New Account Modal */}
+      {showNewAccount && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowNewAccount(false)}>
+          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700/50 rounded-2xl w-[90%] max-w-sm shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-slate-700/50">
+              <h3 className="text-lg font-semibold text-slate-900 dark:text-white">New Account</h3>
+              <button onClick={() => setShowNewAccount(false)} className="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white text-xl">&times;</button>
+            </div>
+            <div className="p-5 space-y-4">
+              <div>
+                <label className="text-xs text-slate-500 dark:text-slate-400 mb-2 block">Account name (optional)</label>
+                <input value={newAccountName} onChange={e => setNewAccountName(e.target.value)} placeholder="My Wallet"
+                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500" autoFocus />
+              </div>
+              <button onClick={() => { generateKeyPair(newAccountName.trim() || undefined); setShowNewAccount(false) }}
+                className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-sm font-medium hover:opacity-90 transition-all">
+                Generate
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowSettings(false)}>
           <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700/50 rounded-2xl w-[90%] max-w-md shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
@@ -391,12 +642,6 @@ export default function WalletPage() {
                 <input value={settingsUrl} onChange={e => setSettingsUrl(e.target.value)}
                   className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200" />
               </div>
-              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                <input type="checkbox" defaultChecked className="accent-blue-500" /> Auto-refresh balance (10s)
-              </label>
-              <label className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                <input type="checkbox" defaultChecked className="accent-blue-500" /> Confirm before sending
-              </label>
             </div>
             <div className="flex justify-end gap-3 p-5 border-t border-slate-200 dark:border-slate-700/50">
               <button onClick={() => setShowSettings(false)} className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-700/50 text-slate-600 dark:text-slate-300 text-sm">Cancel</button>

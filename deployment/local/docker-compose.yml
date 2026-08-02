@@ -22,7 +22,7 @@ services:
     environment:
       - VALIDATOR_NAME=validator1
       - RUST_LOG=info
-    command: ["start", "--config", "/config.toml"]
+    command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
@@ -55,7 +55,7 @@ services:
     environment:
       - VALIDATOR_NAME=validator2
       - RUST_LOG=info
-    command: ["start", "--config", "/config.toml"]
+    command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
@@ -90,7 +90,7 @@ services:
     environment:
       - VALIDATOR_NAME=validator3
       - RUST_LOG=info
-    command: ["start", "--config", "/config.toml"]
+    command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
@@ -123,7 +123,7 @@ services:
     environment:
       - NODE_NAME=rpc1
       - RUST_LOG=info
-    command: ["start", "--config", "/config.toml"]
+    command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
@@ -156,7 +156,7 @@ services:
     environment:
       - NODE_NAME=rpc2
       - RUST_LOG=info
-    command: ["start", "--config", "/config.toml"]
+    command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
@@ -217,9 +217,10 @@ services:
       dockerfile: Dockerfile
     container_name: faucet
     ports:
-      - "3001:3000"
+      - "3001:3006"
     environment:
       - FAUCET_PRIVATE_KEY=${FAUCET_PRIVATE_KEY}
+      - FAUCET_PORT=3006
       - RPC_URL=http://rpc1:8545
       - DRIP_AMOUNT=1000000000000000000000
       - COOLDOWN_SECONDS=86400

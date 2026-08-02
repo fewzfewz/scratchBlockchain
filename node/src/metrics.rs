@@ -29,6 +29,10 @@ pub struct Metrics {
     pub network_bytes_tx: Arc<AtomicU64>,
     /// Block production latency (ms)
     pub block_latency: Arc<AtomicU64>,
+    /// Active validator count
+    pub validator_count: Arc<AtomicUsize>,
+    /// Total stake of the active validator set
+    pub validator_stake_total: Arc<AtomicU64>,
 }
 
 impl Metrics {
@@ -46,6 +50,8 @@ impl Metrics {
             network_bytes_rx: Arc::new(AtomicU64::new(0)),
             network_bytes_tx: Arc::new(AtomicU64::new(0)),
             block_latency: Arc::new(AtomicU64::new(0)),
+            validator_count: Arc::new(AtomicUsize::new(0)),
+            validator_stake_total: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -70,8 +76,25 @@ impl Metrics {
         self.peer_count.store(count, Ordering::Relaxed);
     }
 
+    pub fn update_consensus_round(&self, round: u64) {
+        self.consensus_round.store(round, Ordering::Relaxed);
+    }
+
+    pub fn update_network_bytes_rx(&self, bytes: u64) {
+        self.network_bytes_rx.store(bytes, Ordering::Relaxed);
+    }
+
+    pub fn update_network_bytes_tx(&self, bytes: u64) {
+        self.network_bytes_tx.store(bytes, Ordering::Relaxed);
+    }
+
     pub fn update_finalized_height(&self, height: u64) {
         self.finalized_height.store(height, Ordering::Relaxed);
+    }
+
+    pub fn update_validator_set(&self, count: usize, stake_total: u64) {
+        self.validator_count.store(count, Ordering::Relaxed);
+        self.validator_stake_total.store(stake_total, Ordering::Relaxed);
     }
 
     pub fn record_mev_protected_tx(&self) {
@@ -161,7 +184,17 @@ impl Metrics {
         output.push_str("# TYPE blockchain_block_latency_ms gauge\n");
         output.push_str(&format!("blockchain_block_latency_ms {}\n", 
             self.block_latency.load(Ordering::Relaxed)));
-        
+
+        output.push_str("# HELP blockchain_validator_count Number of active validators\n");
+        output.push_str("# TYPE blockchain_validator_count gauge\n");
+        output.push_str(&format!("blockchain_validator_count {}\n", 
+            self.validator_count.load(Ordering::Relaxed)));
+
+        output.push_str("# HELP blockchain_validator_stake_total Total stake of active validators\n");
+        output.push_str("# TYPE blockchain_validator_stake_total gauge\n");
+        output.push_str(&format!("blockchain_validator_stake_total {}\n", 
+            self.validator_stake_total.load(Ordering::Relaxed)));
+
         output
     }
 }

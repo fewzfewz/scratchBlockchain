@@ -18,14 +18,19 @@
 use common::types::Transaction;
 use mempool::Mempool;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use storage::ChainStore;
 use tokio::sync::Mutex;
 use warp::{Filter, http::HeaderValue};
 pub use network::NetworkCommand;
 use tokio::sync::mpsc;
 use execution::gas::calculate_next_base_fee;
+
+/// Minimum time (seconds) between faucet drips to the same address.
+const FAUCET_COOLDOWN_SECS: u64 = 60;
 
 // ============================================================================
 // Response Types
@@ -85,7 +90,7 @@ struct ErrorResponse {
     error: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ValidatorInfo {
     address: String,
     public_key: String,
@@ -104,7 +109,7 @@ struct ValidatorsResponse {
     count: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct DelegationInfo {
     validator_address: String,
     amount: String,
@@ -207,6 +212,9 @@ impl RpcServer {
         let chain_store = self.chain_store.clone();
         let metrics = self.metrics.clone();
         let network_cmd_sender = self.network_cmd_sender.clone();
+
+        // Per-address faucet cooldown tracking (server-side, not client-enforced)
+        let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
 
         // Rate limiter: requests/second per IP (configurable via node config)
         let rl = NonZeroU32::new(self.rate_limit).unwrap_or(NonZeroU32::new(200).unwrap());
@@ -379,8 +387,9 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(chain_store.clone()))
-            .and_then(|_, req: serde_json::Value, chain_store: Arc<ChainStore>| async move {
-                handle_faucet_request(req, chain_store).await
+            .and(with_arc(faucet_cooldowns.clone()))
+            .and_then(|_, req: serde_json::Value, chain_store: Arc<ChainStore>, faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>>| async move {
+                handle_faucet_request(req, chain_store, faucet_cooldowns).await
             });
 
         // ====================================================================
@@ -946,16 +955,35 @@ async fn handle_delegations(
 async fn handle_faucet_request(
     req: serde_json::Value,
     chain_store: Arc<ChainStore>,
+    faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>>,
 ) -> Result<impl warp::Reply, Infallible> {
     let address = match req.get("address").and_then(|v| v.as_str()) {
-        Some(addr) => addr.trim_start_matches("0x"),
+        Some(addr) => addr.trim_start_matches("0x").to_lowercase(),
         None => return Ok(warp::reply::json(&serde_json::json!({"error": "Missing address"}))),
     };
 
-    let addr_bytes = match hex::decode(address) {
+    let addr_bytes = match hex::decode(&address) {
         Ok(b) if b.len() == 20 => b,
         _ => return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid address"}))),
     };
+
+    // Server-side cooldown: enforce a minimum wait between drips to the same address
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut cooldowns = faucet_cooldowns.lock().await;
+    if let Some(&last_drip) = cooldowns.get(&address) {
+        let elapsed = now.saturating_sub(last_drip);
+        if elapsed < FAUCET_COOLDOWN_SECS {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": "Faucet cooldown active",
+                "retry_after_secs": FAUCET_COOLDOWN_SECS - elapsed,
+            })));
+        }
+    }
+    cooldowns.insert(address, now);
+    drop(cooldowns);
 
     let drip_amount: u128 = req.get("amount")
         .and_then(|v| v.as_str())

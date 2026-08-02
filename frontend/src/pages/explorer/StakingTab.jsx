@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const API_URL = 'http://localhost:9933'
+const API_URL = 'http://localhost:8545'
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 const fmtStake = (s) => !s ? '--' : (Number(s) / 1e18).toFixed(2) + ' NBL'
 

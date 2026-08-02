@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const API_URL = 'http://localhost:9933'
+const API_URL = 'http://localhost:8545'
 
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 const shorten = (v, s = 10, e = 8) => !v ? '--' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}...${v.slice(-e)}`
@@ -24,7 +24,7 @@ export default function DashboardTab() {
         const [sd, md] = await Promise.all([sr.json(), mr.json()])
         if (!active) return
         setStatus(sd); setMempool(md); setLastUpdated(new Date()); setError('')
-      } catch { if (active) setError('Unable to reach the local node at http://localhost:9933.') }
+      } catch { if (active) setError('Unable to reach the local node at http://localhost:8545.') }
       finally { if (active) setLoading(false) }
     }
     fetch()

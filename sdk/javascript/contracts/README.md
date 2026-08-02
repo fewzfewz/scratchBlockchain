@@ -32,7 +32,7 @@ Or via the SDK:
 import { Wallet, HttpProvider } from "@modular-blockchain/sdk";
 import { deployContract } from "@modular-blockchain/sdk/cli";
 
-const provider = new HttpProvider("http://localhost:9933");
+const provider = new HttpProvider("http://localhost:8545");
 const wallet = Wallet.fromPrivateKey("0x...");
 const token = await deployContract("ERC20", ["MyToken", "MTK", 1000000], wallet, provider);
 ```

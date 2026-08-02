@@ -3,7 +3,7 @@
 ## 🎯 Project Status: **Development** → **Testnet Preparation**
 
 **Last Updated**: June 25, 2026  
-**Node RPC**: `http://localhost:9933`  
+**Node RPC**: `http://localhost:8545`  
 **Frontend SPA**: `http://localhost:5173` (9 pages, dark/light mode)  
 **API Docs**: Interactive Swagger UI at `/api-docs`
 
@@ -311,7 +311,7 @@ This document outlines the journey from our current development codebase to a fu
 
 - **GitHub**: [github.com/anomalyco/scratchBlockchain]
 - **Frontend**: `http://localhost:5173`
-- **Node RPC**: `http://localhost:9933` (17 endpoints)
+- **Node RPC**: `http://localhost:8545` (17 endpoints)
 - **API Docs**: `http://localhost:5173/api-docs` (interactive Swagger UI)
 
 ---

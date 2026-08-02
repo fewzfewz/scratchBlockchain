@@ -123,22 +123,25 @@ docker compose up -d`} />
               <CodeBlock lang="bash" code={`./scripts/deploy.sh
 
 # Check node status
-curl http://localhost:9933/status
+curl http://localhost:8545/status
 
 # Expected response:
 # {"height":42,"peers":2,"uptime_secs":120,"consensus":"BFT","finalized":41}`} />
 
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">2. Multi-node testnet</h3>
-              <CodeBlock lang="bash" code={`docker compose up -d --scale validator=3
+              <CodeBlock lang="bash" code={`cd deployment/local
+docker-compose up -d
 
-# Each node exposes:
-# Node 1: http://localhost:9933
-# Node 2: http://localhost:9934
-# Node 3: http://localhost:9935`} />
+# Each node exposes an API:
+# validator1: http://localhost:8545
+# validator2: http://localhost:8546
+# validator3: http://localhost:8547
+# rpc1:       http://localhost:8548
+# rpc2:       http://localhost:8549`} />
 
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">3. Verify consensus</h3>
               <CodeBlock lang="bash" code={`# Check all nodes are on the same block height
-for port in 9933 9934 9935; do
+for port in 8545 8546 8547 8548 8549; do
   echo "Node $port: $(curl -s http://localhost:$port/status | grep -o '"height":[0-9]*')"
 done`} />
             </section>
@@ -270,7 +273,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
               </div>
 
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Submit Transaction</h3>
-              <CodeBlock lang="bash" code={`curl -X POST http://localhost:9933/submit_tx \\
+              <CodeBlock lang="bash" code={`curl -X POST http://localhost:8545/submit_tx \\
   -H "Content-Type: application/json" \\
   -d '{
     "sender": [116,55,...],
@@ -290,7 +293,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
           {activeSection === 'rpc' && (
             <section className="animate-slide-up">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">RPC API</h2>
-              <p className="text-slate-600 dark:text-slate-400 mb-6">Interact with the node via HTTP JSON-RPC on port 9933. All endpoints return JSON responses.</p>
+              <p className="text-slate-600 dark:text-slate-400 mb-6">Interact with the node via HTTP JSON-RPC on port 8545. All endpoints return JSON responses.</p>
 
               <div className="flex flex-wrap items-center gap-3 mb-6">
                 <p className="text-sm text-slate-600 dark:text-slate-400">An OpenAPI 3.0 spec is available at <code className="text-xs text-blue-600 dark:text-blue-400">docs/openapi.yaml</code>.</p>
@@ -342,7 +345,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
 
               <div className="p-5 rounded-xl glass">
                 <h3 className="text-sm font-semibold text-slate-800 dark:text-white mb-2">RPC URL Configuration</h3>
-                <p className="text-sm text-slate-600 dark:text-slate-400">All frontends connect to the RPC endpoint. You can configure the URL in each app's settings panel. Default: <code className="text-xs text-blue-600 dark:text-blue-400">http://localhost:9933</code></p>
+                <p className="text-sm text-slate-600 dark:text-slate-400">All frontends connect to the RPC endpoint. You can configure the URL in each app's settings panel. Default: <code className="text-xs text-blue-600 dark:text-blue-400">http://localhost:8545</code></p>
               </div>
             </section>
           )}
@@ -405,11 +408,11 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
                   </thead>
                   <tbody className="text-slate-700 dark:text-slate-300">
                     {[
-                      ['RPC Node', '9933', 'Primary JSON-RPC endpoint for chain interactions'],
-                      ['Faucet Backend', '3006', 'Test token distribution service'],
+                      ['RPC Node', '8545', 'Primary JSON-RPC endpoint for chain interactions'],
+                      ['Faucet Backend', '3001', 'Test token distribution service'],
                       ['Frontend (Unified)', '5173', 'Wallet, explorer, governance, docs, portals'],
-                      ['Metrics', '9615', 'Prometheus metrics endpoint'],
-                      ['P2P', '30333', 'Libp2p peer-to-peer networking'],
+                      ['Metrics', '9090', 'Prometheus metrics endpoint'],
+                      ['P2P', '26656', 'Libp2p peer-to-peer networking'],
                     ].map(([service, port, desc]) => (
                       <tr key={service} className="border-b border-slate-100 dark:border-slate-700/50">
                         <td className="py-2 text-xs font-medium text-slate-800 dark:text-slate-200">{service}</td>
@@ -438,7 +441,7 @@ curl -X POST http://localhost:3006/faucet \\
                 {[
                   ['Reset Devnet', `docker compose down -v && docker compose up -d\n# Removes all state and starts fresh`],
                   ['Check Logs', `docker compose logs -f validator-1`],
-                  ['Query Balance', `curl http://localhost:9933/balance/0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18`],
+                  ['Query Balance', `curl http://localhost:8545/balance/0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18`],
                   ['Send Tokens', `# Use the wallet frontend at http://localhost:5173/wallet`],
                 ].map(([title, cmd]) => (
                   <div key={title} className="p-4 rounded-xl glass">

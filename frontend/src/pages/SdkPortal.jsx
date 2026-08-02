@@ -44,7 +44,7 @@ export default function SdkPortal() {
               { num: '1', title: 'Install the SDK', code: 'npm install @modular-blockchain/sdk' },
               { num: '2', title: 'Connect to a node', code: `import { ModularClient, HttpProvider } from "@modular-blockchain/sdk";
 
-const provider = new HttpProvider("http://localhost:9933");
+const provider = new HttpProvider("http://localhost:8545");
 const client = new ModularClient(provider);
 const status = await client.getNodeStatus();
 console.log("Height:", status.height);` },

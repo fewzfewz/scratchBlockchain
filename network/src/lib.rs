@@ -169,8 +169,33 @@ pub enum NetworkCommand {
         blocks: Vec<Block>,
     },
     
+    /// Return the list of currently connected peers (used to pick a sync source)
+    ListConnectedPeers(tokio::sync::oneshot::Sender<Vec<PeerId>>),
+    
     /// Save current peer list to disk
     SavePeers,
+    
+    /// Query current network statistics (peers, connections, bytes)
+    GetStats(tokio::sync::oneshot::Sender<NetworkStats>),
+}
+
+// ============================================================================
+// Network Stats (queried by the node for metrics)
+// ============================================================================
+
+/// Snapshot of current network statistics
+#[derive(Debug, Clone, Default)]
+pub struct NetworkStats {
+    /// Number of connected peers
+    pub peer_count: usize,
+    /// Total established connections (incoming + outgoing)
+    pub connection_count: usize,
+    /// Connections currently being established
+    pub pending_connections: usize,
+    /// Application-layer bytes received via gossip
+    pub bytes_rx: u64,
+    /// Application-layer bytes sent via gossip
+    pub bytes_tx: u64,
 }
 
 // ============================================================================
@@ -214,6 +239,12 @@ pub struct NetworkService {
     
     /// Flag indicating if shutdown has been initiated
     shutting_down: bool,
+    
+    /// Cumulative gossip bytes received (application layer)
+    bytes_rx: u64,
+    
+    /// Cumulative gossip bytes sent (application layer)
+    bytes_tx: u64,
 }
 
 /// Return type for network service initialization
@@ -351,6 +382,8 @@ impl NetworkService {
             reputation_file,
             reconnect_interval: tokio::time::interval(Duration::from_secs(15)),
             shutting_down: false,
+            bytes_rx: 0,
+            bytes_tx: 0,
         };
 
         // Attempt to connect to known peers immediately
@@ -567,6 +600,8 @@ impl NetworkService {
             warn!("🚫 Ignoring message from banned peer: {}", source);
             return;
         }
+        
+        self.bytes_rx += message.data.len() as u64;
 
         match topic {
             TRANSACTION_TOPIC => {
@@ -702,9 +737,19 @@ impl NetworkService {
                 }
             }
             
+            NetworkCommand::ListConnectedPeers(reply) => {
+                let peers: Vec<PeerId> = self.swarm.connected_peers().cloned().collect();
+                let _ = reply.send(peers);
+            }
+            
             NetworkCommand::SavePeers => {
                 self.save_peers();
                 let _ = self.save_reputation();
+            }
+            
+            NetworkCommand::GetStats(reply) => {
+                let stats = self.stats();
+                let _ = reply.send(stats);
             }
         }
     }
@@ -720,6 +765,7 @@ impl NetworkService {
         
         match serde_json::to_vec(&msg) {
             Ok(data) => {
+                self.bytes_tx += data.len() as u64;
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
                     warn!("Failed to broadcast transaction: {}", e);
                 } else {
@@ -739,6 +785,7 @@ impl NetworkService {
         
         match serde_json::to_vec(&msg) {
             Ok(data) => {
+                self.bytes_tx += data.len() as u64;
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
                     warn!("Failed to broadcast block: {}", e);
                 } else {
@@ -757,6 +804,7 @@ impl NetworkService {
         
         match serde_json::to_vec(&msg) {
             Ok(data) => {
+                self.bytes_tx += data.len() as u64;
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
                     warn!("Failed to broadcast consensus message: {}", e);
                 } else {
@@ -871,6 +919,19 @@ impl NetworkService {
     /// Get number of connected peers
     pub fn connected_peers(&self) -> usize {
         self.swarm.connected_peers().count()
+    }
+    
+    /// Get a snapshot of current network statistics
+    pub fn stats(&self) -> NetworkStats {
+        let info = self.swarm.network_info();
+        let counters = info.connection_counters();
+        NetworkStats {
+            peer_count: info.num_peers(),
+            connection_count: counters.num_established() as usize,
+            pending_connections: counters.num_pending() as usize,
+            bytes_rx: self.bytes_rx,
+            bytes_tx: self.bytes_tx,
+        }
     }
 }
 

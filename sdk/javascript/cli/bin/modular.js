@@ -19,7 +19,7 @@ program
   .description("Deploy a smart contract")
   .option("-c, --contract <name>", "Contract name (ERC20, ERC721, DAO)")
   .option("-a, --args <args>", "Constructor arguments (comma-separated)")
-  .option("--rpc <url>", "RPC endpoint", "http://localhost:9933")
+  .option("--rpc <url>", "RPC endpoint", "http://localhost:8545")
   .option("--key <privateKey>", "Deployer private key")
   .action((opts) => require("../commands/deploy")(opts));
 

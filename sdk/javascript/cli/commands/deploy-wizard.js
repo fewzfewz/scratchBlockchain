@@ -16,7 +16,7 @@ module.exports = async function deployWizard() {
 
   // Step 2: RPC endpoint
   console.log("Step 2: Configure connection");
-  const rpcUrl = "http://localhost:9933";
+  const rpcUrl = "http://localhost:8545";
   console.log(`  RPC: ${rpcUrl}`);
 
   // Step 3: Wallet
@@ -31,11 +31,11 @@ module.exports = async function deployWizard() {
   // Step 5: Confirm
   console.log("\nStep 5: Confirm deployment");
   console.log("  Contract: ERC20");
-  console.log("  Network:  localhost:9933");
+  console.log("  Network:  localhost:8545");
   console.log("  Args:     MyToken, MTK, 1000000");
 
   console.log("\nTo deploy non-interactively, run:");
-  console.log("  modular deploy --contract ERC20 --args \"MyToken,MTK,1000000\" --rpc http://localhost:9933");
+  console.log("  modular deploy --contract ERC20 --args \"MyToken,MTK,1000000\" --rpc http://localhost:8545");
 
   console.log("\n⚠  Interactive mode requires terminal input.");
   console.log("   Use the command above for automated deployments.");

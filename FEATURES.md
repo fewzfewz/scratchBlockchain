@@ -38,7 +38,7 @@
 - [x] Emergency rollback
 - [x] Upgrade history tracking
 
-### RPC API (17 endpoints, port 9933)
+### RPC API (17 endpoints, port 8545)
 - [x] `GET /health` — Health check
 - [x] `GET /status` — Node status (height, mempool, peers)
 - [x] `GET /mempool` — Pending transactions

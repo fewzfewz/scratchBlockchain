@@ -74,7 +74,7 @@
             "uid": "Prometheus"
           },
           "editorMode": "code",
-          "expr": "blockchain_height",
+          "expr": "blockchain_finalized_height",
           "legendFormat": "Block Height",
           "range": true,
           "refId": "A"

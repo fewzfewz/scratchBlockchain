@@ -55,7 +55,7 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "up{role=\"validator\"}", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "up{job=~\"validator[0-9]+\"}", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
       "title": "Validator Status",
       "type": "stat"
@@ -87,7 +87,7 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_validator_count", "legendFormat": "Active Validators", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "max(blockchain_validator_count)", "legendFormat": "Active Validators", "range": true, "refId": "A" }
       ],
       "title": "Active Validators",
       "type": "stat"
@@ -99,12 +99,11 @@
           "color": { "mode": "thresholds" },
           "mappings": [],
           "thresholds": { "mode": "absolute", "steps": [
-            { "color": "green", "value": null },
-            { "color": "green", "value": 0 },
-            { "color": "orange", "value": 0.05 },
-            { "color": "red", "value": 0.1 }
+            { "color": "red", "value": null },
+            { "color": "red", "value": 0 },
+            { "color": "green", "value": 1 }
           ] },
-          "unit": "percent"
+          "unit": "cps"
         },
         "overrides": []
       },
@@ -120,9 +119,9 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "rate(chain_missed_blocks_total[5m])", "legendFormat": "Missed Rate", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "sum(rate(blockchain_blocks_total{job=~\"validator[0-9]+\"}[5m]))", "legendFormat": "Block Rate", "range": true, "refId": "A" }
       ],
-      "title": "Missed Block Rate (5m)",
+      "title": "Block Production Rate (5m)",
       "type": "stat"
     },
     {
@@ -152,7 +151,7 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_peer_count", "legendFormat": "Peers", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "blockchain_peer_count", "legendFormat": "Peers", "range": true, "refId": "A" }
       ],
       "title": "Connected Peers",
       "type": "stat"
@@ -169,7 +168,7 @@
             { "color": "orange", "value": 50000000000000000000 },
             { "color": "red", "value": 100000000000000000000 }
           ] },
-          "unit": "nblocks"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -185,7 +184,7 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_validator_stake_total", "legendFormat": "Total Stake", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "max(blockchain_validator_stake_total)", "legendFormat": "Total Stake", "range": true, "refId": "A" }
       ],
       "title": "Total Staked",
       "type": "stat"
@@ -202,7 +201,7 @@
             { "color": "orange", "value": 8 },
             { "color": "red", "value": 10 }
           ] },
-          "unit": "s"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -218,9 +217,9 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_consensus_time_seconds", "legendFormat": "Consensus Time", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "max(blockchain_consensus_round)", "legendFormat": "Consensus Round", "range": true, "refId": "A" }
       ],
-      "title": "Consensus Time",
+      "title": "Consensus Round",
       "type": "stat"
     },
     {
@@ -269,9 +268,9 @@
         "tooltip": { "mode": "multi", "sort": "none" }
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "rate(chain_missed_blocks_total[5m])", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "rate(blockchain_blocks_total{job=~\"validator[0-9]+\"}[5m])", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
-      "title": "Missed Blocks Rate (5m avg)",
+      "title": "Block Production Rate (5m avg)",
       "type": "timeseries"
     },
     {
@@ -312,7 +311,7 @@
         "tooltip": { "mode": "multi", "sort": "none" }
       },
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "rate(chain_blocks_produced_total[5m])", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "rate(blockchain_blocks_total[5m])", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
       "title": "Blocks Produced Rate (5m avg)",
       "type": "timeseries"
@@ -365,9 +364,9 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_state_size_bytes", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "blockchain_network_bytes_rx_total", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
-      "title": "State Size",
+      "title": "Network Bytes Received",
       "type": "timeseries"
     },
     {
@@ -398,7 +397,7 @@
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green", "value": null }
           ] },
-          "unit": "s"
+          "unit": "none"
         },
         "overrides": []
       },
@@ -410,9 +409,9 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_db_write_seconds", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "blockchain_consensus_round", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
-      "title": "Database Write Latency",
+      "title": "Consensus Round",
       "type": "timeseries"
     },
     {
@@ -443,7 +442,7 @@
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green", "value": null }
           ] },
-          "unit": "s"
+          "unit": "bytes"
         },
         "overrides": []
       },
@@ -455,9 +454,9 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_network_latency_seconds", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "blockchain_network_bytes_tx_total", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
-      "title": "Network Latency",
+      "title": "Network Bytes Transmitted",
       "type": "timeseries"
     },
     {
@@ -496,7 +495,7 @@
           "thresholds": { "mode": "absolute", "steps": [
             { "color": "green", "value": null }
           ] },
-          "unit": "s"
+          "unit": "ms"
         },
         "overrides": []
       },
@@ -508,9 +507,9 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_consensus_time_seconds", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "blockchain_block_latency_ms", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
-      "title": "Consensus Round Time",
+      "title": "Block Latency",
       "type": "timeseries"
     },
     {
@@ -552,7 +551,7 @@
       },
       "pluginVersion": "10.0.0",
       "targets": [
-        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "chain_peer_count", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
+        { "datasource": { "type": "prometheus", "uid": "Prometheus" }, "editorMode": "code", "expr": "blockchain_peer_count", "legendFormat": "{{ instance }}", "range": true, "refId": "A" }
       ],
       "title": "Peer Count",
       "type": "timeseries"
@@ -587,7 +586,7 @@
   "templating": {
     "list": [
       {
-        "definition": "label_values(up{role=\"validator\"}, instance)",
+        "definition": "label_values(up{job=~\"validator[0-9]+\"}, instance)",
         "hide": 0,
         "includeAll": false,
         "multi": false,
@@ -595,7 +594,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(up{role=\"validator\"}, instance)",
+          "query": "label_values(up{job=~\"validator[0-9]+\"}, instance)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 1,

@@ -19,7 +19,7 @@ cargo build
 ./target/debug/node start --genesis genesis.json
 ```
 
-The node will start on `http://localhost:9933` with 3 genesis accounts and 3 genesis validators pre-configured.
+The node will start on `http://localhost:8545` with 3 genesis accounts and 3 genesis validators pre-configured.
 
 ### 2. Start the Frontend
 
@@ -43,27 +43,29 @@ Open **http://localhost:5173** to access the unified UI with all 8 pages:
 | `/sdk` | **SDK Portal** | JavaScript SDK reference & contract templates |
 | `/developer-portal` | **Dev Portal** | Starter kits & CLI reference |
 
-### 3. Faucet Backend (Optional)
+### 3. Faucet
 
-For on-chain token distribution, start the faucet service:
+The faucet is **built into the node RPC**: `POST /faucet/request` credits the address directly in the state trie. No separate faucet service is needed. Call it from the Faucet page in the UI or with curl:
 
 ```bash
-./target/debug/node faucet
+curl -X POST http://localhost:8545/faucet/request \
+  -H "Content-Type: application/json" \
+  -d '{"address":"0x...","amount":100}'
 ```
-
-This starts a warp HTTP server on port 3006. Without it, the faucet frontend falls back to local simulation (tokens won't appear on-chain).
 
 ## Port Mapping
 
 | Port | Service | Notes |
 |------|---------|-------|
-| 9933 | Node RPC | JSON-RPC API |
+| 8545-8549 | Node RPC | One per node in the local testnet (validator1: 8545) |
+| 26656-26657 | P2P / RPC | libp2p gossip + metrics (`/health`, `/metrics` on 26657) |
 | 5173 | Frontend | Unified Vite/React SPA |
-| 3006 | Faucet | Optional token dispenser backend |
+| 9095 | Prometheus | Container port 9090, scrapes all 5 nodes |
+| 3000 | Grafana | `admin`/`admin` |
 
 ## RPC API
 
-The node exposes RESTful JSON endpoints on `http://localhost:9933`:
+The node exposes RESTful JSON endpoints on `http://localhost:8545`:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -111,7 +113,7 @@ The node uses a TOML config file (default: `config.toml`). Key settings:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `api.rate_limit` | 200 | Requests per second per IP |
-| `network.rpc_port` | 9933 | RPC server port |
+| `network.rpc_port` | 8545 | RPC server port |
 | `network.p2p_port` | 9000 | P2P networking port |
 | `consensus.max_validators` | 32 | Max active validators |
 | `mempool.max_tx_per_block` | 500 | Max transactions per block |
@@ -122,7 +124,7 @@ The node uses a TOML config file (default: `config.toml`). Key settings:
 |---------|-------------|-----|
 | `{"error":"Rate limit exceeded"}` | Too many requests from the same IP | Increase `api.rate_limit` in config, or throttle your client |
 | `TweetNaCl library not loaded` | Missing npm dependency | Run `npm install` in the `frontend/` directory |
-| `POST http://localhost:3006/faucet` connection refused | Faucet backend not running | Start with `./target/debug/node faucet`, or use the frontend's local simulation mode |
+| `POST http://localhost:3006/faucet` connection refused | Stale faucet service URL | The faucet is built into the node (`POST /faucet/request` on 8545) — no separate service needed |
 | `GET /validators` returns empty array | Validators not in state trie | Ensure `genesis.json` has validators and restart the node |
 | `Endpoint not found` 404 | RPC endpoint doesn't exist | Check the RPC API table above or open `http://localhost:5173/api-docs` for the full interactive reference; may need to rebuild after adding new endpoints |
 
