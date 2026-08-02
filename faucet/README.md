@@ -1,28 +1,27 @@
 # Nebula Faucet
 
-Test token faucet for the Scratch Blockchain. Dispenses NBL tokens to local wallet addresses.
+Test token faucet for the Scratch Blockchain.
 
-**Tech Stack:** Rust (warp HTTP server), vanilla HTML/CSS/JS frontend.
+## Primary: Built-in Node Faucet (recommended)
 
-**Frontend** (`index.html`) submits requests to `POST /faucet` on the faucet backend service.
-- 100 NBL per request
-- 24-hour cooldown (client-side via localStorage)
-- Address validation (0x + 40 hex chars)
+The node credits tokens directly via RPC — no separate service required:
 
-## Quick Start
+```bash
+curl -X POST http://localhost:8545/faucet/request \
+  -H "Content-Type: application/json" \
+  -d '{"address":"0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18","amount":100}'
+```
 
-Start the faucet backend (token dispenser):
+- **Server-side cooldown:** 60 seconds per address (enforced in `node/src/rpc.rs`)
+- **Frontend:** `/faucet` page in the unified SPA (`http://localhost:5173/faucet`)
+
+## Legacy: Standalone Faucet Crate
+
+This directory also contains a standalone warp server used by `node faucet` CLI subcommand:
+
 ```bash
 cargo run --release --bin node faucet
-```
-The warp server listens on `http://localhost:3006/faucet`.
-
-Serve the frontend separately:
-```bash
-python3 -m http.server 8082 --directory faucet/
+# Listens on http://localhost:3006/faucet (env: FAUCET_PORT)
 ```
 
-Or use the all-in-one launcher:
-```bash
-./scripts/start-frontends.sh
-```
+Prefer the built-in `POST /faucet/request` on port **8545** for local development and Docker testnet.

@@ -2,7 +2,9 @@
 
 Welcome to the Modular Blockchain Testnet!
 
-## Network Information
+> **Local development:** Use `docker-compose -f deployment/local/docker-compose.yml up -d` — RPC at `http://localhost:8545`, WebSocket at `ws://localhost:8545/ws`, faucet at `POST /faucet/request`. The public URLs below are **planned** for a future public testnet.
+
+## Network Information (planned public testnet)
 
 - **Chain ID**: `modular-testnet-1`
 - **Block Time**: 3 seconds

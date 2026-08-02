@@ -43,11 +43,15 @@ node 31-sdk-wallet.js
 3. **Monitoring** - Prometheus, Grafana
 4. **SDK** - Connection, wallet, queries
 
-### 🔧 Needs Setup
-5. **Governance** - Needs proposal creation
-6. **Staking** - Needs validator registration
-7. **Bridge** - Needs local Ethereum node
-8. **Runtime Upgrades** - Needs upgrade proposal
+### 🔧 Partially testable via RPC (August 2026)
+5. **Governance** — `GET /governance`, `GET /proposal/{id}`; integration script pending
+6. **Staking / delegation** — `POST /delegate`, `POST /validators/register`; script `16-stake-tokens.js` pending
+7. **MEV / AA** — `POST /mev/*`, `POST /submit_user_operation`; manual curl tests
+8. **WebSocket** — `websocat ws://localhost:8545/ws`
+
+### 🔧 Needs external setup
+9. **Bridge** — Needs local Ethereum node
+10. **Runtime Upgrades** — Needs upgrade proposal flow + script
 
 ## 🎯 Recommended Testing Order
 
@@ -108,7 +112,15 @@ open http://localhost/grafana
 ### Monitoring Tests
 - ✅ `check-metrics.sh` - Verify Prometheus metrics
 
-### Coming Soon
+### Manual RPC smoke tests (new integrations)
+```bash
+curl http://localhost:8545/slashing/events
+curl http://localhost:8545/user_operations/pending
+curl http://localhost:8545/governance
+websocat ws://localhost:8545/ws
+```
+
+### Coming Soon (automated scripts)
 - `11-create-proposal.js` - Governance proposals
 - `16-stake-tokens.js` - Staking
 - `21-bridge-lock.js` - Bridge operations

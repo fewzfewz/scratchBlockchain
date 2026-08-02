@@ -29,13 +29,14 @@ npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** to access the unified UI with all 8 pages:
+Open **http://localhost:5173** to access the unified UI with all 10 pages:
 
 | Route | Page | Description |
 |-------|------|-------------|
 | `/` | **Home** | Network overview & status |
-| `/explorer` | **Explorer** | Blocks, validators, staking & delegations |
-| `/wallet` | **Wallet** | Ed25519 keypair management & signed transactions |
+| `/explorer` | **Explorer** | Blocks, validators, staking & rewards estimator |
+| `/wallet` | **Wallet** | Keypair management, send tx, on-chain tx history |
+| `/deploy` | **Deploy** | EVM contract deployment (ERC20/ERC721 presets) |
 | `/faucet` | **Faucet** | Test token dispenser (local simulation if backend offline) |
 | `/governance` | **Governance** | Proposal voting, treasury & analytics |
 | `/docs` | **Docs** | Full architecture & RPC API documentation |
@@ -65,7 +66,7 @@ curl -X POST http://localhost:8545/faucet/request \
 
 ## RPC API
 
-The node exposes RESTful JSON endpoints on `http://localhost:8545`:
+The node exposes RESTful JSON endpoints on `http://localhost:8545` plus a WebSocket at `/ws`:
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
@@ -74,18 +75,32 @@ The node exposes RESTful JSON endpoints on `http://localhost:8545`:
 | GET | `/gas_price` | Current gas price (EIP-1559) |
 | GET | `/mempool` | Pending transactions |
 | GET | `/peers` | Connected peers |
-| GET | `/validators` | Active validator set (from genesis) |
+| GET | `/validators` | Active validator set |
 | GET | `/block/latest` | Latest block |
 | GET | `/block/{height}` | Block by height |
 | GET | `/block/hash/{hash}` | Block by 32-byte hash |
 | GET | `/tx/{hash}` | Transaction receipt by hash |
+| GET | `/txs/{address}` | On-chain tx history for address (optional `?limit=N`) |
 | GET | `/balance/{address}` | Account balance & nonce |
-| GET | `/nonce/{address}` | Account nonce |
 | GET | `/delegations/{address}` | Delegations by address |
+| GET | `/governance` | On-chain governance state |
+| GET | `/proposal/{id}` | Single proposal |
+| GET | `/slashing/events` | Slashed validators |
+| GET | `/user_operations/pending` | Pending account-abstraction ops |
 | POST | `/submit_tx` | Submit signed transaction |
+| POST | `/submit_user_operation` | Submit ERC-4337 UserOperation |
+| POST | `/delegate` | Delegate stake to validator |
+| POST | `/validators/register` | Register new validator |
+| POST | `/mev/commit` | MEV commit-reveal: submit commitment |
+| POST | `/mev/reveal` | MEV commit-reveal: reveal transaction |
+| POST | `/mev/encrypted` | Submit encrypted transaction |
+| POST | `/mev/decryption_share` | Submit decryption share |
 | POST | `/connect_peer` | Connect to a peer |
-| GET | `/estimate_gas` | Estimate gas for a transaction |
-| GET | `/fee_history` | Historical fee data |
+| POST | `/estimate_gas` | Estimate gas for a transaction |
+| POST | `/faucet/request` | Request test tokens (60s cooldown) |
+| GET | `/fee_history/{count}` | Historical fee data |
+| GET | `/metrics` | Prometheus metrics |
+| WS | `/ws` | WebSocket `newHead` events |
 
 ### Rate Limiting
 
@@ -93,7 +108,7 @@ All RPC endpoints are rate-limited per IP (default: **200 requests/second**, con
 
 ## API Documentation
 
-- **Interactive Swagger UI**: Open `http://localhost:5173/api-docs` in your browser — try all 17 endpoints interactively with the "Try it out" button
+- **Interactive Swagger UI**: Open `http://localhost:5173/api-docs` — try endpoints from the browser (OpenAPI spec may lag behind latest routes; see table above)
 - **OpenAPI 3.0 spec**: [`docs/openapi.yaml`](docs/openapi.yaml) — machine-readable spec with schemas and example responses
 - **Frontend docs page**: `http://localhost:5173/docs` for human-readable reference with real `curl` examples
 - **Frontend SDK page**: `http://localhost:5173/sdk` for the JavaScript SDK reference
@@ -136,7 +151,7 @@ The node uses a TOML config file (default: `config.toml`). Key settings:
 ├── consensus/          # BFT consensus + GRANDPA finality
 ├── execution/          # Multi-VM (EVM + WASM + parallel)
 ├── network/            # P2P networking (libp2p, Gossipsub)
-├── node/               # Node binary, RPC server, faucet
+├── node/               # Node binary, TxPool, RPC server, faucet
 ├── storage/            # RocksDB / Sled + Patricia trie
 ├── frontend/           # Unified React SPA (all 8 UIs)
 ├── sdk/javascript/     # JavaScript SDK (RxJS-based)
@@ -152,12 +167,16 @@ The node uses a TOML config file (default: `config.toml`). Key settings:
 |---------|--------|
 | Validator-based consensus w/ GRANDPA finality | Ready |
 | P2P networking via libp2p + Gossipsub | Ready |
-| Multi-VM (EVM + WASM) parallel execution | Ready |
+| Multi-VM (EVM + WASM scaffold) parallel execution | Ready |
 | RocksDB persistent storage + Patricia trie | Ready |
 | Ed25519 cryptographic signatures (via tweetnacl) | Ready |
 | Governance (proposals, voting, treasury) | Ready |
+| Account abstraction (ERC-4337 bundler + RPC) | Ready |
+| MEV protection (commit-reveal + encrypted mempool) | Ready |
+| Dynamic validator registration + delegation RPC | Ready |
+| WebSocket `/ws` for block head events | Ready |
 | Light/dark theme with glassmorphism UI | Ready |
-| OpenAPI 3.0 spec for all 17 RPC endpoints | Ready |
+| OpenAPI 3.0 spec (core endpoints) | Ready |
 | Genesis validators in state trie | Ready |
 | Rate-limited RPC (configurable) | Ready |
 | Prometheus + Grafana monitoring | Ready |

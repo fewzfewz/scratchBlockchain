@@ -2,6 +2,8 @@
 
 Guide for building dApps on the Modular Blockchain Testnet.
 
+> **Local development:** RPC `http://localhost:8545`, WebSocket `ws://localhost:8545/ws`, 28 endpoints (MEV, AA, delegation, slashing). Public testnet URLs below are planned.
+
 ## Getting Started
 
 ### 1. Install SDK

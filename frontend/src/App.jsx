@@ -2,7 +2,7 @@ import { useState, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Wallet, Droplets, Compass, BookOpen,
-  FileCode, Vote, ExternalLink, Github, Sun, Moon, Menu, X, FileJson,
+  FileCode, Vote, ExternalLink, Github, Sun, Moon, Menu, X, FileJson, Rocket, Shield,
 } from 'lucide-react'
 import { useTheme } from './ThemeContext.jsx'
 import Home from './pages/Home.jsx'
@@ -13,6 +13,8 @@ import DocsPage from './pages/DocsPage.jsx'
 import DeveloperPortal from './pages/DeveloperPortal.jsx'
 import SdkPortal from './pages/SdkPortal.jsx'
 import Governance from './pages/Governance.jsx'
+import ContractDeployPage from './pages/ContractDeployPage.jsx'
+import ValidatorOnboardPage from './pages/ValidatorOnboardPage.jsx'
 
 const ApiDocs = lazy(() => import('./pages/ApiDocs.jsx'))
 
@@ -20,8 +22,10 @@ const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Home' },
   { to: '/explorer', icon: Compass, label: 'Explorer' },
   { to: '/wallet', icon: Wallet, label: 'Wallet' },
+  { to: '/deploy', icon: Rocket, label: 'Deploy' },
   { to: '/faucet', icon: Droplets, label: 'Faucet' },
   { to: '/governance', icon: Vote, label: 'Governance' },
+  { to: '/validators/onboard', icon: Shield, label: 'Validators' },
   { to: '/docs', icon: BookOpen, label: 'Docs' },
   { to: '/api-docs', icon: FileJson, label: 'API' },
   { to: '/sdk', icon: FileCode, label: 'SDK' },
@@ -135,11 +139,13 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/explorer" element={<Explorer />} />
           <Route path="/wallet" element={<WalletPage />} />
+          <Route path="/deploy" element={<ContractDeployPage />} />
           <Route path="/faucet" element={<FaucetPage />} />
           <Route path="/docs" element={<DocsPage />} />
           <Route path="/developer-portal" element={<DeveloperPortal />} />
           <Route path="/sdk" element={<SdkPortal />} />
           <Route path="/governance/*" element={<Governance />} />
+          <Route path="/validators/onboard" element={<ValidatorOnboardPage />} />
           <Route path="/api-docs" element={
             <Suspense fallback={
               <div className="relative min-h-[70vh] overflow-hidden animate-fade-in">

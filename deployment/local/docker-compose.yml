@@ -188,6 +188,25 @@ services:
       testnet:
         aliases:
           - prometheus
+    depends_on:
+      - alertmanager
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./configs/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      testnet:
+        aliases:
+          - alertmanager
     restart: unless-stopped
 
   # Grafana
@@ -198,6 +217,7 @@ services:
       - "3000:3000"
     volumes:
       - ../monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
       - grafana_data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -269,3 +289,4 @@ volumes:
   rpc2_data:
   prometheus_data:
   grafana_data:
+  alertmanager_data:

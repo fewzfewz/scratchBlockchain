@@ -41,7 +41,7 @@ Detailed comparison of Scratch (Nebula) against Bitcoin, Ethereum, Polkadot, Sol
 | **VM** | EVM (revm) + WASM (wasmtime) | Bitcoin Script (stack-based, non-Turing-complete) | EVM (Solidity, Yul, Huff) | WASM (ink!, Ask!) | BPF (Rust, C, C++) | WASM (CosmWASM) |
 | **Gas model** | EIP-1559 (base fee + priority fee) | Fee per byte | EIP-1559 (base fee + priority fee) | Weight-based | Compute budget (compute units) | Gas per operation |
 | **Parallel execution** | Yes (rayon-based) | No (single-threaded) | No (sequential EVM; after Dencun: blob parallel) | No (sequential WASM) | Yes (Sealevel, transaction read-set) | No (sequential) |
-| **Account abstraction** | ERC-4337 code exists (dormant) | No | ERC-4337 (live on mainnet since 2023) | On-chain native (any call filter) | Native (any BPF program) | Native (CosmWASM) |
+| **Account abstraction** | ERC-4337 wired (`POST /submit_user_operation`) | No | ERC-4337 (live on mainnet since 2023) | On-chain native (any call filter) | Native (any BPF program) | Native (CosmWASM) |
 | **State model** | Patricia trie (Merkle) | UTXO set | Merkle Patricia Trie (hexary) | Merkle trie (Blake2) | Verifiable Delay Function + Bank state | IAVL tree |
 | **What Scratch is missing** | Live EVM contract deployment from UI, active account abstraction | — | — | Production parachain slot | Sealevel-style parallelization over read/write sets | IBC, interchain accounts |
 
@@ -60,7 +60,7 @@ Detailed comparison of Scratch (Nebula) against Bitcoin, Ethereum, Polkadot, Sol
 | **Dev portal** | Built-in | None | Ethereum.org, Remix | Substrate docs, ink! hub | Solana dev docs | Cosmos SDK docs |
 | **Dark mode** | Built-in (toggle, persisted) | Varies by 3rd party | Varies by dApp | Varies by tool | Varies by tool | Varies by tool |
 | **Mobile** | Responsive (hamburger menu) | Varies | WalletConnect ecosystem | Nova wallet, Fearless | Phantom mobile | Keplr mobile |
-| **What Scratch is missing** | Contract interaction UI, tx history, WebSocket push | Comprehensive wallet | DApp ecosystem (MetaMask, Uniswap, etc.) | Parachain-specific explorers | High-performance explorer at scale | IBC explorer |
+| **What Scratch is missing** | Contract interaction UI, tx history | Comprehensive wallet | DApp ecosystem (MetaMask, Uniswap, etc.) | Parachain-specific explorers | High-performance explorer at scale | IBC explorer |
 
 ---
 
@@ -108,7 +108,7 @@ Detailed comparison of Scratch (Nebula) against Bitcoin, Ethereum, Polkadot, Sol
 |-----------|---------|
 | **Single binary** | One `node` binary runs everything — no EL/CL split, no relay/para chain, no separate RPC node. Start it and go. |
 | **Built-in frontend** | Wallet, explorer, faucet, governance, API docs — all in one SPA. No need to install MetaMask, find an explorer, or search for faucets. |
-| **Interactive API docs** | Swagger UI at `/api-docs` — try all 17 endpoints from the browser. Ethereum/Bitcoin don't have this built in. |
+| **Interactive API docs** | Swagger UI at `/api-docs` — 28 RPC routes documented in README/STATUS |
 | **Dark mode everywhere** | Consistent dark/light theme across all pages, persisted, zero configuration. |
 | **Direct faucet** | `POST /faucet/request` credits the state trie immediately — no separate faucet process, no waiting for block inclusion. |
 | **All-in-one quick start** | `./start.sh` builds and starts everything — node + frontend. |
@@ -126,7 +126,7 @@ Detailed comparison of Scratch (Nebula) against Bitcoin, Ethereum, Polkadot, Sol
 | **>3 validators** | ❌ Static genesis | ✅ Unlimited | ✅ 500K+ | ✅ 300 | ✅ 2,000 | ✅ 100-150 |
 | **Live EVM contracts** | ❌ No deployment UI | N/A | ✅ 1M+ contracts | ✅ via Moonbeam | ✅ via Neon EVM | ✅ via Evmos |
 | **Tx history page** | ❌ Not built | ✅ Various | ✅ Etherscan | ✅ Subscan | ✅ Solscan | ✅ Mintscan |
-| **WebSocket** | ❌ HTTP only | ✅ ZMQ | ✅ WebSocket | ✅ WebSocket | ✅ WebSocket | ✅ WebSocket |
+| **WebSocket** | ✅ `/ws` newHead | ✅ ZMQ | ✅ WebSocket | ✅ WebSocket | ✅ WebSocket | ✅ WebSocket |
 | **DApp ecosystem** | ❌ None | ❌ Minimal | ✅ Large | ✅ Growing | ✅ Growing | ✅ Growing |
 | **Mobile wallet** | ❌ None | ✅ Various | ✅ MetaMask | ✅ Nova | ✅ Phantom | ✅ Keplr |
 | **Cross-chain IBC** | ❌ Code only | ❌ | ❌ | ✅ XCMP | ❌ Wormhole | ✅ IBC native |

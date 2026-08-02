@@ -17,4 +17,6 @@ Zero-knowledge proof generation and verification for state transitions.
 
 ## Notes
 
-In default mode, proofs are SHA-256 hash-based simulations, not cryptographically secure for production. Proof caching uses a `HashMap<u64, Vec<u8>>`.
+> **Not wired into live block validation** — ZK module is available as a library; node uses deterministic state roots in headers. Production requires real Halo2 circuits and trusted setup.
+
+In default mode, proofs are SHA-256 hash-based simulations, not cryptographically secure for production.

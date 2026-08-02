@@ -14,5 +14,7 @@ Data Availability layer with KZG-style commitments, erasure coding, and light-cl
 
 ## Notes
 
+> **Stub implementation** — XOR erasure coding and SHA-256-as-KZG are not production-grade. See [WHATS_LEFT.md](../WHATS_LEFT.md).
+
 - Uses SHA-256 hash as a simplified KZG commitment (MVP only; production should use `rust-kzg` or `c-kzg`).
 - Erasure coding uses XOR-based parity instead of full Reed-Solomon.

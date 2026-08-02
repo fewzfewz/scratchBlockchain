@@ -37,15 +37,16 @@ use common::crypto::SigningKey;
 
 use consensus::bft::{BftEngine, BftEvent};
 use consensus::{EnhancedConsensus, FinalityGadget, ValidatorInfo, SlashingCondition};
+use consensus::slashing::{SlashingTracker, SlashingConfig};
 
 use execution::evm::EvmExecutor;
 
 use network::protocol::BlockResponse;
 use network::{NetworkCommand, NetworkEvent, NetworkService};
 
-use mempool::Mempool;
+use node::tx_pool::TxPool;
 
-use storage::{ChainStore, ColumnFamily, WriteBatch};
+use storage::{ChainStore, ColumnFamily, WriteBatch, PruneConfig};
 use storage::trie::PatriciaTrie;
 use storage::receipt_store::ReceiptStore;
 
@@ -199,8 +200,11 @@ struct Node {
     // Economic components
     reward_manager: Arc<Mutex<RewardManager>>,
     
-    // Mempool
-    mempool: Arc<Mempool>,
+    // Transaction pool (mempool + MEV + account abstraction)
+    tx_pool: Arc<TxPool>,
+    
+    // Slashing tracker
+    slashing_tracker: Arc<Mutex<SlashingTracker>>,
     
     // Network
     network_cmd_sender: Arc<tokio::sync::mpsc::Sender<NetworkCommand>>,
@@ -218,6 +222,9 @@ struct Node {
     syncing: bool,
     last_sync_attempt_at: Instant,
     last_finalize_at: Instant,
+
+    // State pruning
+    prune_config: PruneConfig,
 }
 
 impl Node {
@@ -299,7 +306,7 @@ impl Node {
         let genesis_content = fs::read_to_string(&genesis_path)?;
         let genesis_config: common::types::GenesisConfig = serde_json::from_str(&genesis_content)?;
         
-        let validators: Vec<ValidatorInfo> = genesis_config
+        let genesis_validators: Vec<ValidatorInfo> = genesis_config
             .validators
             .iter()
             .map(|v| ValidatorInfo {
@@ -308,11 +315,26 @@ impl Node {
                 slashed: false,
             })
             .collect();
-        
-        info!("✅ Loaded {} validators from genesis", validators.len());
+
+        let chain_tip = chain_store.get_latest_height()?.unwrap_or(0);
+        let validators: Vec<ValidatorInfo> = if chain_tip > 0 {
+            match governance_store::load_consensus_validators(&state_trie).await {
+                Ok(v) if !v.is_empty() => {
+                    info!("✅ Loaded {} validators from state trie", v.len());
+                    v
+                }
+                _ => {
+                    info!("✅ Loaded {} validators from genesis (trie empty)", genesis_validators.len());
+                    genesis_validators.clone()
+                }
+            }
+        } else {
+            info!("✅ Loaded {} validators from genesis", genesis_validators.len());
+            genesis_validators.clone()
+        };
         
         // ================================================================
-        // 6. Initialize Mempool
+        // 6. Initialize Transaction Pool (MEV + account abstraction)
         // ================================================================
         let mempool_config = mempool::MempoolConfig {
             max_capacity: (config.security.max_tx_per_block * 2) as usize,
@@ -320,7 +342,16 @@ impl Node {
             min_fee_per_gas: 1_000_000_000,
             chain_id: Some(1),
         };
-        let mempool = Arc::new(Mempool::new(mempool_config));
+        let validator_pubkeys: Vec<Vec<u8>> = validators
+            .iter()
+            .map(|v| v.public_key.clone())
+            .collect();
+        let tx_pool = Arc::new(TxPool::new(mempool_config, validator_pubkeys));
+        
+        // ================================================================
+        // 6b. Initialize Slashing Tracker
+        // ================================================================
+        let slashing_tracker = Arc::new(Mutex::new(SlashingTracker::new(SlashingConfig::default())));
         
         // ================================================================
         // 7. Initialize BFT Engine
@@ -330,7 +361,6 @@ impl Node {
         // (only the genesis block at slot 0) keeps the historical start (slot 0,
         // BFT height 1); an existing chain continues at slot tip+1 / height tip+2
         // so restarts don't re-produce blocks from slot 0 and break quorum.
-        let chain_tip = chain_store.get_latest_height()?.unwrap_or(0);
         let (producer_start_slot, bft_start_height) = if chain_tip == 0 {
             (0u64, 1u64)
         } else {
@@ -365,7 +395,7 @@ impl Node {
         
         let producer_executor = BlockExecutor::new(EvmExecutor::new(), chain_store.clone());
         let block_producer = Arc::new(Mutex::new(BlockProducer::new(
-            mempool.clone(),
+            tx_pool.clone(),
             bft_engine.clone(),
             producer_executor,
             signing_key.clone(),
@@ -419,11 +449,12 @@ impl Node {
         // 16. Start RPC Server
         // ================================================================
         let rpc_server = node::rpc::RpcServer::new(
-            mempool.clone(),
+            tx_pool.clone(),
             chain_store.clone(),
             state_trie.clone(),
             metrics.clone(),
             (*network_cmd_sender).clone(),
+            slashing_tracker.clone(),
             config.api.rate_limit,
         );
         
@@ -452,6 +483,20 @@ impl Node {
                 warn!("⚠️ Invalid API address {:?}, API server not started", config.api.address);
             }
         }
+
+        // Ensure on-chain governance state exists (seeds it for fresh chains and
+        // for existing chains that predate governance).
+        node::governance_store::load_or_init(&state_trie).await?;
+
+        let prune_config = PruneConfig::from_mode(
+            &config.storage.pruning_mode,
+            Some(config.storage.blocks_to_keep),
+            Some(config.storage.prune_every_n_blocks),
+        );
+        info!(
+            "Storage pruning mode={} keep={} every={} blocks",
+            prune_config.mode, prune_config.blocks_to_keep, prune_config.prune_every_n_blocks
+        );
         
         Ok(Self {
             config,
@@ -463,7 +508,8 @@ impl Node {
             block_executor,
             block_producer,
             reward_manager,
-            mempool,
+            tx_pool,
+            slashing_tracker,
             network_cmd_sender,
             network_event_receiver,
             metrics,
@@ -473,6 +519,7 @@ impl Node {
             syncing: false,
             last_sync_attempt_at: Instant::now(),
             last_finalize_at: Instant::now(),
+            prune_config,
         })
     }
     
@@ -492,6 +539,7 @@ impl Node {
         let mut metrics_interval = interval(Duration::from_secs(5));
         let mut sync_interval = interval(Duration::from_secs(5));
         let mut repropose_interval = interval(Duration::from_secs(1));
+        let mut bft_align_interval = interval(Duration::from_secs(10));
         
         loop {
             // Process BFT events
@@ -515,6 +563,9 @@ impl Node {
                     if let Err(e) = self.update_live_metrics().await {
                         warn!("Error updating metrics: {}", e);
                     }
+                    if let Err(e) = self.sync_validator_set().await {
+                        warn!("Validator set sync failed: {}", e);
+                    }
                 }
                 
                 _ = sync_interval.tick() => {
@@ -531,6 +582,27 @@ impl Node {
                         engine.re_propose()
                     };
                     pending_events.extend(events);
+                }
+                
+                _ = bft_align_interval.tick() => {
+                    // Re-anchor BFT height if it drifted from the chain tip.
+                    let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+                    if tip > 0 {
+                        let expected_bft = tip + 2;
+                        let mut engine = self.bft_engine.lock().await;
+                        if engine.height.saturating_add(1) < expected_bft
+                            || engine.height > expected_bft + 2
+                        {
+                            warn!(
+                                "BFT height {} out of sync with chain tip {} — re-anchoring to {}",
+                                engine.height, tip, expected_bft
+                            );
+                            let events = engine.reset_to_height(expected_bft);
+                            pending_events.extend(events);
+                            drop(engine);
+                            self.block_producer.lock().await.set_current_slot(tip + 1);
+                        }
+                    }
                 }
                 
                 Some(event) = self.network_event_receiver.recv() => {
@@ -601,13 +673,69 @@ impl Node {
                     }
                 }
                 
+                // Apply on-chain governance actions included in this block
+                if let Err(e) = node::governance_store::apply_extrinsics(
+                    &self.state_trie,
+                    &block.extrinsics,
+                    block.header.slot,
+                )
+                .await
+                {
+                    warn!("Error applying governance actions: {}", e);
+                }
+                
                 // Update metrics
                 self.metrics.record_block();
                 self.metrics.update_finalized_height(block.header.slot);
                 self.stats.record_block(block.extrinsics.len());
                 
-                // Remove transactions from mempool
-                self.mempool.remove_transactions(&block.extrinsics);
+                // Remove transactions from pool
+                self.tx_pool.remove_transactions(&block.extrinsics);
+                
+                // Slashing: advance block height tracker
+                {
+                    let mut tracker = self.slashing_tracker.lock().await;
+                    tracker.update_height(block.header.slot);
+                }
+                
+                // Economic engine: burn 50% of fees; 10% to treasury
+                if total_fees > 0 {
+                    let burned = total_fees / 2;
+                    info!("🔥 Fee burn: {} tokens burned from block fees", burned);
+                    if let Err(e) = node::governance_store::collect_treasury_fee(
+                        &self.state_trie,
+                        total_fees / 10,
+                    )
+                    .await
+                    {
+                        warn!("Treasury fee collection failed: {}", e);
+                    }
+                }
+
+                // Prune old blocks/receipts below retention window
+                match self
+                    .chain_store
+                    .maybe_prune(&self.prune_config, block.header.slot)
+                {
+                    Ok(stats) if stats.blocks_pruned > 0 => {
+                        info!(
+                            "🧹 Pruned {} blocks, {} receipts (cutoff height {})",
+                            stats.blocks_pruned, stats.receipts_pruned, stats.to_height
+                        );
+                        if let Ok(removed) = self.state_trie.lock().await.gc_orphan_nodes() {
+                            if removed > 0 {
+                                info!("🧹 Trie GC removed {} orphan nodes", removed);
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => warn!("State pruning failed: {}", e),
+                }
+
+                // Hot-reload BFT validator set from trie (post-governance extrinsics)
+                if let Err(e) = self.sync_validator_set().await {
+                    warn!("Validator set sync failed: {}", e);
+                }
                 
                 // Broadcast block
                 self.network_cmd_sender
@@ -668,7 +796,7 @@ impl Node {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match event {
             NetworkEvent::TransactionReceived(tx) => {
-                if let Err(e) = self.mempool.add_transaction(tx) {
+                if let Err(e) = self.tx_pool.add_transaction(tx) {
                     debug!("Transaction rejected: {}", e);
                 }
             }
@@ -794,15 +922,31 @@ impl Node {
         // Execute block
         let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
         
-        // Verify state root. Produced blocks carry a zero placeholder state_root
-        // (EVM state diffs are not yet persisted to the trie), so the check is
-        // only meaningful for headers that actually recorded a root.
+        // Verify state root when the header records one (non-zero).
         if block.header.state_root.iter().any(|b| *b != 0) {
-            let computed_root = {
-                let trie = self.state_trie.lock().await;
-                trie.root_hash()
+            let parent_root = if block.header.slot == 0 {
+                [0u8; 32]
+            } else {
+                match self.chain_store.get_block_hash_by_height(block.header.slot.saturating_sub(1)) {
+                    Ok(Some(hash_bytes)) if hash_bytes.len() == 32 => {
+                        let mut hash = [0u8; 32];
+                        hash.copy_from_slice(&hash_bytes);
+                        if let Ok(Some(encoded)) = self.chain_store.get_block(&hash) {
+                            if let Ok(parent) = serde_json::from_slice::<Block>(&encoded) {
+                                parent.header.state_root
+                            } else {
+                                [0u8; 32]
+                            }
+                        } else {
+                            [0u8; 32]
+                        }
+                    }
+                    _ => [0u8; 32],
+                }
             };
-            if computed_root != block.header.state_root {
+            let computed =
+                node::block_producer::BlockProducer::compute_state_root(&parent_root, &block.header.extrinsics_root);
+            if computed != block.header.state_root {
                 warn!("State root mismatch");
                 return Err("State root mismatch".into());
             }
@@ -823,8 +967,19 @@ impl Node {
             }
         }
         
+        // Apply on-chain governance actions included in this block
+        if let Err(e) = node::governance_store::apply_extrinsics(
+            &self.state_trie,
+            &block.extrinsics,
+            block.header.slot,
+        )
+        .await
+        {
+            warn!("Error applying governance actions: {}", e);
+        }
+        
         // Update mempool
-        self.mempool.remove_transactions(&block.extrinsics);
+        self.tx_pool.remove_transactions(&block.extrinsics);
         
         info!("✅ Processed block at height {}", block.header.slot);
         self.metrics.record_block();
@@ -1047,34 +1202,35 @@ impl Node {
     
     /// Get current validator list
     async fn get_validator_list(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
-        // Load validator set from the state trie (populated at genesis init)
-        #[derive(serde::Deserialize)]
-        struct ValidatorEntry {
-            public_key: String,
-            stake: String,
-        }
+        Ok(governance_store::load_consensus_validators(&self.state_trie)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?)
+    }
 
-        let trie = self.state_trie.lock().await;
-        match trie.get(b"validators")? {
-            Some(data) => {
-                let entries: Vec<ValidatorEntry> = serde_json::from_slice(&data)?;
-                Ok(entries
-                    .into_iter()
-                    .map(|v| ValidatorInfo {
-                        public_key: hex::decode(&v.public_key).unwrap_or_default(),
-                        stake: v.stake.parse().unwrap_or(0),
-                        slashed: false,
-                    })
-                    .collect())
-            }
-            None => Ok(vec![]),
+    /// Reload BFT + finality validator sets from the state trie when changed.
+    async fn sync_validator_set(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let validators = governance_store::load_consensus_validators(&self.state_trie).await?;
+        if validators.is_empty() {
+            return Ok(());
         }
+        let mut engine = self.bft_engine.lock().await;
+        if engine.validator_count() != validators.len() {
+            let count = validators.len();
+            engine.update_validator_set(validators.clone());
+            drop(engine);
+            self.finality_gadget
+                .lock()
+                .await
+                .update_validator_set(validators);
+            info!("🔄 BFT validator set hot-reloaded ({} validators)", count);
+        }
+        Ok(())
     }
     
     /// Periodically refresh live metrics (peers, mempool, consensus round, network bytes)
     async fn update_live_metrics(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         // Mempool size
-        self.metrics.update_mempool_size(self.mempool.size());
+        self.metrics.update_mempool_size(self.tx_pool.size());
 
         // Consensus round
         let round = self.bft_engine.lock().await.round;

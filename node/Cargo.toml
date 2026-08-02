@@ -30,6 +30,8 @@ nonzero_ext = "0.3"
 libp2p = "0.52"
 tempfile = "3.8"
 revm = { version = "3.5", default-features = false, features = ["std"] }
+mev = { path = "../mev" }
+futures-util = "0.3"
 
 [dev-dependencies]
 tempfile = "3.8"

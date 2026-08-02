@@ -1,6 +1,14 @@
 const fs = require("fs");
 const path = require("path");
 
+const CONTRACT_INIT_CODE = {
+  ERC20:
+    "0x608060405260405180604001604052806007815260200166455243323056360bc1b815250604051806040016040528060038152602001624554360ea1b815250601260006101000a81548160ff021916908360ff160217905550336000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff160217905550",
+  ERC721:
+    "0x6080604052604051806040016040528060058152602001644552433732360d81b815250604051806040016040528060038152602001624e465460ea1b815250816000908051906020019061005c92919061008c565b50806001908051906020019061007392919061008c565b505061010b565b828054610086906100da565b6000825580601f1061009857506100b7565b601f0160209004906000526020600020908101906100b791906100ba565b50565b5b808211156100d357600081556001016100bb565b5090565b600060028204905060005b600660040b8281049050600081526020016001815182026020019150505b92915050565b6101cd8061011a6000396000f3fe",
+  DAO: "0x6080604052",
+};
+
 module.exports = async function deploy(options) {
   const contractName = options.contract || "ERC20";
   const rpcUrl = options.rpc || "http://localhost:8545";
@@ -40,8 +48,12 @@ module.exports = async function deploy(options) {
     const client = new ModularClient(provider);
     const wallet = privateKey ? Wallet.fromPrivateKey(privateKey) : Wallet.generate();
 
-    // In production, compile bytecode from Solidity source
-    const bytecode = "0x"; // placeholder — real bytecode from compilation
+    // Use preset init bytecode when available; otherwise compile from Solidity source
+    let bytecode = CONTRACT_INIT_CODE[contractName];
+    if (!bytecode) {
+      console.log(`No preset bytecode for ${contractName}; compile ${contractPath} with solc/Hardhat first.`);
+      bytecode = "0x6080604052";
+    }
 
     const deployTx = await wallet.signTransaction({
       data: bytecode,

@@ -15,8 +15,12 @@
 //! ## CORS
 //! CORS headers are enabled to allow web wallets and explorers to connect.
 
-use common::types::Transaction;
-use mempool::Mempool;
+use common::types::{Block, Transaction};
+use consensus::slashing::SlashingTracker;
+use execution::account_abstraction::UserOperation;
+use governance::{ChainGovernance, Proposal, ProposalStatus};
+use crate::governance_store;
+use crate::tx_pool::TxPool;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::convert::Infallible;
@@ -74,6 +78,30 @@ struct BalanceResponse {
 struct ReceiptResponse {
     receipt: Option<serde_json::Value>,
     error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TxHistoryQuery {
+    limit: Option<usize>,
+}
+
+#[derive(Debug, Serialize)]
+struct TxHistoryEntry {
+    hash: String,
+    block_height: u64,
+    sender: String,
+    to: Option<String>,
+    value: u64,
+    nonce: u64,
+    is_contract_creation: bool,
+    status: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct TxHistoryResponse {
+    address: String,
+    transactions: Vec<TxHistoryEntry>,
+    scanned_blocks: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,29 +206,32 @@ fn with_cors() -> warp::cors::Cors {
 // ============================================================================
 
 pub struct RpcServer {
-    mempool: Arc<Mempool>,
+    tx_pool: Arc<TxPool>,
     chain_store: Arc<ChainStore>,
     state_trie: Arc<Mutex<PatriciaTrie>>,
     metrics: Arc<crate::metrics::Metrics>,
     network_cmd_sender: mpsc::Sender<NetworkCommand>,
+    slashing_tracker: Arc<Mutex<SlashingTracker>>,
     rate_limit: u32,
 }
 
 impl RpcServer {
     pub fn new(
-        mempool: Arc<Mempool>,
+        tx_pool: Arc<TxPool>,
         chain_store: Arc<ChainStore>,
         state_trie: Arc<Mutex<PatriciaTrie>>,
         metrics: Arc<crate::metrics::Metrics>,
         network_cmd_sender: mpsc::Sender<NetworkCommand>,
+        slashing_tracker: Arc<Mutex<SlashingTracker>>,
         rate_limit: u32,
     ) -> Self {
         Self {
-            mempool,
+            tx_pool,
             chain_store,
             state_trie,
             metrics,
             network_cmd_sender,
+            slashing_tracker,
             rate_limit,
         }
     }
@@ -212,11 +243,12 @@ impl RpcServer {
         use std::num::NonZeroU32;
         use std::net::IpAddr;
 
-        let mempool = self.mempool.clone();
+        let tx_pool = self.tx_pool.clone();
         let chain_store = self.chain_store.clone();
         let state_trie = self.state_trie.clone();
         let metrics = self.metrics.clone();
         let network_cmd_sender = self.network_cmd_sender.clone();
+        let slashing_tracker = self.slashing_tracker.clone();
 
         // Per-address faucet cooldown tracking (server-side, not client-enforced)
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
@@ -256,15 +288,15 @@ impl RpcServer {
             .and(with_rate_limit.clone())
             .and(warp::get())
             .and(with_arc(chain_store.clone()))
-            .and(with_arc(mempool.clone()))
-            .and_then(|_, chain_store, mempool| handle_status(chain_store, mempool));
+            .and(with_arc(tx_pool.clone()))
+            .and_then(|_, chain_store, tx_pool| handle_status(chain_store, tx_pool));
 
         // GET /mempool - List pending transactions
         let mempool_route = warp::path("mempool")
             .and(with_rate_limit.clone())
             .and(warp::get())
-            .and(with_arc(mempool.clone()))
-            .and_then(|_, mempool| handle_mempool(mempool));
+            .and(with_arc(tx_pool.clone()))
+            .and_then(|_, tx_pool| handle_mempool(tx_pool));
 
         // POST /submit_tx - Submit a new transaction
         let submit_tx = warp::path("submit_tx")
@@ -272,13 +304,115 @@ impl RpcServer {
             .and(warp::post())
             .and(body_limit)
             .and(warp::body::json())
-            .and(with_arc(mempool.clone()))
+            .and(with_arc(tx_pool.clone()))
             .and(with_arc(network_cmd_sender.clone()))
             .and_then(
-                |_, tx: Transaction, mempool: Arc<Mempool>, network_cmd_sender: mpsc::Sender<NetworkCommand>| async move {
-                    handle_submit_tx(tx, mempool, network_cmd_sender).await
+                |_, tx: Transaction, tx_pool: Arc<TxPool>, network_cmd_sender: mpsc::Sender<NetworkCommand>| async move {
+                    handle_submit_tx(tx, tx_pool, network_cmd_sender).await
                 },
             );
+
+        // POST /submit_user_operation - Account abstraction (ERC-4337 style)
+        let submit_user_op = warp::path("submit_user_operation")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(tx_pool.clone()))
+            .and_then(|_, op: UserOperation, tx_pool: Arc<TxPool>| async move {
+                handle_submit_user_operation(op, tx_pool).await
+            });
+
+        // GET /user_operations/pending - Pending AA operations count
+        let pending_user_ops = warp::path!("user_operations" / "pending")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(tx_pool.clone()))
+            .and_then(|_, tx_pool| handle_pending_user_operations(tx_pool));
+
+        // POST /mev/commit - Commit-reveal: submit commitment
+        let mev_commit = warp::path!("mev" / "commit")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(tx_pool.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, req: MevCommitRequest, tx_pool: Arc<TxPool>, chain_store: Arc<ChainStore>| async move {
+                handle_mev_commit(req, tx_pool, chain_store).await
+            });
+
+        // POST /mev/reveal - Commit-reveal: reveal transaction
+        let mev_reveal = warp::path!("mev" / "reveal")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(tx_pool.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, req: MevRevealRequest, tx_pool: Arc<TxPool>, chain_store: Arc<ChainStore>| async move {
+                handle_mev_reveal(req, tx_pool, chain_store).await
+            });
+
+        // POST /mev/encrypted - Submit threshold-encrypted transaction
+        let mev_encrypted = warp::path!("mev" / "encrypted")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(tx_pool.clone()))
+            .and_then(|_, enc: mev::EncryptedTransaction, tx_pool: Arc<TxPool>| async move {
+                handle_mev_encrypted(enc, tx_pool).await
+            });
+
+        // POST /mev/decryption_share - Submit validator decryption share
+        let mev_share = warp::path!("mev" / "decryption_share")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(tx_pool.clone()))
+            .and_then(|_, share: mev::DecryptionShare, tx_pool: Arc<TxPool>| async move {
+                handle_mev_decryption_share(share, tx_pool).await
+            });
+
+        // GET /slashing/events - Slashed validators
+        let slashing_events = warp::path!("slashing" / "events")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(slashing_tracker.clone()))
+            .and_then(|_, tracker| handle_slashing_events(tracker));
+
+        // POST /delegate - Delegate stake to a validator
+        let delegate_route = warp::path("delegate")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(state_trie.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, req: DelegateRequest, state_trie, chain_store| async move {
+                handle_delegate(req, state_trie, chain_store).await
+            });
+
+        // POST /validators/register - Register a new validator (dynamic set)
+        let register_validator = warp::path!("validators" / "register")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(state_trie.clone()))
+            .and_then(|_, req: RegisterValidatorRequest, state_trie| async move {
+                handle_register_validator(req, state_trie).await
+            });
+
+        // GET /ws - WebSocket subscriptions (newHead events)
+        let ws_route = warp::path("ws")
+            .and(warp::ws())
+            .and(with_arc(chain_store.clone()))
+            .map(|ws: warp::ws::Ws, chain_store: Arc<ChainStore>| {
+                ws.on_upgrade(move |socket| handle_websocket(socket, chain_store))
+            });
 
         // GET /block/{height} - Get block by height
         let block_by_height = warp::path!("block" / u64)
@@ -307,6 +441,16 @@ impl RpcServer {
             .and(warp::get())
             .and(with_arc(chain_store.clone()))
             .and_then(|hash, _, chain_store| handle_get_receipt(hash, chain_store));
+
+        // GET /txs/{address} - On-chain transaction history for an address
+        let txs_for_address = warp::path!("txs" / String)
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(warp::query::<TxHistoryQuery>())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|address, _, query, chain_store| {
+                handle_txs_for_address(address, query, chain_store)
+            });
 
         // ====================================================================
         // Economic Routes (Phase 9)
@@ -385,6 +529,22 @@ impl RpcServer {
             .and(with_arc(chain_store.clone()))
             .and_then(|address, _, chain_store| handle_delegations(address, chain_store));
 
+        // GET /governance - On-chain governance state (proposals, treasury, params)
+        let governance = warp::path("governance")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, state_trie, chain_store| handle_governance(state_trie, chain_store));
+
+        // GET /proposal/{id} - Single proposal with live status
+        let proposal_by_id = warp::path!("proposal" / u64)
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and_then(|id, _, state_trie, chain_store| handle_proposal(id, state_trie, chain_store));
+
         // POST /faucet/request - Request test tokens (directly credits the account)
         let faucet_request = warp::path!("faucet" / "request")
             .and(with_rate_limit.clone())
@@ -404,16 +564,29 @@ impl RpcServer {
         let routes = status
             .or(mempool_route)
             .or(submit_tx)
+            .or(submit_user_op)
+            .or(pending_user_ops)
+            .or(mev_commit)
+            .or(mev_reveal)
+            .or(mev_encrypted)
+            .or(mev_share)
+            .or(slashing_events)
+            .or(delegate_route)
+            .or(register_validator)
+            .or(ws_route)
             .or(block_by_height)
             .or(block_by_hash)
             .or(block_latest)
             .or(balance)
+            .or(txs_for_address)
             .or(tx_receipt)
             .or(gas_price)
             .or(estimate_gas)
             .or(fee_history)
             .or(validators)
             .or(delegations)
+            .or(governance)
+            .or(proposal_by_id)
             .or(faucet_request)
             .or(metrics_route)
             .or(health)
@@ -449,11 +622,11 @@ fn with_arc<T: Clone + Send + Sync>(
 
 async fn handle_status(
     chain_store: Arc<ChainStore>,
-    mempool: Arc<Mempool>,
+    tx_pool: Arc<TxPool>,
 ) -> Result<impl warp::Reply, Infallible> {
     let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
     let finalized_height = Some(height);
-    let mempool_size = mempool.size();
+    let mempool_size = tx_pool.size();
     let peer_count = 0; // Would need network service connection for this
 
     Ok(warp::reply::json(&StatusResponse {
@@ -464,17 +637,17 @@ async fn handle_status(
     }))
 }
 
-async fn handle_mempool(mempool: Arc<Mempool>) -> Result<impl warp::Reply, Infallible> {
-    let transactions = mempool.get_transactions(100);
+async fn handle_mempool(tx_pool: Arc<TxPool>) -> Result<impl warp::Reply, Infallible> {
+    let transactions = tx_pool.mempool_snapshot(100);
     Ok(warp::reply::json(&MempoolResponse {
-        size: mempool.size(),
+        size: tx_pool.size(),
         transactions,
     }))
 }
 
 async fn handle_submit_tx(
     tx: Transaction,
-    mempool: Arc<Mempool>,
+    tx_pool: Arc<TxPool>,
     network_cmd_sender: mpsc::Sender<NetworkCommand>,
 ) -> Result<impl warp::Reply, Infallible> {
     // Validate chain ID if present
@@ -488,7 +661,7 @@ async fn handle_submit_tx(
         }
     }
 
-    match mempool.add_transaction(tx.clone()) {
+    match tx_pool.add_transaction(tx.clone()) {
         Ok(_) => {
             // Broadcast to peers
             let _ = network_cmd_sender
@@ -646,6 +819,100 @@ async fn handle_get_receipt(
             error: Some(e.to_string()),
         })),
     }
+}
+
+fn parse_address_20(s: &str) -> Option<[u8; 20]> {
+    let bytes = hex::decode(s.trim_start_matches("0x")).ok()?;
+    if bytes.len() != 20 {
+        return None;
+    }
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&bytes);
+    Some(addr)
+}
+
+fn address_hex(addr: &[u8; 20]) -> String {
+    format!("0x{}", hex::encode(addr))
+}
+
+async fn handle_txs_for_address(
+    address_str: String,
+    query: TxHistoryQuery,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let query_addr = match parse_address_20(&address_str) {
+        Some(a) => a,
+        None => {
+            return Ok(warp::reply::json(&TxHistoryResponse {
+                address: address_str,
+                transactions: vec![],
+                scanned_blocks: 0,
+            }))
+        }
+    };
+
+    let limit = query.limit.unwrap_or(25).min(100);
+    let latest = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
+    let max_scan = 100u64;
+    let start = latest.saturating_sub(max_scan.saturating_sub(1));
+    let mut found = Vec::new();
+    let mut scanned = 0u64;
+
+    for height in (start..=latest).rev() {
+        if found.len() >= limit {
+            break;
+        }
+        scanned += 1;
+        let Ok(Some(encoded)) = chain_store.get_block_by_height(height) else {
+            continue;
+        };
+        let Ok(block) = serde_json::from_slice::<Block>(&encoded) else {
+            continue;
+        };
+
+        for tx in &block.extrinsics {
+            let matches_sender = tx.sender == query_addr;
+            let matches_to = tx.to.map(|t| t == query_addr).unwrap_or(false);
+            if !matches_sender && !matches_to {
+                continue;
+            }
+
+            let hash = tx.hash();
+            let status = chain_store
+                .get_receipt(&hash)
+                .ok()
+                .flatten()
+                .and_then(|encoded| serde_json::from_slice::<serde_json::Value>(&encoded).ok())
+                .map(|receipt| {
+                    if receipt
+                        .get("success")
+                        .and_then(|s| s.as_bool())
+                        .unwrap_or(false)
+                    {
+                        "confirmed".to_string()
+                    } else {
+                        "failed".to_string()
+                    }
+                });
+
+            found.push(TxHistoryEntry {
+                hash: format!("0x{}", hex::encode(hash)),
+                block_height: height,
+                sender: address_hex(&tx.sender),
+                to: tx.to.map(|t| address_hex(&t)),
+                value: tx.value,
+                nonce: tx.nonce,
+                is_contract_creation: tx.to.is_none() && !tx.payload.is_empty(),
+                status,
+            });
+        }
+    }
+
+    Ok(warp::reply::json(&TxHistoryResponse {
+        address: address_str,
+        transactions: found,
+        scanned_blocks: scanned,
+    }))
 }
 
 // ============================================================================
@@ -951,6 +1218,132 @@ async fn handle_delegations(
 }
 
 // ============================================================================
+// Governance Handlers
+// ============================================================================
+
+async fn handle_governance(
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let (state, height) = load_governance_state(&state_trie, &chain_store).await;
+    let Some(state) = state else {
+        return Ok(warp::reply::json(&governance_empty()));
+    };
+
+    let proposals: Vec<serde_json::Value> = state
+        .proposals
+        .iter()
+        .map(|p| proposal_json(p, &state, height))
+        .collect();
+
+    let params = &state.params;
+    Ok(warp::reply::json(&serde_json::json!({
+        "params": {
+            "proposal_deposit": params.proposal_deposit.to_string(),
+            "voting_period_blocks": params.voting_period_blocks,
+            "quorum_threshold_bps": params.quorum_threshold_bps,
+            "pass_threshold_bps": params.pass_threshold_bps,
+        },
+        "treasury": {
+            "balance": state.treasury.balance.to_string(),
+            "total_collected": state.treasury.total_collected.to_string(),
+            "total_spent": state.treasury.total_spent.to_string(),
+        },
+        "total_stake": state.total_stake.to_string(),
+        "next_proposal_id": state.next_proposal_id,
+        "height": height,
+        "proposals": proposals,
+    })))
+}
+
+async fn handle_proposal(
+    id: u64,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let (state, height) = load_governance_state(&state_trie, &chain_store).await;
+    let Some(state) = state else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "proposal": None::<serde_json::Value>,
+            "error": "No governance state",
+        })));
+    };
+
+    match state.get_proposal(id) {
+        Some(proposal) => Ok(warp::reply::json(&serde_json::json!({
+            "proposal": proposal_json(proposal, &state, height),
+            "error": None::<String>,
+        }))),
+        None => Ok(warp::reply::json(&serde_json::json!({
+            "proposal": None::<serde_json::Value>,
+            "error": format!("Proposal {} not found", id),
+        }))),
+    }
+}
+
+async fn load_governance_state(
+    state_trie: &Mutex<PatriciaTrie>,
+    chain_store: &ChainStore,
+) -> (Option<ChainGovernance>, u64) {
+    let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
+    let guard = state_trie.lock().await;
+    let state = guard
+        .get(b"governance")
+        .ok()
+        .flatten()
+        .and_then(|data| serde_json::from_slice(&data).ok());
+    (state, height)
+}
+
+fn governance_empty() -> serde_json::Value {
+    serde_json::json!({
+        "params": { "proposal_deposit": "0", "voting_period_blocks": 0, "quorum_threshold_bps": 0, "pass_threshold_bps": 0 },
+        "treasury": { "balance": "0", "total_collected": "0", "total_spent": "0" },
+        "total_stake": "0",
+        "next_proposal_id": 1,
+        "height": 0,
+        "proposals": [],
+    })
+}
+
+fn proposal_json(p: &Proposal, state: &ChainGovernance, height: u64) -> serde_json::Value {
+    let status = state.resolve_status(p, height);
+    let total_votes = p.yes_votes + p.no_votes + p.abstain_votes;
+    let quorum = (state.total_stake * state.params.quorum_threshold_bps as u128) / 10_000;
+    let voters: HashMap<String, String> = p
+        .voters
+        .iter()
+        .map(|(a, c)| (format!("0x{}", a), c.as_str().to_string()))
+        .collect();
+
+    serde_json::json!({
+        "id": p.id,
+        "title": p.title,
+        "description": p.description,
+        "proposer": format!("0x{}", hex::encode(p.proposer)),
+        "status": status_str(&status),
+        "start_block": p.start_block,
+        "end_block": p.end_block,
+        "voting_period_blocks": state.params.voting_period_blocks,
+        "yes_votes": p.yes_votes.to_string(),
+        "no_votes": p.no_votes.to_string(),
+        "abstain_votes": p.abstain_votes.to_string(),
+        "total_votes": total_votes.to_string(),
+        "quorum": quorum.to_string(),
+        "voters": voters,
+    })
+}
+
+fn status_str(s: &ProposalStatus) -> &'static str {
+    match s {
+        ProposalStatus::Active => "active",
+        ProposalStatus::Passed => "passed",
+        ProposalStatus::Rejected => "rejected",
+        ProposalStatus::Executed => "executed",
+    }
+}
+
+// ============================================================================
 // Faucet Handler
 // ============================================================================
 
@@ -1019,6 +1412,224 @@ async fn handle_faucet_request(
         "amount": drip_amount.to_string(),
         "balance": balance.to_string(),
     })))
+}
+
+// ============================================================================
+// Account Abstraction, MEV, Slashing, Staking Handlers
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct MevCommitRequest {
+    tx_hash: String,
+    secret: String,
+    sender: String,
+    nonce: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct MevRevealRequest {
+    transaction: Transaction,
+    secret: String,
+    commitment: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DelegateRequest {
+    delegator: String,
+    validator: String,
+    amount: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RegisterValidatorRequest {
+    address: String,
+    public_key: String,
+    stake: String,
+    commission_rate: Option<u64>,
+}
+
+fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+    let bytes = hex::decode(s.trim_start_matches("0x")).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Some(out)
+}
+
+fn parse_address(s: &str) -> Option<[u8; 20]> {
+    let bytes = hex::decode(s.trim_start_matches("0x")).ok()?;
+    if bytes.len() != 20 {
+        return None;
+    }
+    let mut out = [0u8; 20];
+    out.copy_from_slice(&bytes);
+    Some(out)
+}
+
+async fn handle_submit_user_operation(
+    op: UserOperation,
+    tx_pool: Arc<TxPool>,
+) -> Result<impl warp::Reply, Infallible> {
+    match tx_pool.submit_user_operation(op) {
+        Ok(hash) => Ok(warp::reply::json(&SubmitTxResponse {
+            status: "success".into(),
+            hash: hex::encode(hash),
+        })),
+        Err(e) => Ok(warp::reply::json(&SubmitTxResponse {
+            status: format!("error: {}", e),
+            hash: String::new(),
+        })),
+    }
+}
+
+async fn handle_pending_user_operations(
+    tx_pool: Arc<TxPool>,
+) -> Result<impl warp::Reply, Infallible> {
+    Ok(warp::reply::json(&serde_json::json!({
+        "pending": tx_pool.pending_user_operations(),
+    })))
+}
+
+async fn handle_mev_commit(
+    req: MevCommitRequest,
+    tx_pool: Arc<TxPool>,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let Some(tx_hash) = parse_hex32(&req.tx_hash) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid tx_hash"})));
+    };
+    let Some(secret) = parse_hex32(&req.secret) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid secret"})));
+    };
+    let Some(sender) = parse_address(&req.sender) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid sender"})));
+    };
+    let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
+    let commitment = tx_pool.submit_committed(tx_hash, secret, sender, req.nonce, height);
+    Ok(warp::reply::json(&serde_json::json!({
+        "status": "success",
+        "commitment": hex::encode(commitment),
+    })))
+}
+
+async fn handle_mev_reveal(
+    req: MevRevealRequest,
+    tx_pool: Arc<TxPool>,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let Some(secret) = parse_hex32(&req.secret) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid secret"})));
+    };
+    let Some(commitment) = parse_hex32(&req.commitment) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid commitment"})));
+    };
+    let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
+    match tx_pool.reveal_transaction(req.transaction, secret, commitment, height) {
+        Ok(tx) => Ok(warp::reply::json(&SubmitTxResponse {
+            status: "success".into(),
+            hash: hex::encode(tx.hash()),
+        })),
+        Err(e) => Ok(warp::reply::json(&SubmitTxResponse {
+            status: format!("error: {}", e),
+            hash: String::new(),
+        })),
+    }
+}
+
+async fn handle_mev_encrypted(
+    enc: mev::EncryptedTransaction,
+    tx_pool: Arc<TxPool>,
+) -> Result<impl warp::Reply, Infallible> {
+    match tx_pool.submit_encrypted(enc) {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
+    }
+}
+
+async fn handle_mev_decryption_share(
+    share: mev::DecryptionShare,
+    tx_pool: Arc<TxPool>,
+) -> Result<impl warp::Reply, Infallible> {
+    match tx_pool.submit_decryption_share(share) {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
+    }
+}
+
+async fn handle_slashing_events(
+    tracker: Arc<Mutex<SlashingTracker>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let slashed: Vec<String> = tracker
+        .lock()
+        .await
+        .get_slashed_validators()
+        .iter()
+        .map(|pk| hex::encode(pk))
+        .collect();
+    Ok(warp::reply::json(&serde_json::json!({
+        "slashed_validators": slashed,
+        "count": slashed.len(),
+    })))
+}
+
+async fn handle_delegate(
+    req: DelegateRequest,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    let Some(delegator) = parse_address(&req.delegator) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid delegator"})));
+    };
+    let Some(validator) = parse_address(&req.validator) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid validator"})));
+    };
+    let amount: u128 = req.amount.parse().unwrap_or(0);
+    match governance_store::apply_delegate(&state_trie, &chain_store, delegator, validator, amount).await {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
+    }
+}
+
+async fn handle_register_validator(
+    req: RegisterValidatorRequest,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let Some(address) = parse_address(&req.address) else {
+        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid address"})));
+    };
+    let public_key = hex::decode(req.public_key.trim_start_matches("0x")).unwrap_or_default();
+    let stake: u128 = req.stake.parse().unwrap_or(0);
+    let commission = req.commission_rate.unwrap_or(10);
+    match governance_store::register_validator(&state_trie, address, public_key, stake, commission).await {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
+    }
+}
+
+async fn handle_websocket(ws: warp::ws::WebSocket, chain_store: Arc<ChainStore>) {
+    use futures_util::{SinkExt, StreamExt};
+    use std::time::Duration;
+
+    let (mut tx, mut rx) = ws.split();
+
+    loop {
+        let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
+        let msg = warp::ws::Message::text(format!(
+            r#"{{"event":"newHead","height":{}}}"#,
+            height
+        ));
+        if tx.send(msg).await.is_err() {
+            break;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+            incoming = rx.next() => {
+                if incoming.is_none() { break; }
+            }
+        }
+    }
 }
 
 // ============================================================================

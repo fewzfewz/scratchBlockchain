@@ -83,27 +83,19 @@
 ---
 
 ### ⚠️ 3. Governance UI
-**Status**: ⚠️ **PARTIALLY READY** (45%)
+**Status**: ⚠️ **PARTIALLY READY** (~70%)
 
 **What You Have:**
-- ✅ Governance module code (`governance/src/lib.rs`)
-- ✅ Proposal structure
-- ✅ Voting mechanism (on-chain)
-- ✅ Treasury management
-- ✅ Parameter change proposals
-- ✅ React governance frontend shell (`frontend/governance/`)
+- ✅ Governance module + on-chain state (`governance/src/lib.rs`, `governance_store.rs`)
+- ✅ `GET /governance`, `GET /proposal/{id}` RPC
+- ✅ Unified SPA governance page (proposals, voting UI, treasury, analytics)
+- ✅ Proposal creation form and vote modal in frontend
 
 **What's Missing:**
-- ⚠️ Governance web interface shell
-- ❌ Proposal creation UI
-- ❌ Voting interface
-- ❌ Proposal browsing/filtering
+- ❌ Submit vote/propose via signed wallet transactions (full on-chain flow from UI)
 - ❌ Vote delegation UI
-- ❌ Treasury dashboard
-- ❌ Governance analytics
 - ❌ Notification system for proposals
 - ❌ Proposal discussion forum integration
-- ❌ Mobile-friendly interface
 
 **Files You Have:**
 - `governance/src/lib.rs` - Governance logic (proposals + voting integrated)
@@ -522,7 +514,7 @@
 
 ### Medium-term (3 Months)
 1. ❏ Fix and integrate execution layer
-2. ❏ Expose governance via RPC
+2. ✅ Expose governance via RPC (`GET /governance`, `GET /proposal/{id}`)
 3. ❏ Create basic block explorer
 4. ❏ Build community
 

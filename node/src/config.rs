@@ -134,6 +134,14 @@ pub struct StorageConfig {
     /// Pruning mode: "archive" (keep all), "full" (keep recent), "minimal" (keep state only)
     #[serde(default = "default_pruning_mode")]
     pub pruning_mode: String,
+
+    /// Blocks to retain below finalized height in `full` / `minimal` modes.
+    #[serde(default = "default_blocks_to_keep")]
+    pub blocks_to_keep: u64,
+
+    /// Run a prune pass every N finalized blocks.
+    #[serde(default = "default_prune_every_n_blocks")]
+    pub prune_every_n_blocks: u64,
 }
 
 /// API server configuration
@@ -247,6 +255,8 @@ fn default_max_rounds_per_height() -> u64 { 1000 }
 fn default_db_cache_mb() -> usize { 512 }
 fn default_true() -> bool { true }
 fn default_pruning_mode() -> String { "full".to_string() }
+fn default_blocks_to_keep() -> u64 { 10_000 }
+fn default_prune_every_n_blocks() -> u64 { 100 }
 fn default_api_address() -> String { "127.0.0.1".to_string() }
 fn default_rate_limit() -> u32 { 1000 }
 fn default_metrics_address() -> String { "127.0.0.1:9090".to_string() }
@@ -391,6 +401,8 @@ impl NodeConfig {
                 db_cache_mb: 512,
                 db_compression: true,
                 pruning_mode: "full".to_string(),
+                blocks_to_keep: 10_000,
+                prune_every_n_blocks: 100,
             },
             api: ApiConfig {
                 enabled: true,

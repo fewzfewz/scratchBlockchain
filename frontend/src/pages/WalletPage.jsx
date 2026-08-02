@@ -52,6 +52,7 @@ export default function WalletPage() {
   // Tx history
   const [txHistory, setTxHistory] = useState([])
   const [showHistory, setShowHistory] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   // Tokens tab
   const [walletTab, setWalletTab] = useState('balance') // balance | tokens
@@ -78,6 +79,42 @@ export default function WalletPage() {
       setTxHistory(saved)
     }
   }, [address])
+
+  const fetchChainHistory = useCallback(async () => {
+    if (!address) return
+    setHistoryLoading(true)
+    try {
+      const r = await window.fetch(`${apiUrl}/txs/${address}?limit=25`)
+      if (!r.ok) return
+      const d = await r.json()
+      const chain = (d.transactions || []).map((t) => ({
+        hash: t.hash,
+        to: t.is_contract_creation ? 'Contract deploy' : (t.to || '--'),
+        amount: t.value ? weiToNbl(String(t.value)) : '0',
+        timestamp: Date.now() - (d.scanned_blocks - t.block_height) * 2000,
+        status: t.status || 'confirmed',
+        blockHeight: t.block_height,
+      }))
+      const local = JSON.parse(localStorage.getItem(`nebula_tx_history_${address}`) || '[]')
+      const byHash = new Map()
+      for (const tx of [...chain, ...local]) {
+        const existing = byHash.get(tx.hash)
+        byHash.set(tx.hash, existing ? { ...existing, ...tx, status: tx.status === 'pending' ? existing.status : tx.status } : tx)
+      }
+      const merged = Array.from(byHash.values())
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        .slice(0, 50)
+      setTxHistory(merged)
+    } catch {
+      /* keep local history on RPC failure */
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [address, apiUrl])
+
+  useEffect(() => {
+    if (showHistory && address) fetchChainHistory()
+  }, [showHistory, address, fetchChainHistory])
 
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
@@ -626,7 +663,7 @@ export default function WalletPage() {
                   </div>
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Transaction History</h2>
-                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Recent activity on this device</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">On-chain activity + local pending txs</p>
                   </div>
                   {txHistory.length > 0 && (
                     <span className="text-xs bg-blue-500/20 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-full">{txHistory.length}</span>
@@ -637,6 +674,9 @@ export default function WalletPage() {
 
               {showHistory && (
                 <div className="mt-4 space-y-2 max-h-80 overflow-y-auto scrollbar-thin">
+                  {historyLoading && (
+                    <p className="text-xs text-slate-400 text-center py-2">Loading on-chain history...</p>
+                  )}
                   {txHistory.length === 0 ? (
                     <p className="text-sm text-slate-500 dark:text-slate-400 italic text-center py-4">No transactions yet. Send funds to see history.</p>
                   ) : (

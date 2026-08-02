@@ -588,4 +588,24 @@ impl MevMempool {
         
         all
     }
+
+    /// Forward a validated transaction into the regular mempool pool.
+    pub fn add_transaction(&mut self, tx: Transaction) -> Result<()> {
+        self.regular.add_transaction(tx)
+    }
+
+    /// Remove included transactions from the regular pool.
+    pub fn remove_transactions(&mut self, txs: &[Transaction]) {
+        self.regular.remove_transactions(txs);
+    }
+
+    /// Pending transaction count (regular pool only).
+    pub fn size(&self) -> usize {
+        self.regular.size()
+    }
+
+    /// Snapshot of regular mempool transactions (for RPC listing).
+    pub fn get_transactions(&mut self, max_count: usize) -> Vec<Transaction> {
+        self.regular.get_transactions(max_count)
+    }
 }

@@ -401,47 +401,43 @@ No transactions in mempool, skipping block production
 
 ---
 
-## ❌ NOT TESTED (Code Exists, Not Integrated)
+## ❌ NOT TESTED / STUB (Remaining)
 
 ### Smart Contract Execution
-- EVM executor (code exists in `execution/src/evm.rs`)
-- WASM executor (code exists in `execution/src/lib.rs`)
-- Not integrated with RPC
-- No deployment tested
-
-### Governance
-- Proposal system (code exists in `governance/src/lib.rs`)
-- Voting mechanism (code exists)
-- No UI
-- Not exposed via RPC
+- EVM executor integrated on block finalize; no deployment UI or integration tests
+- WASM executor remains a placeholder
 
 ### Cross-Chain Bridges
-- Ethereum bridge (code exists in `interop/src/ethereum_bridge.rs`)
-- Cosmos IBC (code exists in `interop/src/ibc.rs`)
-- Not deployed
-- Not tested
+- Ethereum bridge (`interop/src/ethereum_bridge.rs`) — not deployed
+- Cosmos IBC — not deployed
 
-### MEV Protection
-- Code exists in `mev/src/lib.rs`
-- Not enabled by default
-- Not tested
+### Crypto Stubs
+- MEV threshold encryption uses simplified XOR (RPC wired, crypto not production-grade)
+- ZK/KZG, DA erasure coding — simplified implementations
 
-### Account Abstraction
-- Code exists in `execution/src/account_abstraction.rs`
-- Not enabled
-- Not tested
+### Integration Test Scripts (pending)
+- `11-create-proposal.js`, `16-stake-tokens.js`, `21-bridge-lock.js`, `25-propose-upgrade.js`
 
 ---
 
-## Critical Issues
+## ✅ INTEGRATED (August 2026 — previously "not integrated")
 
-### Issue #1: Consensus Signature Verification ⚠️ **CRITICAL**
+| Feature | RPC / Location |
+|---------|----------------|
+| Account abstraction | `POST /submit_user_operation`, `node/src/tx_pool.rs` |
+| MEV protection | `POST /mev/*`, `MevMempool` in TxPool |
+| Slashing tracker | `GET /slashing/events`, node finalize loop |
+| Delegation | `POST /delegate`, `GET /delegations/{address}` |
+| Governance on-chain | `GET /governance`, `GET /proposal/{id}` |
+| WebSocket | `ws://localhost:8545/ws` |
 
-**Severity**: HIGH
-**Impact**: Blocks cannot be produced
-**Status**: UNRESOLVED
+---
 
-**Description**:
+## Critical Issues (historical)
+
+### Issue #1: Consensus Signature Verification — **RESOLVED**
+
+Quorum threshold, slot alignment, round-sync, and block sync fixes verified on 3-validator Docker testnet (see `WHATS_LEFT.md`).
 Validators are rejecting each other's consensus votes due to signature verification failures.
 
 **Evidence**:

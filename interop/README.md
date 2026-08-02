@@ -2,6 +2,8 @@
 
 Cross-chain bridge for transferring tokens between Ethereum and the modular blockchain.
 
+> **Status (August 2026):** Bridge code exists in `interop/` but is **not deployed or live-tested**. Signature verification in `ethereum_bridge.rs` is stubbed. See [WHATS_LEFT.md](../WHATS_LEFT.md).
+
 ## Overview
 
 The bridge consists of two main components:

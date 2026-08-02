@@ -25,6 +25,8 @@ Tests will run automatically and show pass/fail for each phase.
 
 ## 📚 Test Phases
 
+> **August 2026:** Node now exposes 28 RPC routes including MEV (`/mev/*`), account abstraction (`/submit_user_operation`), delegation (`/delegate`), slashing (`/slashing/events`), and WebSocket (`/ws`). Automated scripts for governance/staking are still pending — use manual `curl` or the frontend API docs page.
+
 ### Phase 1: Core Blockchain ✅
 **Time**: 30 minutes  
 **Tests**: 5  

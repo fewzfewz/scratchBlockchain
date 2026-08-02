@@ -81,11 +81,11 @@ impl BatchVerifier {
         self.proofs.push(proof);
     }
 
-    pub fn verify_batch(&self, _prover: &ZkProver) -> Vec<bool> {
+    pub fn verify_batch(&self, prover: &ZkProver) -> Vec<bool> {
         use rayon::prelude::*;
         self.proofs
             .par_iter()
-            .map(|proof| !proof.is_empty())
+            .map(|proof| proof.len() == 32)
             .collect()
     }
 
@@ -137,7 +137,7 @@ impl ZkProver {
         prev_state_root: [u8; 32],
         new_state_root: [u8; 32],
         tx_hash: [u8; 32],
-        _block_hash: [u8; 32],
+        block_hash: [u8; 32],
     ) -> Result<Vec<u8>> {
         let cache_key = self.compute_cache_key(&prev_state_root, &new_state_root, &tx_hash);
         if let Some(cached) = self.proof_cache.get(&cache_key) {
@@ -145,10 +145,11 @@ impl ZkProver {
             return Ok(cached.clone());
         }
 
-        let mut data = Vec::with_capacity(96);
+        let mut data = Vec::with_capacity(128);
         data.extend_from_slice(&prev_state_root);
         data.extend_from_slice(&new_state_root);
         data.extend_from_slice(&tx_hash);
+        data.extend_from_slice(&block_hash);
 
         let proof = self.prove(&data)?;
         self.proof_cache.insert(cache_key, proof.clone());

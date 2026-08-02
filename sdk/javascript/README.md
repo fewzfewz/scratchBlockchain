@@ -85,7 +85,7 @@ Complete examples in `examples/starter-kits/`:
 const http = new HttpProvider("http://localhost:8545");
 
 // WebSocket — JSON-RPC with auto-reconnect and polling fallback
-const ws = new WebSocketProvider("ws://localhost:9934");
+const ws = new WebSocketProvider("ws://localhost:8545/ws");
 ws.subscribe("newBlocks", (block) => console.log(block));
 ```
 

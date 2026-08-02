@@ -1,10 +1,50 @@
 groups:
-  - name: example
+  - name: nebula-local
     rules:
-    - alert: InstanceDown
-      expr: up == 0
-      for: 1m
-      labels:
-        severity: page
-      annotations:
-        summary: "Instance {{ $labels.instance }} down"
+      - alert: InstanceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Instance {{ $labels.job }} down"
+
+      - alert: ValidatorDown
+        expr: up{job=~"validator.*"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Validator {{ $labels.job }} is down"
+
+      - alert: ConsensusStalled
+        expr: rate(blockchain_blocks_total[5m]) == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Block production stalled on {{ $labels.job }}"
+
+      - alert: LowPeerCount
+        expr: blockchain_peer_count < 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low peer count on {{ $labels.job }}"
+
+      - alert: HighMempool
+        expr: blockchain_mempool_size > 5000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Large mempool on {{ $labels.job }}"
+
+      - alert: HighBlockLatency
+        expr: blockchain_block_latency_ms > 5000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High block latency on {{ $labels.job }}"

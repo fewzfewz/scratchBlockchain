@@ -596,20 +596,24 @@ impl ThresholdEncryption {
         }
     }
 
-    /// Encrypt a transaction using threshold encryption (Shamir's Secret Sharing)
+    /// Encrypt a transaction using threshold encryption (Shamir's Secret Sharing + AES-256-GCM)
     pub fn encrypt_transaction(&mut self, tx: &Transaction, nonce: u64, threshold: usize) -> EncryptedTransaction {
+        use aes_gcm::aead::{Aead, KeyInit};
+        use aes_gcm::{Aes256Gcm, Nonce};
+
         let tx_bytes = bincode::serialize(tx).unwrap_or_default();
-        
-        // Generate a random master secret (the actual encryption key)
         let master_secret: [u8; 32] = rand::thread_rng().gen();
-        
-        // Encrypt the transaction bytes with the master secret (XOR for simplicity;
-        // in production use AES-256-GCM)
-        let encrypted_data: Vec<u8> = tx_bytes
-            .iter()
-            .zip(master_secret.iter().cycle())
-            .map(|(b, k)| b ^ k)
-            .collect();
+
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&master_secret);
+        let cipher = Aes256Gcm::new(key);
+        let nonce_bytes: [u8; 12] = rand::random();
+        let aes_nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(aes_nonce, tx_bytes.as_ref())
+            .unwrap_or_default();
+
+        let mut encrypted_data = nonce_bytes.to_vec();
+        encrypted_data.extend(ciphertext);
         
         // Split the master secret into n shares using polynomial-based
         // Shamir's Secret Sharing over GF(2^8)
@@ -771,13 +775,24 @@ impl ThresholdEncryption {
         
         // Reconstruct the master secret using Lagrange interpolation
         let master_secret = self.reconstruct_secret(shares, encrypted.threshold);
-        
-        // Decrypt the transaction
-        let decrypted_bytes: Vec<u8> = encrypted.encrypted_data
-            .iter()
-            .zip(master_secret.iter().cycle())
-            .map(|(b, k)| b ^ k)
-            .collect();
+        let mut key_arr = [0u8; 32];
+        for (i, b) in master_secret.iter().take(32).enumerate() {
+            key_arr[i] = *b;
+        }
+
+        use aes_gcm::aead::{Aead, KeyInit};
+        use aes_gcm::{Aes256Gcm, Nonce};
+
+        if encrypted.encrypted_data.len() < 12 {
+            return Err("Ciphertext too short".into());
+        }
+        let (nonce_bytes, ciphertext) = encrypted.encrypted_data.split_at(12);
+        let key = aes_gcm::Key::<Aes256Gcm>::from_slice(&key_arr);
+        let cipher = Aes256Gcm::new(key);
+        let aes_nonce = Nonce::from_slice(nonce_bytes);
+        let decrypted_bytes = cipher
+            .decrypt(aes_nonce, ciphertext)
+            .map_err(|e| format!("AES decrypt failed: {}", e))?;
         
         match bincode::deserialize::<Transaction>(&decrypted_bytes) {
             Ok(tx) => {

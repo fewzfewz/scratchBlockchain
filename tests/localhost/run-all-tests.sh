@@ -1,6 +1,9 @@
 #!/bin/bash
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "$0")/scripts" && pwd)"
+cd "$SCRIPT_DIR"
+
 echo "=========================================="
 echo "Complete Localhost Testing Suite"
 echo "=========================================="
@@ -55,13 +58,13 @@ echo -e "${GREEN}✅ Testnet is running${NC}"
 echo ""
 
 # Check if SDK is built
-if [ ! -d "../../sdk/javascript/dist" ]; then
+if [ ! -d "../../../sdk/javascript/dist" ]; then
     echo -e "${YELLOW}⚠️  SDK not built. Building now...${NC}"
-    cd ../../sdk/javascript
+    cd ../../../sdk/javascript
     npm install
     npm run build
     npm link
-    cd ../../tests/localhost/scripts
+    cd "$SCRIPT_DIR"
     echo -e "${GREEN}✅ SDK built${NC}"
 fi
 
@@ -113,6 +116,17 @@ echo ""
 run_test "5.1 Stake Tokens" "./16-stake-tokens.js"
 run_test "5.2 Unstake Tokens" "./17-unstake-tokens.js"
 run_test "5.3 Validator Registration" "./18-register-validator.js"
+run_test "5.4 Bridge Lock Readiness" "./21-bridge-lock.js"
+run_test "5.5 Upgrade Proposal" "./25-propose-upgrade.js"
+
+echo ""
+echo "=========================================="
+echo "Phase 6: Load & Chaos Tests"
+echo "=========================================="
+echo ""
+
+run_test "6.1 Load Test" "./40-load-test.js"
+run_test "6.2 Chaos Smoke" "./41-chaos-smoke.js"
 
 echo ""
 echo "=========================================="

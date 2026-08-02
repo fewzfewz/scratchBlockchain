@@ -142,6 +142,22 @@ impl FinalityGadget {
             pending_finalization: HashSet::new(),
         }
     }
+
+    pub fn validator_count(&self) -> usize {
+        self.validators.len()
+    }
+
+    /// Hot-reload validator set from on-chain state.
+    pub fn update_validator_set(&mut self, validators: Vec<ValidatorInfo>) {
+        self.validators.clear();
+        self.total_stake = 0;
+        for v in validators {
+            if !v.slashed {
+                self.total_stake = self.total_stake.saturating_add(v.stake);
+                self.validators.insert(v.public_key.clone(), v);
+            }
+        }
+    }
     
     /// Submit a prevote for a block
     pub fn prevote(&mut self, vote: FinalityVote) -> Result<(), Box<dyn Error>> {

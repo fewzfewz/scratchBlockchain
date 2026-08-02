@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import nacl from "tweetnacl";
 import {
   BarChart3, Vote, FileText, PlusCircle, Wallet, TrendingUp,
   TrendingDown, Clock, CheckCircle, XCircle, AlertTriangle,
@@ -10,6 +11,110 @@ import {
 } from "lucide-react";
 
 const RPC_URL = "http://localhost:8545";
+
+// ── Wallet / signing helpers (mirror WalletPage.jsx) ──────────────────────
+const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
+const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b };
+
+function loadWallet() {
+  const saved = JSON.parse(localStorage.getItem("nebula_accounts") || "[]");
+  if (saved.length > 0) {
+    const active = parseInt(localStorage.getItem("nebula_active_account") || "0");
+    const acc = saved[active] || saved[0];
+    if (acc && acc.pub && acc.priv) {
+      return { publicKey: fromHex(acc.pub), secretKey: fromHex(acc.priv), address: acc.addr };
+    }
+  }
+  const priv = localStorage.getItem("nebula_wallet_priv");
+  const pub = localStorage.getItem("nebula_wallet_pub");
+  if (priv && pub) {
+    return { publicKey: fromHex(pub), secretKey: fromHex(priv), address: localStorage.getItem("nebula_wallet_addr") || "" };
+  }
+  return null;
+}
+
+const sha256b = async (data) => new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+
+const govTxHash = async (tx) => {
+  let h = new Uint8Array(0);
+  const ap = (b) => { const a = new Uint8Array(h.length + b.length); a.set(h); a.set(b, h.length); h = a };
+  ap(new Uint8Array(tx.sender.slice(0, 20)));
+  const nb = new Uint8Array(8); new DataView(nb.buffer).setBigUint64(0, BigInt(tx.nonce), true); ap(nb);
+  ap(new Uint8Array(tx.payload));
+  const gb = new Uint8Array(8); new DataView(gb.buffer).setBigUint64(0, BigInt(tx.gas_limit), true); ap(gb);
+  const fb = new Uint8Array(8); new DataView(fb.buffer).setBigUint64(0, BigInt(tx.max_fee_per_gas), true); ap(fb);
+  const pb = new Uint8Array(8); new DataView(pb.buffer).setBigUint64(0, BigInt(tx.max_priority_fee_per_gas), true); ap(pb);
+  if (tx.chain_id) { const cb = new Uint8Array(8); new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true); ap(cb) }
+  if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)));
+  const vb = new Uint8Array(8); new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true); ap(vb);
+  return await sha256b(await sha256b(h));
+};
+
+const buildGovTx = (wallet, payloadObj, nonceVal) => ({
+  sender: Array.from(fromHex(wallet.address.replace("0x", ""))),
+  to: null,
+  nonce: nonceVal,
+  value: 0,
+  gas_limit: 21000,
+  max_fee_per_gas: 1e9,
+  max_priority_fee_per_gas: 1e9,
+  payload: Array.from(new TextEncoder().encode(JSON.stringify(payloadObj))),
+  chain_id: 1,
+  signature: [],
+});
+
+async function submitGovTx(wallet, payloadObj, apiUrl) {
+  let nonce = 0;
+  try {
+    const r = await window.fetch(`${apiUrl}/balance/${wallet.address}`);
+    if (r.ok) { const d = await r.json(); nonce = d.nonce || 0; }
+  } catch { /* keep nonce 0 */ }
+  const tx = buildGovTx(wallet, payloadObj, nonce);
+  const msg = await govTxHash(tx);
+  const sig = nacl.sign.detached(msg, wallet.secretKey);
+  tx.signature = Array.from(sig);
+  const res = await window.fetch(`${apiUrl}/submit_tx`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(tx),
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(text);
+  return text.replace(/^"|"$/g, "");
+}
+
+function mapProposals(raw, deposit) {
+  return (raw || []).map(p => {
+    const st = p.status || "active";
+    return {
+      id: p.id,
+      title: p.title,
+      description: p.description,
+      proposer: p.proposer,
+      status: st.charAt(0).toUpperCase() + st.slice(1),
+      yesVotes: p.yes_votes || "0",
+      noVotes: p.no_votes || "0",
+      abstainVotes: p.abstain_votes || "0",
+      quorum: p.quorum || "0",
+      startEpoch: p.start_block,
+      endEpoch: p.end_block,
+      deposit: deposit || "0",
+      executed: st === "executed",
+      actions: [],
+      voters: p.voters || {},
+    };
+  });
+}
+
+function mapValidators(raw) {
+  const vals = Array.isArray(raw) ? raw : raw?.validators || [];
+  return vals.map(v => ({
+    address: Array.isArray(v.public_key) ? `0x${toHex(v.public_key)}` : v.public_key,
+    publicKey: v.public_key,
+    stake: String(v.stake || 0),
+    isActive: !v.slashed,
+  }));
+}
 
 const TABS = [
   { id: "dashboard", label: "Dashboard", icon: BarChart3 },
@@ -328,8 +433,8 @@ function Dashboard({ proposals, treasury, validators, govParams, onTabChange }) 
         <div className="grid md:grid-cols-3 gap-4">
           {[
             { step: "01", title: "Propose", desc: "Submit an on-chain proposal with a refundable deposit. Include calldata that executes automatically if it passes.", icon: PenLine, chip: "from-blue-600 to-cyan-600" },
-            { step: "02", title: "Vote", desc: `Validators and delegators vote For, Against, or Abstain during the ${govParams.votingPeriod}-epoch voting period. Quorum is ${govParams.quorum}%.`, icon: Vote, chip: "from-emerald-600 to-teal-600" },
-            { step: "03", title: "Execute", desc: `Passed proposals are timelocked for ${govParams.timelockPeriod} epochs, then executed on-chain. Failed deposits are forfeited.`, icon: Rocket, chip: "from-violet-600 to-purple-600" },
+            { step: "02", title: "Vote", desc: `Validators vote For, Against, or Abstain during the ${govParams.votingPeriod}-block voting period. Quorum is ${govParams.quorum}%.`, icon: Vote, chip: "from-emerald-600 to-teal-600" },
+            { step: "03", title: "Execute", desc: `Passed proposals are timelocked for ${govParams.timelockPeriod} blocks, then executed on-chain. Failed deposits are forfeited.`, icon: Rocket, chip: "from-violet-600 to-purple-600" },
           ].map(({ step, title, desc, icon: Icon, chip }) => (
             <div key={step} className="p-4 rounded-xl bg-slate-100/50 dark:bg-slate-700/20 hover:-translate-y-0.5 transition-all">
               <div className="flex items-center justify-between mb-3">
@@ -348,7 +453,7 @@ function Dashboard({ proposals, treasury, validators, govParams, onTabChange }) 
   );
 }
 
-function Proposals({ proposals, onVote }) {
+function Proposals({ proposals, onVote, connected }) {
   const [filter, setFilter] = useState("All");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(null);
@@ -373,13 +478,16 @@ function Proposals({ proposals, onVote }) {
     setTimeout(() => setToast(null), 3000);
   };
 
-  const handleVote = (proposalId, support) => {
+  const handleVote = async (proposalId, support) => {
     setVoting(proposalId);
-    setTimeout(() => {
-      onVote(proposalId, support);
+    try {
+      const hash = await onVote(proposalId, support);
+      showToast(`Vote submitted: ${support} on proposal #${proposalId} (tx ${hash.slice(0, 8)}...${hash.slice(-6)})`);
+    } catch (e) {
+      showToast(`Vote failed: ${e.message}`);
+    } finally {
       setVoting(null);
-      showToast(`Vote cast: ${support} on proposal #${proposalId}`);
-    }, 600);
+    }
   };
 
   return (
@@ -448,9 +556,9 @@ function Proposals({ proposals, onVote }) {
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             {[
               { label: "Proposer", value: shortenHash(selected.proposer), icon: Hash },
-              { label: "Start Epoch", value: `#${selected.startEpoch}`, icon: Calendar },
-              { label: "End Epoch", value: `#${selected.endEpoch}`, icon: Clock },
-              { label: "Deposit", value: `${formatNbl(selected.deposit)} NBL`, icon: Tag },
+              { label: "Start Block", value: `#${selected.startEpoch}`, icon: Calendar },
+              { label: "End Block", value: `#${selected.endEpoch}`, icon: Clock },
+              { label: "Deposit", value: `${fmt(Number(selected.deposit))} NBL`, icon: Tag },
             ].map(({ label, value, icon: Icon }) => (
               <div key={label} className="p-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
                 <div className="flex items-center gap-1.5 text-xs text-slate-500 mb-1">
@@ -495,7 +603,7 @@ function Proposals({ proposals, onVote }) {
             />
             {(() => {
               const cast = Number(selected.yesVotes) + Number(selected.noVotes) + Number(selected.abstainVotes || 0);
-              const threshold = 4000000;
+              const threshold = Math.max(Number(selected.quorum || 0), 1);
               const pct = Math.min(100, (cast / threshold) * 100);
               const reached = cast >= threshold;
               return (
@@ -522,7 +630,9 @@ function Proposals({ proposals, onVote }) {
 
           {selected.status === "Active" && (
             <div className="space-y-3">
-              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">Cast your vote</p>
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                Cast your vote{connected ? "" : " — create a wallet on the Wallet page first"}
+              </p>
               <div className="flex gap-3">
                 {[
                   { support: "For", icon: ThumbsUp, color: "bg-emerald-600 hover:bg-emerald-500 text-white" },
@@ -532,7 +642,7 @@ function Proposals({ proposals, onVote }) {
                   <button
                     key={support}
                     onClick={() => handleVote(selected.id, support)}
-                    disabled={voting === selected.id}
+                    disabled={voting === selected.id || !connected}
                     className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 rounded-xl text-sm font-medium transition-all disabled:opacity-50 ${color}`}
                   >
                     {voting === selected.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Icon className="w-4 h-4" />}
@@ -540,6 +650,7 @@ function Proposals({ proposals, onVote }) {
                   </button>
                 ))}
               </div>
+              <p className="text-xs text-slate-500">Your vote weight equals your staked balance as a validator, applied when the block is finalized.</p>
             </div>
           )}
         </div>
@@ -588,7 +699,7 @@ function Proposals({ proposals, onVote }) {
                     <ChevronRight className="w-4 h-4 text-slate-500 shrink-0 mt-1" />
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-500">
-                    <span>Ends epoch #{p.endEpoch}</span>
+                    <span>Ends block #{p.endEpoch}</span>
                     <span>·</span>
                     <span>{yes + no > 0 ? `${(((yes + no) / (yes + no + abstain)) * 100).toFixed(0)}% turnout` : "No votes"}</span>
                   </div>
@@ -603,30 +714,48 @@ function Proposals({ proposals, onVote }) {
   );
 }
 
-function CreateProposal() {
+function CreateProposal({ onSubmit, connected }) {
   const [form, setForm] = useState({ title: "", description: "", actionTarget: "", actionSig: "", actionData: "", deposit: "100000" });
   const [submitting, setSubmitting] = useState(false);
-  const [success, setSuccess] = useState(false);
+  const [success, setSuccess] = useState(null);
+  const [error, setError] = useState("");
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
-      setSuccess(true);
+    setError("");
+    try {
+      const hash = await onSubmit({ title: form.title.trim(), description: form.description.trim() });
+      setSuccess(hash);
       setForm({ title: "", description: "", actionTarget: "", actionSig: "", actionData: "", deposit: "100000" });
-      setTimeout(() => setSuccess(false), 4000);
-    }, 1000);
+      setTimeout(() => setSuccess(null), 6000);
+    } catch (err) {
+      setError(err.message || "Failed to submit proposal");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const isValid = form.title.trim() && form.description.trim() && form.deposit.trim();
+  const isValid = form.title.trim() && form.description.trim() && connected;
 
   return (
     <form onSubmit={handleSubmit} className="p-5 md:p-6 rounded-2xl border border-slate-200 dark:border-slate-700/50 bg-white/70 dark:bg-slate-800/40 backdrop-blur-sm space-y-5">
       {success && (
         <div className="px-4 py-3 rounded-xl bg-emerald-600/20 border border-emerald-500/30 text-emerald-300 text-sm flex items-center gap-2">
-          <CheckCircle className="w-4 h-4" />
-          Proposal submitted successfully! It will appear in the proposal queue once it reaches the voting period.
+          <CheckCircle className="w-4 h-4 shrink-0" />
+          <span className="min-w-0 break-all">Proposal submitted (tx {success.slice(0, 10)}...{success.slice(-6)}). It becomes votable once the block is finalized.</span>
+        </div>
+      )}
+      {error && (
+        <div className="px-4 py-3 rounded-xl bg-rose-600/20 border border-rose-500/30 text-rose-300 text-sm flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span className="min-w-0 break-all">{error}</span>
+        </div>
+      )}
+      {!connected && (
+        <div className="px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 text-sm flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          <span>No wallet detected. Generate one on the Wallet page to sign and submit proposals.</span>
         </div>
       )}
 
@@ -750,6 +879,11 @@ function Treasury({ treasury, govParams }) {
             Recent Transactions
           </h3>
           <div className="space-y-2 max-h-80 overflow-y-auto scrollbar-thin">
+            {treasury.recentTransactions.length === 0 && (
+              <div className="p-6 rounded-xl bg-slate-100/50 dark:bg-slate-700/20 text-center text-xs text-slate-500">
+                No treasury transactions recorded yet on this chain.
+              </div>
+            )}
             {treasury.recentTransactions.map((tx, i) => (
               <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
                 <div className="flex items-center gap-3 min-w-0">
@@ -778,12 +912,12 @@ function Treasury({ treasury, govParams }) {
           </h3>
           <div className="space-y-3">
             {[
-              { label: "Voting Period", value: `${govParams.votingPeriod} epochs`, desc: "Duration proposals remain open" },
+              { label: "Voting Period", value: `${govParams.votingPeriod} blocks`, desc: "Duration proposals remain open" },
               { label: "Quorum", value: `${govParams.quorum}%`, desc: "Minimum participation required" },
-              { label: "Proposal Deposit", value: `${formatNbl(govParams.proposalDeposit)} NBL`, desc: "Refunded if proposal passes" },
+              { label: "Proposal Deposit", value: `${fmt(Number(govParams.proposalDeposit))} NBL`, desc: "Refunded if proposal passes" },
               { label: "Max Actions", value: govParams.maxActions.toString(), desc: "Maximum actions per proposal" },
-              { label: "Timelock Period", value: `${govParams.timelockPeriod} epochs`, desc: "Delay before execution" },
-              { label: "Min Voting Power", value: `${formatNbl(govParams.minVotingPower)} NBL`, desc: "Minimum stake to vote" },
+              { label: "Timelock Period", value: `${govParams.timelockPeriod} blocks`, desc: "Delay before execution" },
+              { label: "Min Voting Power", value: `${fmt(Number(govParams.minVotingPower))} NBL`, desc: "Minimum stake to vote" },
             ].map(({ label, value, desc }) => (
               <div key={label} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-100/50 dark:bg-slate-700/20">
                 <div>
@@ -900,26 +1034,50 @@ export default function Governance() {
   const [backendOnline, setBackendOnline] = useState(true);
   const [network, setNetwork] = useState(null);
   const [proposals, setProposals] = useState(PROPOSALS_MOCK);
-  const [treasury] = useState(TREASURY_MOCK);
-  const [govParams] = useState(GOV_PARAMS_MOCK);
-  const [validators] = useState(VALIDATORS_MOCK);
+  const [treasury, setTreasury] = useState(TREASURY_MOCK);
+  const [govParams, setGovParams] = useState(GOV_PARAMS_MOCK);
+  const [validators, setValidators] = useState(VALIDATORS_MOCK);
+  const [wallet, setWallet] = useState(null);
 
   const activeProposals = useMemo(() => proposals.filter(p => p.status === "Active"), [proposals]);
 
-  // Node health + network info polling (matches Explorer/Faucet)
+  useEffect(() => { setWallet(loadWallet()); }, []);
+
+  // Node health + network + on-chain governance polling
   useEffect(() => {
     const poll = async () => {
       try {
-        const [hr, sr, gr] = await Promise.all([
+        const [hr, sr, gr, gvr, vr] = await Promise.all([
           window.fetch(`${RPC_URL}/health`),
           window.fetch(`${RPC_URL}/status`),
           window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${RPC_URL}/governance`),
+          window.fetch(`${RPC_URL}/validators`),
         ]);
         if (!hr.ok) throw new Error("offline");
         const sd = await sr.json();
         const gd = await gr.json();
+        const gov = await gvr.json();
+        const vd = await vr.json();
         setBackendOnline(true);
         setNetwork({ height: sd.height, finalized: sd.finalized_height, baseFee: gd.base_fee });
+        const deposit = gov.params?.proposal_deposit || "100000";
+        setGovParams({
+          votingPeriod: gov.params?.voting_period_blocks || 1000,
+          quorum: Math.round(((gov.params?.quorum_threshold_bps || 3340) / 100) * 10) / 10,
+          proposalDeposit: deposit,
+          maxActions: 10,
+          timelockPeriod: 100,
+          minVotingPower: deposit,
+        });
+        setTreasury({
+          balance: gov.treasury?.balance || "0",
+          totalCollected: gov.treasury?.total_collected || "0",
+          totalSpent: gov.treasury?.total_spent || "0",
+          recentTransactions: [],
+        });
+        setProposals(mapProposals(gov.proposals, deposit));
+        setValidators(mapValidators(vd));
       } catch {
         setBackendOnline(false);
       }
@@ -935,14 +1093,21 @@ export default function Governance() {
     return () => clearTimeout(t);
   }, []);
 
-  const handleVote = (proposalId, support) => {
-    setProposals(prev => prev.map(p => {
-      if (p.id !== proposalId) return p;
-      const weight = 1000000;
-      if (support === "For") return { ...p, yesVotes: (BigInt(p.yesVotes) + BigInt(weight)).toString() };
-      if (support === "Against") return { ...p, noVotes: (BigInt(p.noVotes) + BigInt(weight)).toString() };
-      return { ...p, abstainVotes: (BigInt(p.abstainVotes || "0") + BigInt(weight)).toString() };
-    }));
+  const handleVote = async (proposalId, support) => {
+    const activeWallet = wallet || loadWallet();
+    if (!activeWallet) {
+      throw new Error("Create a wallet on the Wallet page before voting");
+    }
+    const choice = support === "For" ? "yes" : support === "Against" ? "no" : "abstain";
+    return submitGovTx(activeWallet, { action: "vote", proposal_id: proposalId, choice }, RPC_URL);
+  };
+
+  const submitProposal = async (proposal) => {
+    const activeWallet = wallet || loadWallet();
+    if (!activeWallet) {
+      throw new Error("Create a wallet on the Wallet page before proposing");
+    }
+    return submitGovTx(activeWallet, { action: "propose", title: proposal.title, description: proposal.description }, RPC_URL);
   };
 
   return (
@@ -1034,10 +1199,10 @@ export default function Governance() {
               : <Dashboard proposals={proposals} treasury={treasury} validators={validators} govParams={govParams} onTabChange={setActiveTab} />
           )}
           {activeTab === "proposals" && (
-            <Proposals proposals={proposals} onVote={handleVote} />
+            <Proposals proposals={proposals} onVote={handleVote} connected={!!wallet} />
           )}
           {activeTab === "create" && (
-            <CreateProposal />
+            <CreateProposal onSubmit={submitProposal} connected={!!wallet} />
           )}
           {activeTab === "treasury" && (
             <Treasury treasury={treasury} govParams={govParams} />

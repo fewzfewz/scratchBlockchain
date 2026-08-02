@@ -64,6 +64,19 @@ impl WasmExecutor {
 
         Ok(())
     }
+
+    /// Execute a WASM function with a single i32 argument and return value.
+    pub fn execute_i32(&self, wasm_binary: &[u8], func_name: &str, arg: i32) -> Result<i32> {
+        let module = Module::new(&self.engine, wasm_binary)?;
+        let mut store = Store::new(&self.engine, ());
+        let linker = Linker::new(&self.engine);
+
+        let instance = linker.instantiate(&mut store, &module)?;
+        let func = instance.get_typed_func::<i32, i32>(&mut store, func_name)?;
+        let result = func.call(&mut store, arg)?;
+
+        Ok(result)
+    }
 }
 
 // ============================================================================

@@ -141,8 +141,10 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     let executor = BlockExecutor::new(evm, chain_store);
     let validator_addr: [u8; 20] = <[u8; 20]>::try_from(&signing_key.public_key()[..20]).unwrap_or([0u8; 20]);
     
+    let tx_pool = Arc::new(crate::tx_pool::TxPool::new(mempool::MempoolConfig::default(), vec![]));
+
     let block_producer = crate::block_producer::BlockProducer::new(
-        mempool.clone(),
+        tx_pool.clone(),
         bft_engine,
         executor,
         signing_key.clone(),

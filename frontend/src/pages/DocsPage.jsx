@@ -572,6 +572,8 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
                   { method: 'POST', path: '/estimate_gas', desc: 'Estimate gas for a transaction. Body: {from, to, data}.', real: '{"estimated_gas":23100,"base_fee":"1000000000","total_cost_estimate":"23100000000000","estimated_priority_fee":"100000000"}' },
                   { method: 'GET', path: '/validators', desc: 'Active validator set from on-chain state.', real: '{"validators":[],"count":0}' },
                   { method: 'GET', path: '/delegations/{address}', desc: 'Staking delegations for an address.', real: '{"delegations":[],"address":"0x..."}' },
+                  { method: 'GET', path: '/governance', desc: 'On-chain governance state: proposals, treasury, parameters.', real: '{"params":{...},"treasury":{...},"proposals":[]}' },
+                  { method: 'GET', path: '/proposal/{id}', desc: 'Single proposal with live status resolved against block height.', real: '{"proposal":{...},"error":null}' },
                   { method: 'GET', path: '/peers', desc: 'Connected peers list.', real: '{"peers":[],"count":0}' },
                   { method: 'POST', path: '/connect_peer', desc: 'Dial a peer by libp2p multiaddress. Body: {multiaddr}.', real: '{"status":"success"}' },
                   { method: 'POST', path: '/submit_tx', desc: 'Submit a signed transaction (see Transaction schema).', real: '{"status":"success","hash":"abc123..."}' },

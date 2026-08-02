@@ -2,7 +2,7 @@
 
 ## 🎯 Project Status: **Development** → **Testnet Preparation**
 
-**Last Updated**: June 25, 2026  
+**Last Updated**: August 3, 2026  
 **Node RPC**: `http://localhost:8545`  
 **Frontend SPA**: `http://localhost:5173` (9 pages, dark/light mode)  
 **API Docs**: Interactive Swagger UI at `/api-docs`
@@ -41,7 +41,7 @@ This document outlines the journey from our current development codebase to a fu
 - [x] **Explorer** — Dashboard, validators list, staking tab
 - [x] **Faucet** — Direct node RPC integration, no separate backend process
 - [x] **Governance** — Proposal creation/voting with light/dark mode
-- [x] **API Docs** — Interactive Swagger UI for all 17 RPC endpoints
+- [x] **API Docs** — Interactive Swagger UI (core endpoints; new routes in README)
 - [x] **Docs** — Human-readable reference with curl examples
 - [x] **Dark/Light Theme** — Toggle persisted in localStorage, CSS variables
 - [x] **Mobile Responsive** — Hamburger menu sidebar
@@ -59,36 +59,32 @@ This document outlines the journey from our current development codebase to a fu
 
 ---
 
-## 🚧 Phase 9: Economic Engine Maturity (⚠️ CODE WRITTEN)
+## ✅ Phase 9: Economic Engine Maturity (INTEGRATED — August 2026)
 
-**Status**: Code exists in `node/src/rewards.rs` and `governance/src/lib.rs`, not integrated or tested
+**Status**: Wired into node block finalization; treasury + fee burn active
 
-### 9.1 Dynamic Tokenomics ⚠️
-- [/] **Inflation Schedule**: Code exists with halving mechanism
-- [/] **Fee Burn Mechanism**: Code exists (50% of fees)
-- [/] **Validator Reward Distribution**: Code exists
-- [/] **Treasury System**: Code exists (10% of rewards)
+### 9.1 Dynamic Tokenomics ✅ (partial)
+- [x] **Inflation Schedule**: Block rewards via `RewardManager`
+- [x] **Fee Burn Mechanism**: 50% of fees burned (logged on finalize)
+- [x] **Validator Reward Distribution**: Proposer + vote rewards
+- [x] **Treasury System**: 10% of block fees → on-chain treasury
 
-**Priority**: 🔴 CRITICAL
+**Priority**: 🟡 HIGH (harden + test at scale)
 
-### 9.2 Robust Staking System ⚠️
-- [ ] **Dynamic Validator Set**: Not implemented (static genesis only)
-- [/] **Minimum Stake Requirements**: Code exists
-- [/] **Slashing Conditions**: Code exists, not active
-- [/] **Delegation**: Code exists
-- [/] **Unbonding Period**: Code exists (7 days in config)
-
-**Priority**: 🔴 CRITICAL
-
-### 9.3 Gas Fee Optimization ⚠️
-- [/] **Dynamic Gas Pricing**: EIP-1559 code exists in `execution/src/gas.rs`
-- [ ] **Gas Estimation API**: Not exposed via RPC
-- [/] **Fee Market Analysis**: Code exists
-- [/] **Priority Fees**: Code exists
+### 9.2 Robust Staking System ✅ (partial)
+- [x] **Dynamic Validator Set**: `POST /validators/register` updates state trie
+- [x] **Delegation**: `POST /delegate` + `GET /delegations/{address}`
+- [x] **Slashing Conditions**: Tracker wired; `GET /slashing/events`
+- [/] **BFT hot-reload**: Validator registration does not yet update live BFT engine
 
 **Priority**: 🟡 HIGH
 
-**Tests**: Not run (integration not complete)
+### 9.3 Gas Fee Optimization ✅
+- [x] **Dynamic Gas Pricing**: EIP-1559 in execution layer
+- [x] **Gas Estimation API**: `POST /estimate_gas`
+- [x] **Fee Market Analysis**: `GET /fee_history/{count}`
+
+**Priority**: 🟢 MEDIUM
 
 ---
 
@@ -117,14 +113,12 @@ This document outlines the journey from our current development codebase to a fu
 
 ## 🗳️ Phase 11: On-Chain Governance Maturity
 
-**Status**: Code exists in `governance/src/lib.rs`, not exposed via RPC
+**Status**: On-chain state exposed via RPC; UI shell complete
 
 ### 11.1 Governance Mechanisms
-- [ ] **Quorum Requirements**: Minimum participation for valid votes
-- [ ] **Time-Locked Voting**: Prevent last-minute manipulation
-- [ ] **Proposal Types**: Parameter changes, upgrades, treasury spending
-- [ ] **Veto Power**: Emergency stop for malicious proposals
-- [ ] **Vote Delegation**: Allow token holders to delegate voting power
+- [x] **Proposal listing / voting UI** — frontend shell
+- [x] **On-chain state** — `GET /governance`, `GET /proposal/{id}`
+- [ ] **Signed tx submit for vote/propose** — full wallet integration pending
 
 **Estimated Time**: 3 weeks  
 **Priority**: 🟡 HIGH
@@ -178,7 +172,8 @@ This document outlines the journey from our current development codebase to a fu
 ### 13.1 JavaScript/TypeScript SDK
 - [ ] **Web3-like API**: Familiar interface for Ethereum developers
 - [ ] **Transaction Building**: Helper functions for common operations
-- [ ] **Event Subscriptions**: WebSocket support for real-time updates
+- [x] **Event Subscriptions**: WebSocket `/ws` for `newHead` events
+- [ ] **Full JSON-RPC parity**: Ethereum-style WS subscriptions
 - [ ] **TypeScript Types**: Full type safety
 - [ ] **NPM Package**: Easy installation
 
@@ -311,23 +306,12 @@ This document outlines the journey from our current development codebase to a fu
 
 - **GitHub**: [github.com/anomalyco/scratchBlockchain]
 - **Frontend**: `http://localhost:5173`
-- **Node RPC**: `http://localhost:8545` (17 endpoints)
+- **Node RPC**: `http://localhost:8545` (29 endpoints + WebSocket)
 - **API Docs**: `http://localhost:5173/api-docs` (interactive Swagger UI)
 
 ---
 
-**Last Updated**: June 25, 2026  
-**Current Phase**: Core infrastructure compiled, UIs built, RPC endpoints live — testnet preparation
+**Last Updated**: August 3, 2026  
+**Current Phase**: Core infrastructure integrated — TxPool (MEV + AA), 29 RPC endpoints, deploy UI, on-chain tx history (~87%)
 
----
-
-## 🏆 What Makes This Blockchain Special
-
-1. **Modularity**: Separate crates for consensus, execution, storage, networking
-2. **Breadth**: Multi-VM support (EVM, Native, WASM), MEV protection, ZK, DA, rollups
-3. **Security**: BFT consensus + slashing infrastructure (code exists)
-4. **Developer-Friendly**: Multi-VM support (EVM, Native, WASM)
-5. **MEV Protection**: Threshold encryption for fair ordering
-6. **ZK-Ready**: Halo2 integration for privacy and scaling
-
-**Modular blockchain infrastructure - broad feature coverage, needs hardening and integration.**
+**Modular blockchain infrastructure — broad feature coverage; remaining work: crypto stubs, frontend gaps, public testnet, security audit.**

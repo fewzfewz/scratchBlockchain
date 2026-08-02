@@ -1,5 +1,28 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+
+/// Parse a 20-byte Ethereum address from hex (with or without `0x`).
+fn parse_eth_address(hex_str: &str) -> [u8; 20] {
+    let s = hex_str.trim_start_matches("0x");
+    let mut out = [0u8; 20];
+    for (i, byte) in out.iter_mut().enumerate() {
+        let pair = &s[i * 2..i * 2 + 2];
+        *byte = u8::from_str_radix(pair, 16).unwrap_or(0);
+    }
+    out
+}
+
+/// Deterministic Nebula-side token address for a bridged Ethereum asset.
+fn mapped_chain_address(eth: [u8; 20]) -> [u8; 20] {
+    let mut h = Sha256::new();
+    h.update(b"nebula-bridge-token-v1:");
+    h.update(eth);
+    let digest: [u8; 32] = h.finalize().into();
+    let mut addr = [0u8; 20];
+    addr.copy_from_slice(&digest[..20]);
+    addr
+}
 
 /// Token information for bridge
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -81,50 +104,56 @@ impl Default for TokenRegistry {
     fn default() -> Self {
         let mut registry = Self::new();
 
-        // Add USDC
-        registry.add_token(
-            "USDC".to_string(),
-            TokenInfo {
-                symbol: "USDC".to_string(),
-                name: "USD Coin".to_string(),
-                decimals: 6,
-                eth_address: [0u8; 20], // Placeholder
-                chain_address: [0u8; 20], // Placeholder
-                min_amount: 1_000_000, // 1 USDC
-                max_amount: 1_000_000_000_000, // 1M USDC
-                enabled: true,
-            },
-        ).ok();
+        let usdc_eth = parse_eth_address("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
+        registry
+            .add_token(
+                "USDC".to_string(),
+                TokenInfo {
+                    symbol: "USDC".to_string(),
+                    name: "USD Coin".to_string(),
+                    decimals: 6,
+                    eth_address: usdc_eth,
+                    chain_address: mapped_chain_address(usdc_eth),
+                    min_amount: 1_000_000,
+                    max_amount: 1_000_000_000_000,
+                    enabled: true,
+                },
+            )
+            .ok();
 
-        // Add USDT
-        registry.add_token(
-            "USDT".to_string(),
-            TokenInfo {
-                symbol: "USDT".to_string(),
-                name: "Tether USD".to_string(),
-                decimals: 6,
-                eth_address: [0u8; 20], // Placeholder
-                chain_address: [0u8; 20], // Placeholder
-                min_amount: 1_000_000, // 1 USDT
-                max_amount: 1_000_000_000_000, // 1M USDT
-                enabled: true,
-            },
-        ).ok();
+        let usdt_eth = parse_eth_address("0xdAC17F958D2ee523a2206206994597C13D831ec7");
+        registry
+            .add_token(
+                "USDT".to_string(),
+                TokenInfo {
+                    symbol: "USDT".to_string(),
+                    name: "Tether USD".to_string(),
+                    decimals: 6,
+                    eth_address: usdt_eth,
+                    chain_address: mapped_chain_address(usdt_eth),
+                    min_amount: 1_000_000,
+                    max_amount: 1_000_000_000_000,
+                    enabled: true,
+                },
+            )
+            .ok();
 
-        // Add ETH
-        registry.add_token(
-            "ETH".to_string(),
-            TokenInfo {
-                symbol: "ETH".to_string(),
-                name: "Ethereum".to_string(),
-                decimals: 18,
-                eth_address: [0u8; 20], // Native token
-                chain_address: [0u8; 20], // Wrapped ETH on chain
-                min_amount: 10_000_000_000_000_000, // 0.01 ETH
-                max_amount: 100_000_000_000_000_000_000, // 100 ETH
-                enabled: true,
-            },
-        ).ok();
+        let weth_eth = parse_eth_address("0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2");
+        registry
+            .add_token(
+                "ETH".to_string(),
+                TokenInfo {
+                    symbol: "ETH".to_string(),
+                    name: "Ethereum".to_string(),
+                    decimals: 18,
+                    eth_address: weth_eth,
+                    chain_address: mapped_chain_address(weth_eth),
+                    min_amount: 10_000_000_000_000_000,
+                    max_amount: 100_000_000_000_000_000_000,
+                    enabled: true,
+                },
+            )
+            .ok();
 
         registry
     }
@@ -146,6 +175,9 @@ mod tests {
         let usdc = registry.get_token("USDC").unwrap();
         assert_eq!(usdc.symbol, "USDC");
         assert_eq!(usdc.decimals, 6);
+        assert_ne!(usdc.eth_address, [0u8; 20]);
+        assert_ne!(usdc.chain_address, [0u8; 20]);
+        assert_eq!(usdc.chain_address, mapped_chain_address(usdc.eth_address));
     }
 
     #[test]

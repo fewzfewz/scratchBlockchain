@@ -392,6 +392,83 @@ paths:
                   address:
                     type: string
 
+  # ─── Governance ───────────────────────────────────────────────────────────
+  /governance:
+    get:
+      summary: Governance state
+      description: Returns on-chain governance state (proposals, treasury, parameters) read directly from the state trie.
+      operationId: getGovernance
+      responses:
+        "200":
+          description: Governance overview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  params:
+                    type: object
+                    properties:
+                      proposal_deposit:
+                        type: string
+                      voting_period_blocks:
+                        type: integer
+                      quorum_threshold_bps:
+                        type: integer
+                      pass_threshold_bps:
+                        type: integer
+                  treasury:
+                    type: object
+                    properties:
+                      balance:
+                        type: string
+                      total_collected:
+                        type: string
+                      total_spent:
+                        type: string
+                  total_stake:
+                    type: string
+                  next_proposal_id:
+                    type: integer
+                  height:
+                    type: integer
+                  proposals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Proposal"
+
+  /proposal/{id}:
+    get:
+      summary: Get proposal
+      description: Returns a single proposal with its live status resolved against the current block height.
+      operationId: getProposal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Proposal detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  proposal:
+                    allOf:
+                      - $ref: "#/components/schemas/Proposal"
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            enum: [active, passed, rejected, executed]
+                          quorum:
+                            type: string
+                  error:
+                    type: [string, "null"]
+
   # ─── Network ──────────────────────────────────────────────────────────────
   /peers:
     get:
@@ -527,3 +604,38 @@ components:
           type: integer
         total_delegated:
           type: string
+
+    Proposal:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        proposer:
+          type: string
+        status:
+          type: string
+          enum: [active, passed, rejected, executed]
+        start_block:
+          type: integer
+        end_block:
+          type: integer
+        voting_period_blocks:
+          type: integer
+        yes_votes:
+          type: string
+        no_votes:
+          type: string
+        abstain_votes:
+          type: string
+        total_votes:
+          type: string
+        quorum:
+          type: string
+        voters:
+          type: object
+          additionalProperties:
+            type: string

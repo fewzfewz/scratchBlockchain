@@ -259,13 +259,24 @@ Based on actual source code analysis (not documentation claims).
 
 | Issue | Location | Details |
 |---|---|---|
-| Consensus broken | `consensus/src/bft.rs` | "Invalid vote signature" — signature verification fails or vote aggregation never reaches 2/3 |
-| Node crate compilation | `node/src/main.rs` | Internal imports like `node::block_producer`, `node::metrics`, `node::light_client`, `node::runtime_upgrade` expect a different module structure |
-| RocksDB primary, sled secondary | `storage/src/db.rs` vs `storage/src/lib.rs` | Production `RocksDb` with column families in `db.rs`; `PersistentStore` / `ReceiptStore` / `StateStore` use sled |
+| Full MPT state root from EVM | `node/src/block_producer.rs` | Uses deterministic `SHA256(parent \|\| extrinsics)`; not full trie root from EVM diffs |
+| BFT hot-reload after register | `node/src/main.rs` | `POST /validators/register` updates trie but not live BFT validator keys |
 | ZK circuit simplified | `zk/src/lib.rs:75` | Constraint is `new = prev + tx` instead of a real hash function |
 | KZG setup unsafe | `zk/src/lib.rs:176` | `OsRng` instead of a real trusted setup ceremony |
-| DA erasure coding XOR-based | `da/src/lib.rs:116-132` | Parity chunks can't actually recover missing data; real RS not implemented |
-| Threshold encryption XOR-based | `mev/src/lib.rs:590-597` | Real Shamir's Secret Sharing not implemented |
+| DA erasure coding XOR-based | `da/src/lib.rs:116-132` | Parity chunks can't recover missing data; real RS not implemented |
+| Threshold encryption XOR-based | `mev/src/lib.rs:590-597` | Real Shamir's Secret Sharing not implemented (RPC wired, crypto simplified) |
 | Bridge signature verify stubbed | `interop/src/ethereum_bridge.rs:146-148` | Just checks count, not actual crypto |
 | Fraud proof re-execution stubbed | `rollup/src/lib.rs:334-337` | `execute_transaction` returns state unchanged |
-| Wasm executor stub | `execution/src/lib.rs` | Empty/placeholder implementation |
+| Wasm executor stub | `execution/src/lib.rs` | Placeholder; AA (ERC-4337) is wired separately |
+| OpenAPI spec lag | `docs/openapi.yaml` | New RPC routes documented in README/STATUS; Swagger update pending |
+
+## Recently integrated (August 2026)
+
+| Feature | Location | Details |
+|---|---|---|
+| TxPool | `node/src/tx_pool.rs` | MevMempool + AccountAbstractionExecutor |
+| Account abstraction RPC | `node/src/rpc.rs` | `POST /submit_user_operation`, `GET /user_operations/pending` |
+| MEV RPC | `node/src/rpc.rs` | `/mev/commit`, `/mev/reveal`, `/mev/encrypted`, `/mev/decryption_share` |
+| Slashing RPC | `node/src/rpc.rs` | `GET /slashing/events`; tracker in node loop |
+| Delegation / register | `node/src/governance_store.rs` | `POST /delegate`, `POST /validators/register` |
+| WebSocket | `node/src/rpc.rs` | `GET /ws` — `newHead` events |
