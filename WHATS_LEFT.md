@@ -107,6 +107,9 @@
 - ✅ Live metrics (peer count, network bytes, consensus round, mempool, validator count/stake) on `/metrics`
 - ✅ Grafana dashboards rewritten to use emitted `blockchain_*` metrics (were `chain_*`, never emitted)
 - ✅ Restart-consensus stall fixed — producer/BFT resume from chain tip on restart
+- ✅ **`/validators` RPC fixed**: the handler read a raw `b"validators"` state key that the trie never writes (only node hashes + root are persisted), so the explorer's Validators/Staking tabs were always empty. `RpcServer` now receives the `state_trie` and returns the real genesis validator set (3 validators with address, stake, commission)
+- ✅ **Explorer UI redesigned**: aurora/grid backdrop, gradient hero with live tip/finalized chips, gradient tab bar, icon-chipped stat cards, live recent-blocks feed, validator card list with uptime bars + detail view, stake share table — matching the landing page design language; fixed commission display (was rendering 1000% instead of 10%) and stake units
+- ✅ **Wallet UI redesigned**: gradient balance hero card (with empty-state generate CTA), aurora/grid backdrop, gradient header, icon-chipped section headers, consistent glass inputs with focus rings, glass modals
 
 ### Consensus Stability (BFT Liveness) — RESOLVED
 - ✅ **Quorum threshold fixed** (`>=` instead of `>`): 2 of 3 equal-stake validators can now finalize; previously the `>` threshold required all 3, stalling the chain whenever one node lagged
@@ -116,6 +119,7 @@
 - ✅ **Block sync**: `RequestBlock`/`BlockResponse` batch sync with contiguous apply, same-slot tip replacement, and `finish_sync()` resetting BFT to `tip + 2` so a caught-up node resumes consensus on the canonical chain
 - ✅ **Crash-restart loop fixed**: produced blocks carried a zero placeholder `state_root` (EVM state diffs are `vec![]`), so the always-on state-root check crashed any node using the gossip/sync path (25+ restarts observed on one validator). The check now only runs for non-placeholder roots, and per-event errors in the run loop are logged instead of killing the process
 - ✅ **Verified on live 3-validator + 2-RPC testnet**: fresh reset reaches perfect lockstep; `docker-compose restart` of a validator resumes and rejoins; killing one validator leaves the other two finalizing (2/3 quorum); the killed validator rejoins and catches up
+- ⚠️ **Known residual stall**: if one validator's BFT engine desyncs by one height from the others (e.g. after a liveness hiccup), round-sync (same-height only) cannot bridge the gap and the network loops on "Propose timeout … voting nil" until a validator restart re-aligns it (`docker-compose restart` resumes from the persisted tip in lockstep — verified). Root fix would be a mechanism to re-anchor BFT height to the highest peer height at the same tip
 
 ### Quick Wins
 ```

@@ -156,7 +156,7 @@ export default function Home() {
               <BookOpen className="w-4 h-4" />
               Read the Docs
             </Link>
-            <a href="https://github.com/your-org/nebula" target="_blank" rel="noopener noreferrer"
+            <a href="https://github.com/fewzfewz/scratchBlockchain" target="_blank" rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-6 py-3 rounded-xl glass text-sm font-semibold text-slate-700 dark:text-slate-200 hover:-translate-y-0.5 transition-all">
               <Github className="w-4 h-4" />
               GitHub

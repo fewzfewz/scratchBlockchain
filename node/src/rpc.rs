@@ -23,6 +23,7 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use storage::ChainStore;
+use storage::trie::PatriciaTrie;
 use tokio::sync::Mutex;
 use warp::{Filter, http::HeaderValue};
 pub use network::NetworkCommand;
@@ -179,6 +180,7 @@ fn with_cors() -> warp::cors::Cors {
 pub struct RpcServer {
     mempool: Arc<Mempool>,
     chain_store: Arc<ChainStore>,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
     metrics: Arc<crate::metrics::Metrics>,
     network_cmd_sender: mpsc::Sender<NetworkCommand>,
     rate_limit: u32,
@@ -188,6 +190,7 @@ impl RpcServer {
     pub fn new(
         mempool: Arc<Mempool>,
         chain_store: Arc<ChainStore>,
+        state_trie: Arc<Mutex<PatriciaTrie>>,
         metrics: Arc<crate::metrics::Metrics>,
         network_cmd_sender: mpsc::Sender<NetworkCommand>,
         rate_limit: u32,
@@ -195,6 +198,7 @@ impl RpcServer {
         Self {
             mempool,
             chain_store,
+            state_trie,
             metrics,
             network_cmd_sender,
             rate_limit,
@@ -210,6 +214,7 @@ impl RpcServer {
 
         let mempool = self.mempool.clone();
         let chain_store = self.chain_store.clone();
+        let state_trie = self.state_trie.clone();
         let metrics = self.metrics.clone();
         let network_cmd_sender = self.network_cmd_sender.clone();
 
@@ -363,8 +368,8 @@ impl RpcServer {
         let validators = warp::path("validators")
             .and(with_rate_limit.clone())
             .and(warp::get())
-            .and(with_arc(chain_store.clone()))
-            .and_then(|_, chain_store| handle_validators(chain_store));
+            .and(with_arc(state_trie.clone()))
+            .and_then(|_, state_trie| handle_validators(state_trie));
 
         // GET /block/latest - Get the latest block
         let block_latest = warp::path!("block" / "latest")
@@ -867,21 +872,19 @@ async fn handle_peers() -> Result<impl warp::Reply, Infallible> {
 }
 
 async fn handle_validators(
-    chain_store: Arc<ChainStore>,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
 ) -> Result<impl warp::Reply, Infallible> {
-    // Try to read validators from state under a well-known key
-    let validators_key = b"validators";
-    match chain_store.get_state(validators_key) {
+    // Validators live in the state trie under the b"validators" key (written at genesis)
+    // as a JSON array of ValidatorInfo objects.
+    let trie = state_trie.lock().await;
+    match trie.get(b"validators") {
         Ok(Some(encoded)) => {
-            if let Ok(vals) = serde_json::from_slice::<Vec<ValidatorInfo>>(&encoded) {
-                let count = vals.len();
-                Ok(warp::reply::json(&ValidatorsResponse { validators: vals, count }))
-            } else {
-                Ok(warp::reply::json(&ValidatorsResponse { validators: vec![], count: 0 }))
-            }
+            let vals = serde_json::from_slice::<Vec<ValidatorInfo>>(&encoded).unwrap_or_default();
+            let count = vals.len();
+            Ok(warp::reply::json(&ValidatorsResponse { validators: vals, count }))
         }
         _ => {
-            // No validators stored yet; return empty list
+            // No validators in trie yet
             Ok(warp::reply::json(&ValidatorsResponse { validators: vec![], count: 0 }))
         }
     }

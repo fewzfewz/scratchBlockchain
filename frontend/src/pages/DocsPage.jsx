@@ -1,17 +1,26 @@
-import { useState } from 'react'
-import { BookOpen, Zap, Shield, Layers, Code, FileText, Copy, Check, FileJson } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import {
+  BookOpen, Zap, Shield, Layers, Code, FileText, Copy, Check, FileJson,
+  Search, ChevronLeft, ChevronRight, Activity, Gauge, ShieldCheck, WifiOff,
+  Terminal, Server, Download, User, ArrowLeftRight, AlertTriangle,
+  ArrowRight, Rocket, Compass,
+} from 'lucide-react'
+
+const RPC_URL = 'http://localhost:8545'
 
 const SECTIONS = [
-  { id: 'intro', title: 'Introduction' },
-  { id: 'install', title: 'Installation' },
-  { id: 'quickstart', title: 'Quick Start' },
-  { id: 'architecture', title: 'Architecture' },
-  { id: 'accounts', title: 'Accounts' },
-  { id: 'transactions', title: 'Transactions' },
-  { id: 'rpc', title: 'RPC API' },
-  { id: 'errors', title: 'Error Codes' },
-  { id: 'local-dev', title: 'Local Dev' },
+  { id: 'intro', title: 'Introduction', icon: BookOpen },
+  { id: 'install', title: 'Installation', icon: Download },
+  { id: 'quickstart', title: 'Quick Start', icon: Zap },
+  { id: 'architecture', title: 'Architecture', icon: Layers },
+  { id: 'accounts', title: 'Accounts', icon: User },
+  { id: 'transactions', title: 'Transactions', icon: ArrowLeftRight },
+  { id: 'rpc', title: 'RPC API', icon: Terminal },
+  { id: 'errors', title: 'Error Codes', icon: AlertTriangle },
+  { id: 'local-dev', title: 'Local Dev', icon: Server },
 ]
+
+const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 
 function CopyBtn({ text }) {
   const [copied, setCopied] = useState(false)
@@ -25,54 +34,289 @@ function CopyBtn({ text }) {
   )
 }
 
+const LANG_STYLES = {
+  bash: { dot: 'bg-emerald-400', badge: 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400' },
+  text: { dot: 'bg-slate-400', badge: 'bg-slate-500/15 text-slate-600 dark:text-slate-400' },
+}
+
 function CodeBlock({ code, lang = '' }) {
+  const style = LANG_STYLES[lang] || { dot: 'bg-blue-400', badge: 'bg-blue-500/15 text-blue-600 dark:text-blue-400' }
   return (
-    <div className="group rounded-xl border border-slate-200 dark:border-slate-700/50 bg-slate-50 dark:bg-slate-800/80 overflow-hidden mb-4">
+    <div className="group rounded-xl border border-slate-200 dark:border-slate-700/50 bg-slate-50 dark:bg-slate-800/80 overflow-hidden mb-4 hover:border-slate-300 dark:hover:border-slate-600/60 transition-colors">
       {lang && (
         <div className="flex items-center justify-between px-4 py-1.5 bg-slate-100 dark:bg-black/30 border-b border-slate-200 dark:border-slate-700/50">
-          <span className="text-[10px] uppercase tracking-wider text-slate-500 dark:text-slate-500">{lang}</span>
+          <span className="flex items-center gap-2">
+            <span className={`w-1.5 h-1.5 rounded-full ${style.dot}`} />
+            <span className={`text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded ${style.badge}`}>{lang}</span>
+          </span>
           <CopyBtn text={code} />
         </div>
       )}
-      <pre className="p-4 overflow-x-auto text-sm text-slate-700 dark:text-slate-300 font-mono leading-relaxed"><code>{code}</code></pre>
+      <pre className="p-4 overflow-x-auto text-sm text-slate-700 dark:text-slate-300 font-mono leading-relaxed scrollbar-thin"><code>{code}</code></pre>
+    </div>
+  )
+}
+
+function DocsSkeleton() {
+  return (
+    <div className="space-y-5 animate-fade-in">
+      <div className="h-10 w-2/3 rounded-xl glass-strong animate-pulse" />
+      <div className="h-4 w-full rounded-lg glass-strong animate-pulse" />
+      <div className="h-4 w-5/6 rounded-lg glass-strong animate-pulse" />
+      <div className="grid md:grid-cols-3 gap-4">
+        {[0, 1, 2].map(i => <div key={i} className="h-28 rounded-xl glass-strong animate-pulse" />)}
+      </div>
+      <div className="h-40 rounded-xl glass-strong animate-pulse" />
+      <div className="h-4 w-3/4 rounded-lg glass-strong animate-pulse" />
+      <div className="h-4 w-1/2 rounded-lg glass-strong animate-pulse" />
+    </div>
+  )
+}
+
+function StartHere({ onSelect }) {
+  const links = [
+    { id: 'install', title: 'Install Nebula', desc: 'Build from source or use Docker Compose', icon: Download, chip: 'from-blue-600 to-cyan-600' },
+    { id: 'quickstart', title: 'Quick Start', desc: 'Spin up a 3-node testnet in 60 seconds', icon: Zap, chip: 'from-amber-500 to-orange-600' },
+    { id: 'rpc', title: 'RPC API', desc: 'All 17 endpoints with example responses', icon: Terminal, chip: 'from-emerald-600 to-teal-600' },
+    { id: 'local-dev', title: 'Local Dev', desc: 'Port map, test accounts, and workflows', icon: Server, chip: 'from-violet-600 to-purple-600' },
+  ]
+  return (
+    <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-8">
+      {links.map(({ id, title, desc, icon: Icon, chip }) => (
+        <button
+          key={id}
+          onClick={() => onSelect(id)}
+          className="text-left p-4 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all group"
+        >
+          <div className="flex items-center justify-between mb-3">
+            <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${chip} flex items-center justify-center text-white shadow-md`}>
+              <Icon className="w-4 h-4" />
+            </div>
+            <ArrowRight className="w-4 h-4 text-slate-400 group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all" />
+          </div>
+          <div className="text-sm font-semibold text-slate-800 dark:text-white">{title}</div>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">{desc}</p>
+        </button>
+      ))}
     </div>
   )
 }
 
 export default function DocsPage() {
   const [activeSection, setActiveSection] = useState('intro')
+  const [query, setQuery] = useState('')
+  const [progress, setProgress] = useState(0)
+  const [backendOnline, setBackendOnline] = useState(true)
+  const [network, setNetwork] = useState(null)
+  const [loading, setLoading] = useState(true)
+
+  // Node health + network info polling (matches Explorer/Faucet/Governance)
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const [hr, sr, gr] = await Promise.all([
+          window.fetch(`${RPC_URL}/health`),
+          window.fetch(`${RPC_URL}/status`),
+          window.fetch(`${RPC_URL}/gas_price`),
+        ])
+        if (!hr.ok) throw new Error('offline')
+        const sd = await sr.json()
+        const gd = await gr.json()
+        setBackendOnline(true)
+        setNetwork({ height: sd.height, finalized: sd.finalized_height, baseFee: gd.base_fee })
+      } catch { setBackendOnline(false) }
+    }
+    poll()
+    const t = setInterval(poll, 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Brief skeleton so the page feels live
+  useEffect(() => {
+    const t = setTimeout(() => setLoading(false), 350)
+    return () => clearTimeout(t)
+  }, [])
+
+  // Scroll to top on section change
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [activeSection])
+
+  // Reading progress bar
+  useEffect(() => {
+    const onScroll = () => {
+      const el = document.documentElement
+      const max = el.scrollHeight - el.clientHeight
+      setProgress(max > 0 ? (el.scrollTop / max) * 100 : 0)
+    }
+    window.addEventListener('scroll', onScroll, { passive: true })
+    return () => window.removeEventListener('scroll', onScroll)
+  }, [])
+
+  // Keyboard navigation (skip inputs)
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return
+      if (e.key === 'ArrowDown') { e.preventDefault(); setActiveSection(prev => SECTIONS[Math.min(SECTIONS.findIndex(s => s.id === prev) + 1, SECTIONS.length - 1)].id) }
+      if (e.key === 'ArrowUp') { e.preventDefault(); setActiveSection(prev => SECTIONS[Math.max(SECTIONS.findIndex(s => s.id === prev) - 1, 0)].id) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  const filteredSections = SECTIONS.filter(s =>
+    s.title.toLowerCase().includes(query.trim().toLowerCase())
+  )
+
+  const idx = SECTIONS.findIndex(s => s.id === activeSection)
+  const prev = idx > 0 ? SECTIONS[idx - 1] : null
+  const next = idx < SECTIONS.length - 1 ? SECTIONS[idx + 1] : null
+
+  const select = (id) => { setActiveSection(id); setQuery('') }
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8 animate-fade-in">
-      <div className="grid grid-cols-[220px_1fr] gap-8">
-        <aside className="sticky top-20 h-[calc(100vh-6rem)] overflow-y-auto scrollbar-thin">
-          <div className="space-y-6">
-            <div className="flex items-center gap-2 text-blue-500 dark:text-blue-400 mb-2">
-              <BookOpen className="w-4 h-4" />
-              <span className="text-xs uppercase tracking-wider font-medium">Nebula Docs</span>
+    <div className="relative min-h-screen overflow-hidden">
+      {/* Reading progress bar */}
+      <div className="fixed top-0 left-0 right-0 z-50 h-0.5 bg-transparent pointer-events-none">
+        <div
+          className="h-full bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 transition-[width] duration-150"
+          style={{ width: `${progress}%` }}
+        />
+      </div>
+
+      {/* Aurora blobs + grid backdrop */}
+      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
+        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
+      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
+        style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.4), transparent 70%)' }} />
+      <div className="absolute inset-0 bg-grid pointer-events-none" />
+
+      <div className="relative z-10 max-w-6xl mx-auto px-4 py-8 md:py-10 animate-fade-in">
+        {/* ── Header ─────────────────────────────────────────────── */}
+        <header className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
+            <span className={`w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'}`} />
+            {backendOnline ? 'Local testnet live' : 'Node offline'}
+            <span className="text-slate-400 dark:text-slate-500">· Docs v1.0</span>
+          </div>
+
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
+              <BookOpen className="w-6 h-6" />
             </div>
-            <div className="space-y-0.5">
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Nebula
+              <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Docs</span>
+            </h1>
+          </div>
+          <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
+            Everything you need to build on Nebula — from zero to a live local testnet in minutes.
+          </p>
+
+          {network && (
+            <div className="flex items-center justify-center flex-wrap gap-2 mt-5 text-xs">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
+                <Activity className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" /> Tip #{fmt(network.height)}
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
+                <Gauge className="w-3.5 h-3.5 text-emerald-500" /> Base fee {fmt(network.baseFee)}
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-violet-500" /> Finalized #{fmt(network.finalized)}
+              </span>
+            </div>
+          )}
+        </header>
+
+        {!backendOnline && (
+          <div className="mb-8 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
+            <WifiOff className="w-4 h-4 shrink-0" />
+            <span>Node not reachable at {RPC_URL}. The docs still work — start the testnet to try the live endpoints.</span>
+          </div>
+        )}
+
+        <div className="grid lg:grid-cols-[260px_1fr] gap-8 items-start">
+          {/* ── Sidebar ──────────────────────────────────────────── */}
+          <aside className="lg:sticky lg:top-8">
+            <div className="hidden lg:block space-y-4">
+              <div className="p-3 rounded-2xl glass-strong">
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+                  <input
+                    value={query}
+                    onChange={e => setQuery(e.target.value)}
+                    placeholder="Search docs..."
+                    className="w-full pl-9 pr-8 py-2 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-700 dark:text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all"
+                  />
+                  {query && (
+                    <button onClick={() => setQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                      <ChevronRight className="w-3.5 h-3.5 rotate-90" />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <nav className="p-2 rounded-2xl glass-strong space-y-0.5">
+                {filteredSections.length === 0 && (
+                  <p className="px-3 py-2 text-xs text-slate-500 dark:text-slate-400">No sections match "{query.trim()}"</p>
+                )}
+                {filteredSections.map(({ id, title, icon: Icon }, i) => (
+                  <button
+                    key={id}
+                    onClick={() => select(id)}
+                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-sm transition-all ${
+                      activeSection === id
+                        ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md shadow-blue-600/20'
+                        : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/40'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="truncate flex-1 text-left">{title}</span>
+                    <span className={`text-[10px] font-mono ${activeSection === id ? 'text-white/70' : 'text-slate-400 dark:text-slate-500'}`}>{String(i + 1).padStart(2, '0')}</span>
+                  </button>
+                ))}
+              </nav>
+
+              <div className="p-3 rounded-2xl glass text-xs text-slate-500 dark:text-slate-400">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="flex items-center gap-1.5 font-medium text-slate-600 dark:text-slate-300">
+                    <Compass className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" />
+                    Section {idx + 1} of {SECTIONS.length}
+                  </span>
+                  <span className="font-mono">{Math.round(progress)}%</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-slate-200 dark:bg-slate-700/50 overflow-hidden">
+                  <div className="h-full bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 transition-all duration-150" style={{ width: `${(idx + 1) / SECTIONS.length * 100}%` }} />
+                </div>
+                <p className="mt-2 text-[10px] text-slate-400 dark:text-slate-500">Tip: use ↑ / ↓ keys to navigate sections</p>
+              </div>
+            </div>
+
+            {/* Mobile section chips */}
+            <div className="lg:hidden -mx-4 px-4 mb-6 flex gap-2 overflow-x-auto scrollbar-thin pb-1">
               {SECTIONS.map(({ id, title }) => (
                 <button
                   key={id}
                   onClick={() => setActiveSection(id)}
-                  className={`block w-full text-left px-3 py-1.5 rounded-lg text-sm transition-all ${
+                  className={`shrink-0 px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
                     activeSection === id
-                      ? 'text-blue-600 dark:text-blue-300 bg-blue-50 dark:bg-blue-600/10 border-l-2 border-blue-500 dark:border-blue-400'
-                      : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'
+                      ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md shadow-blue-600/20'
+                      : 'glass-strong text-slate-500 dark:text-slate-400'
                   }`}
                 >
                   {title}
                 </button>
               ))}
             </div>
-          </div>
-        </aside>
+          </aside>
 
-        <div className="min-w-0">
+          {/* ── Content ──────────────────────────────────────────── */}
+          <main className="min-w-0">
+          {loading ? <DocsSkeleton /> : (
+          <div key={activeSection} className="animate-slide-up">
           {activeSection === 'intro' && (
-            <section className="animate-slide-up">
-              <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-4 bg-gradient-to-r from-slate-800 to-slate-400 dark:from-white dark:to-slate-400 bg-clip-text text-transparent">Introduction to Nebula</h1>
+            <section>
+              <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-4 bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent">Introduction to Nebula</h1>
               <p className="text-lg text-blue-600 dark:text-blue-300 mb-4">A high-performance, modular blockchain built in Rust.</p>
               <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">Nebula is designed for scalability and flexibility, featuring a multi-VM execution environment, validator-based consensus with instant finality, and built-in Layer 2 support.</p>
               <div className="grid md:grid-cols-3 gap-4">
@@ -81,13 +325,22 @@ export default function DocsPage() {
                   { icon: Shield, title: 'Secure', desc: 'Ed25519 signatures and GRANDPA-style finality gadget.' },
                   { icon: Layers, title: 'Modular', desc: 'Pluggable consensus, execution, and data availability layers.' },
                 ].map(({ icon: Icon, title, desc }) => (
-                  <div key={title} className="p-5 rounded-xl glass">
-                    <Icon className="w-6 h-6 text-blue-500 dark:text-blue-400 mb-3" />
+                  <div key={title} className="p-5 rounded-xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
+                    <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-md mb-3">
+                      <Icon className="w-4 h-4" />
+                    </div>
                     <h4 className="text-slate-800 dark:text-white font-semibold mb-1">{title}</h4>
                     <p className="text-sm text-slate-500 dark:text-slate-400">{desc}</p>
                   </div>
                 ))}
               </div>
+
+              <h2 className="text-xl font-bold text-slate-900 dark:text-white mt-10 mb-1 flex items-center gap-2">
+                <Rocket className="w-5 h-5 text-blue-500 dark:text-cyan-400" />
+                Start here
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-2">Jump straight to the section you need.</p>
+              <StartHere onSelect={select} />
             </section>
           )}
 
@@ -96,7 +349,7 @@ export default function DocsPage() {
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Installation</h2>
               <p className="text-slate-600 dark:text-slate-400 mb-4">Prerequisites: Rust (latest stable) and Docker.</p>
               <CodeBlock lang="bash" code={`# Clone the repository
-git clone https://github.com/your-org/nebula.git
+git clone https://github.com/fewzfewz/scratchBlockchain.git
 cd nebula
 
 # Build release binary
@@ -151,7 +404,7 @@ done`} />
             <section className="animate-slide-up">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Architecture</h2>
               <div className="space-y-6">
-                <div className="p-5 rounded-xl glass">
+                <div className="p-5 rounded-xl glass-strong">
                   <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Consensus Layer</h3>
                   <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Validator-based BFT consensus with Ed25519 signatures and GRANDPA-style finality gadget. Blocks are finalized in batches for instant irreversibility. Validator set is managed through on-chain governance.</p>
                   <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
@@ -169,7 +422,7 @@ done`} />
                   </div>
                 </div>
 
-                <div className="p-5 rounded-xl glass">
+                <div className="p-5 rounded-xl glass-strong">
                   <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Networking Layer</h3>
                   <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">P2P discovery via libp2p with Gossipsub for block and transaction propagation.</p>
                   <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-1 list-disc list-inside">
@@ -180,7 +433,7 @@ done`} />
                   </ul>
                 </div>
 
-                <div className="p-5 rounded-xl glass">
+                <div className="p-5 rounded-xl glass-strong">
                   <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Storage Layer</h3>
                   <p className="text-sm text-slate-600 dark:text-slate-400 mb-3">High-performance storage layer using RocksDB (default) with Sled legacy support.</p>
                   <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-1 list-disc list-inside">
@@ -206,7 +459,7 @@ Address:      0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18 (20 bytes)
 Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
 
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Account State</h3>
-              <div className="overflow-x-auto mb-4">
+              <div className="overflow-x-auto mb-4 rounded-2xl glass-strong">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-700">
@@ -240,7 +493,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
               <p className="text-slate-600 dark:text-slate-400 mb-6">Nebula uses an EIP-1559 style transaction format with Ed25519 signatures.</p>
 
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Transaction Fields</h3>
-              <div className="overflow-x-auto mb-6">
+              <div className="overflow-x-auto mb-6 rounded-2xl glass-strong">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-700">
@@ -324,7 +577,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
                   { method: 'POST', path: '/submit_tx', desc: 'Submit a signed transaction (see Transaction schema).', real: '{"status":"success","hash":"abc123..."}' },
                   { method: 'GET', path: '/metrics', desc: 'Prometheus-format metrics (text/plain).', real: '# HELP ... TYPE ... gauge ...' },
                 ].map(({ method, path, desc, real }) => (
-                  <div key={path} className="glass rounded-xl p-4">
+                  <div key={path} className="glass-strong rounded-xl p-4 hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
                     <div className="flex items-start gap-3">
                       <span className={`shrink-0 px-2 py-0.5 rounded text-xs font-bold mt-0.5 ${
                         method === 'GET' ? 'bg-blue-100 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400' : 'bg-emerald-100 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400'
@@ -343,7 +596,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
                 ))}
               </div>
 
-              <div className="p-5 rounded-xl glass">
+              <div className="p-5 rounded-xl glass-strong">
                 <h3 className="text-sm font-semibold text-slate-800 dark:text-white mb-2">RPC URL Configuration</h3>
                 <p className="text-sm text-slate-600 dark:text-slate-400">All frontends connect to the RPC endpoint. You can configure the URL in each app's settings panel. Default: <code className="text-xs text-blue-600 dark:text-blue-400">http://localhost:8545</code></p>
               </div>
@@ -355,7 +608,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Error Codes</h2>
               <p className="text-slate-600 dark:text-slate-400 mb-6">The RPC API returns standardized error codes in JSON format.</p>
 
-              <div className="overflow-x-auto">
+              <div className="overflow-x-auto rounded-2xl glass-strong">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-700">
@@ -397,7 +650,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
               <p className="text-slate-600 dark:text-slate-400 mb-6">Everything you need to run a full local development environment.</p>
 
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Service Port Map</h3>
-              <div className="overflow-x-auto mb-6">
+              <div className="overflow-x-auto mb-6 rounded-2xl glass-strong">
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-slate-200 dark:border-slate-700">
@@ -444,7 +697,7 @@ curl -X POST http://localhost:3006/faucet \\
                   ['Query Balance', `curl http://localhost:8545/balance/0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18`],
                   ['Send Tokens', `# Use the wallet frontend at http://localhost:5173/wallet`],
                 ].map(([title, cmd]) => (
-                  <div key={title} className="p-4 rounded-xl glass">
+                  <div key={title} className="p-4 rounded-xl glass-strong">
                     <h4 className="text-sm font-semibold text-slate-800 dark:text-white mb-1">{title}</h4>
                     <code className="text-xs text-slate-600 dark:text-slate-400 block">{cmd}</code>
                   </div>
@@ -452,8 +705,41 @@ curl -X POST http://localhost:3006/faucet \\
               </div>
             </section>
           )}
-        </div>
+          </div>
+          )}
+
+          {/* ── Prev / next navigation ─────────────────────────── */}
+          <div className="mt-10 grid grid-cols-2 gap-3">
+            {prev ? (
+              <button
+                onClick={() => setActiveSection(prev.id)}
+                className="text-left p-4 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all group"
+              >
+                <span className="text-[11px] uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                  <ChevronLeft className="w-3 h-3" /> Previous
+                </span>
+                <span className="block mt-1.5 text-sm font-semibold text-slate-800 dark:text-white group-hover:text-blue-500 dark:group-hover:text-cyan-400 transition-colors">
+                  {prev.title}
+                </span>
+              </button>
+            ) : <div />}
+            {next ? (
+              <button
+                onClick={() => setActiveSection(next.id)}
+                className="text-right p-4 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all group"
+              >
+                <span className="text-[11px] uppercase tracking-wider text-slate-400 flex items-center gap-1 justify-end">
+                  Next <ChevronRight className="w-3 h-3" />
+                </span>
+                <span className="block mt-1.5 text-sm font-semibold text-slate-800 dark:text-white group-hover:text-blue-500 dark:group-hover:text-cyan-400 transition-colors">
+                  {next.title}
+                </span>
+              </button>
+            ) : <div />}
+          </div>
+        </main>
       </div>
+    </div>
     </div>
   )
 }
