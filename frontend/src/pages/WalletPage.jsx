@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
-import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Fingerprint, Coins, Fuel, Sliders, ExternalLink, ShieldAlert, Droplets, FlaskConical, Plus, Check, History, ArrowUpRight, GripVertical, Coins as TokensIcon } from 'lucide-react'
+import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Fingerprint, Coins, Fuel, Sliders, ShieldAlert, Droplets, FlaskConical, Plus, Check, History } from 'lucide-react'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b }
 const weiToNbl = (wei) => { const n = String(wei || '0'); if (n === '0') return '0.0000'; const p = n.padStart(19, '0'); return (p.slice(0, -18) || '0') + '.' + p.slice(-18, -14) }
 const weiToFull = (wei) => { const n = String(wei || '0'); if (n === '0') return '0'; const p = n.padStart(19, '0'); return (p.slice(0, -18) || '0') + '.' + p.slice(-18) }
+const FEE_NBL = 0.000021
 
 const TEST_ADDRESSES = [
   '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',
@@ -19,6 +20,9 @@ const addrFromPub = async (pubBytes) => {
   const hash = await crypto.subtle.digest('SHA-256', pubBytes)
   return new Uint8Array(hash.slice(0, 20))
 }
+
+const inputCls = 'w-full px-3 py-2.5 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40'
+const iconBtnCls = 'p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-300/50 dark:hover:bg-slate-600/50 transition-colors'
 
 export default function WalletPage() {
   const [apiUrl, setApiUrl] = useState(() => localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545')
@@ -308,34 +312,57 @@ export default function WalletPage() {
 
   const shorten = (s) => s ? s.slice(0, 6) + '...' + s.slice(-4) : ''
 
-  return (
-    <div className="relative min-h-screen">
-      <div className="fixed w-[30rem] h-[30rem] rounded-full opacity-25 pointer-events-none"
-        style={{ top: '-10rem', left: '-8rem', background: 'radial-gradient(circle, rgba(14,165,233,0.44), transparent 70%)' }} />
-      <div className="fixed w-[30rem] h-[30rem] rounded-full opacity-25 pointer-events-none"
-        style={{ right: '-10rem', bottom: '-12rem', background: 'radial-gradient(circle, rgba(251,146,60,0.32), transparent 70%)' }} />
+  const setQuickAmount = (pct) => {
+    const bal = parseFloat(balance)
+    if (isNaN(bal) || bal <= 0) { showMsg('No spendable balance', 'error'); return }
+    if (pct === 1) setAmount(Math.max(0, bal - FEE_NBL).toFixed(4))
+    else setAmount((bal * pct).toFixed(4))
+  }
 
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8">
-        <div className="flex items-center justify-between mb-6">
-          <div>
-            <p className="text-xs uppercase tracking-widest text-blue-400 dark:text-blue-400 font-medium">Scratch Blockchain</p>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Nebula Wallet</h1>
+  return (
+    <div className="relative min-h-screen overflow-hidden">
+      {/* Aurora blobs + grid backdrop */}
+      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
+        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
+      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
+        style={{ background: 'radial-gradient(circle, rgba(251,146,60,0.32), transparent 70%)' }} />
+      <div className="absolute inset-0 bg-grid pointer-events-none" />
+
+      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8 animate-fade-in">
+        {/* ── Header ─────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
+              <Wallet className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs uppercase tracking-widest text-blue-500 dark:text-blue-400 font-medium">Nebula Network</p>
+              <h1 className="text-3xl md:text-4xl font-bold tracking-tight text-slate-900 dark:text-white">
+                Nebula
+                <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Wallet</span>
+              </h1>
+            </div>
           </div>
-          <div className="flex gap-2">
-            <Link to="/faucet" className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-500 text-xs font-medium hover:bg-amber-500/20 transition-all">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300`}>
+              <span className={`w-2 h-2 rounded-full ${nodeStatus === 'connected' ? 'bg-emerald-400 animate-pulse-dot' : nodeStatus === 'checking' ? 'bg-amber-400' : 'bg-red-400'}`} />
+              {nodeStatus === 'connected' ? 'Node connected' : nodeStatus === 'checking' ? 'Checking…' : 'Node offline'}
+            </div>
+            <Link to="/faucet" className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-500 text-xs font-semibold hover:bg-amber-500/20 hover:-translate-y-0.5 transition-all">
               <Droplets className="w-3.5 h-3.5" /> Get Test Tokens
             </Link>
           </div>
         </div>
 
+        {/* Connection strip */}
         <div className="flex items-center justify-between p-3 px-5 rounded-2xl glass-strong mb-6 text-sm">
           <div className="flex items-center gap-2">
             <span className={`w-2.5 h-2.5 rounded-full ${nodeStatus === 'connected' ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.5)]' : nodeStatus === 'checking' ? 'bg-amber-400' : 'bg-red-400'}`} />
-            <span className="text-slate-500 dark:text-slate-300">{nodeStatus === 'connected' ? 'Connected' : nodeStatus === 'checking' ? 'Checking...' : 'Disconnected'}</span>
+            <span className="text-slate-500 dark:text-slate-300">{nodeStatus === 'connected' ? 'Connected to local testnet' : nodeStatus === 'checking' ? 'Checking node…' : 'Disconnected — start the testnet to use the wallet'}</span>
           </div>
           <div className="flex items-center gap-2">
             <code className="text-xs bg-black/20 dark:bg-black/30 px-2 py-1 rounded-md text-slate-500 dark:text-slate-400">{apiUrl}</code>
-            <button onClick={() => { setSettingsUrl(apiUrl); setShowSettings(true) }} className="p-1.5 rounded-lg bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white transition-colors">
+            <button onClick={() => { setSettingsUrl(apiUrl); setShowSettings(true) }} className={iconBtnCls}>
               <Settings className="w-4 h-4" />
             </button>
           </div>
@@ -345,15 +372,20 @@ export default function WalletPage() {
           {/* ─── Left Column ─── */}
           <div className="p-5 rounded-2xl glass animate-fade-in">
             <div className="flex items-center justify-between mb-4">
-              <div>
-                <p className="text-xs uppercase tracking-wider text-blue-500 dark:text-blue-300 flex items-center gap-1"><Key className="w-3 h-3" /> Identity</p>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white mt-1">Account keys</h2>
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-white shadow-md">
+                  <Key className="w-4 h-4" />
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-wider text-blue-500 dark:text-blue-300">Identity</p>
+                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Account keys</h2>
+                </div>
               </div>
               <div className="flex gap-2">
-                <button onClick={() => { setNewAccountName(''); setShowNewAccount(true) }} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-xs font-medium hover:opacity-90 transition-all">
+                <button onClick={() => { setNewAccountName(''); setShowNewAccount(true) }} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-xs font-semibold shadow-md shadow-blue-600/20 hover:opacity-90 transition-all">
                   <Plus className="w-3.5 h-3.5" /> New
                 </button>
-                <button onClick={clearWallet} className="p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white" title="Remove account">
+                <button onClick={clearWallet} className={iconBtnCls} title="Remove account">
                   <Trash2 className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -382,25 +414,25 @@ export default function WalletPage() {
             <div className="mb-3">
               <label className="flex items-center gap-1.5 text-xs uppercase text-slate-500 dark:text-slate-400 mb-2"><Fingerprint className="w-3 h-3" /> Address (20 bytes)</label>
               <div className="flex gap-2">
-                <input readOnly value={address} placeholder="Generate a wallet to begin" className="flex-1 px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm font-mono text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500" />
-                {address && <button onClick={() => copy(address, 'Address copied')} className="p-2.5 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"><Copy className="w-3.5 h-3.5" /></button>}
+                <input readOnly value={address} placeholder="Generate a wallet to begin" className={`${inputCls} font-mono`} />
+                {address && <button onClick={() => copy(address, 'Address copied')} className={iconBtnCls}><Copy className="w-3.5 h-3.5" /></button>}
               </div>
             </div>
 
             <div className="mb-4">
               <label className="flex items-center gap-1.5 text-xs uppercase text-slate-500 dark:text-slate-400 mb-2"><Key className="w-3 h-3" /> Public key (32 bytes)</label>
               <div className="flex gap-2">
-                <input readOnly value={pubKey} placeholder="Generated from keypair" className="flex-1 px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm font-mono text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500" />
-                {pubKey && <button onClick={() => copy(pubKey, 'Public key copied')} className="p-2.5 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"><Copy className="w-3.5 h-3.5" /></button>}
+                <input readOnly value={pubKey} placeholder="Generated from keypair" className={`${inputCls} font-mono`} />
+                {pubKey && <button onClick={() => copy(pubKey, 'Public key copied')} className={iconBtnCls}><Copy className="w-3.5 h-3.5" /></button>}
               </div>
             </div>
 
             <div className="mb-4">
               <label className="flex items-center gap-1.5 text-xs uppercase text-slate-500 dark:text-slate-400 mb-2"><Key className="w-3 h-3" /> Private key</label>
               <div className="flex gap-2">
-                <input type={showPriv ? 'text' : 'password'} readOnly value={privKey} placeholder="Stored locally" className="flex-1 px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm font-mono text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500" />
-                {privKey && <button onClick={() => setShowPriv(!showPriv)} className="p-2.5 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">{showPriv ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}</button>}
-                {privKey && <button onClick={() => copy(privKey, 'Private key copied')} className="p-2.5 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white"><Copy className="w-3.5 h-3.5" /></button>}
+                <input type={showPriv ? 'text' : 'password'} readOnly value={privKey} placeholder="Stored locally" className={`${inputCls} font-mono`} />
+                {privKey && <button onClick={() => setShowPriv(!showPriv)} className={iconBtnCls}>{showPriv ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}</button>}
+                {privKey && <button onClick={() => copy(privKey, 'Private key copied')} className={iconBtnCls}><Copy className="w-3.5 h-3.5" /></button>}
               </div>
             </div>
 
@@ -433,69 +465,94 @@ export default function WalletPage() {
 
           {/* ─── Right Column ─── */}
           <div className="space-y-4">
-            {/* Balance + Tokens tabs */}
-            <div className="p-5 rounded-2xl glass animate-fade-in">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex gap-4">
-                  <button onClick={() => setWalletTab('balance')}
-                    className={`text-xs uppercase tracking-wider flex items-center gap-1 pb-1 border-b-2 transition-all ${
-                      walletTab === 'balance' ? 'text-blue-500 dark:text-blue-300 border-blue-500' : 'text-slate-500 dark:text-slate-400 border-transparent'
-                    }`}>
-                    <Coins className="w-3 h-3" /> Balance
-                  </button>
-                  <button onClick={() => setWalletTab('tokens')}
-                    className={`text-xs uppercase tracking-wider flex items-center gap-1 pb-1 border-b-2 transition-all ${
-                      walletTab === 'tokens' ? 'text-blue-500 dark:text-blue-300 border-blue-500' : 'text-slate-500 dark:text-slate-400 border-transparent'
-                    }`}>
-                    <TokensIcon className="w-3 h-3" /> Tokens
+            {/* Balance hero */}
+            <div className="p-5 rounded-2xl bg-gradient-to-br from-blue-600 via-cyan-600 to-teal-600 text-white shadow-xl shadow-blue-600/20 animate-fade-in relative overflow-hidden">
+              <div className="absolute -top-20 -right-16 w-56 h-56 rounded-full opacity-30 pointer-events-none"
+                style={{ background: 'radial-gradient(circle, rgba(255,255,255,0.4), transparent 70%)' }} />
+              <div className="relative">
+                <div className="flex items-center justify-between mb-4">
+                  <div className="flex gap-1 p-1 rounded-xl bg-white/10">
+                    <button onClick={() => setWalletTab('balance')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${walletTab === 'balance' ? 'bg-white text-blue-600 shadow' : 'text-white/70 hover:text-white'}`}>
+                      <span className="inline-flex items-center gap-1"><Coins className="w-3 h-3" /> Balance</span>
+                    </button>
+                    <button onClick={() => setWalletTab('tokens')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${walletTab === 'tokens' ? 'bg-white text-blue-600 shadow' : 'text-white/70 hover:text-white'}`}>
+                      <span className="inline-flex items-center gap-1"><Wallet className="w-3 h-3" /> Tokens</span>
+                    </button>
+                  </div>
+                  <button onClick={() => { updateBalance(); fetchNonce(); showMsg('Balance refreshed', 'success') }} className="p-2 rounded-xl bg-white/10 hover:bg-white/20 transition-colors">
+                    <RefreshCw className="w-3.5 h-3.5" />
                   </button>
                 </div>
-                <button onClick={() => { updateBalance(); fetchNonce(); showMsg('Balance refreshed', 'success') }} className="p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">
-                  <RefreshCw className="w-3.5 h-3.5" />
-                </button>
-              </div>
 
-              {walletTab === 'balance' ? (
-                <>
-                  <div className="flex items-baseline gap-2 mb-4">
-                    <h3 className="text-4xl font-bold text-slate-900 dark:text-white">{balance}</h3>
-                    <span className="text-slate-500 dark:text-slate-400">NBL</span>
-                  </div>
-                  <div className="space-y-2 pt-4 border-t border-slate-200 dark:border-slate-700/50">
-                    {[['Available:', `${balance} NBL`], ['Reserved (gas):', '0.0000 NBL']].map(([l, v]) => (
-                      <div key={l} className="flex justify-between text-sm"><span className="text-slate-500 dark:text-slate-400">{l}</span><strong className="text-slate-800 dark:text-white">{v}</strong></div>
-                    ))}
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-500 mt-4">Balance from <code className="text-xs text-slate-600 dark:text-slate-400">{apiUrl}</code></p>
-                </>
-              ) : (
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 rounded-xl bg-slate-100 dark:bg-slate-700/40">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-400 to-cyan-600 flex items-center justify-center text-white text-xs font-bold">N</div>
-                      <div>
-                        <strong className="text-sm text-slate-800 dark:text-white block">Nebula (NBL)</strong>
-                        <span className="text-xs text-slate-500 dark:text-slate-400">Native token</span>
+                {walletTab === 'balance' ? (
+                  keyPair ? (
+                    <>
+                      <div className="mb-4">
+                        <p className="text-xs uppercase tracking-wider text-white/60 mb-1">Available balance</p>
+                        <div className="flex items-baseline gap-2">
+                          <h3 className="text-4xl md:text-5xl font-bold tabular-nums drop-shadow">{balance}</h3>
+                          <span className="text-white/70">NBL</span>
+                          <button onClick={() => copy(address, 'Address copied')} className="ml-1 p-1.5 rounded-lg bg-white/10 hover:bg-white/20 transition-colors" title="Copy address">
+                            <Copy className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 pt-4 border-t border-white/10">
+                        <div className="rounded-xl bg-white/10 px-3 py-2">
+                          <div className="text-[10px] uppercase tracking-wider text-white/60">Available</div>
+                          <div className="text-sm font-semibold tabular-nums">{balance} NBL</div>
+                        </div>
+                        <div className="rounded-xl bg-white/10 px-3 py-2">
+                          <div className="text-[10px] uppercase tracking-wider text-white/60">Reserved (gas)</div>
+                          <div className="text-sm font-semibold tabular-nums">0.0000 NBL</div>
+                        </div>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="text-center py-6">
+                      <p className="text-white/80 text-sm mb-4">No wallet loaded on this device.</p>
+                      <button onClick={() => { setNewAccountName(''); setShowNewAccount(true) }}
+                        className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-blue-600 text-sm font-bold shadow-lg hover:scale-[1.02] transition-transform">
+                        <Plus className="w-4 h-4" /> Generate a new wallet
+                      </button>
+                    </div>
+                  )
+                ) : (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between p-3 rounded-xl bg-white/10">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white text-xs font-bold">N</div>
+                        <div>
+                          <strong className="text-sm text-white block">Nebula (NBL)</strong>
+                          <span className="text-xs text-white/60">Native token</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <strong className="text-sm text-white block tabular-nums">{balance}</strong>
+                        <span className="text-xs text-white/60">Testnet</span>
                       </div>
                     </div>
-                    <div className="text-right">
-                      <strong className="text-sm text-slate-800 dark:text-white block">{balance}</strong>
-                      <span className="text-xs text-slate-500 dark:text-slate-400">~$0.00</span>
-                    </div>
+                    <p className="text-xs text-white/60 italic text-center">More tokens will appear here as you receive them.</p>
                   </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 italic text-center">More tokens will appear here as you receive them.</p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {/* Send form */}
             <div className="p-5 rounded-2xl glass animate-fade-in">
               <div className="flex items-center justify-between mb-4">
-                <div>
-                  <p className="text-xs uppercase tracking-wider text-blue-500 dark:text-blue-300 flex items-center gap-1"><Send className="w-3 h-3" /> Transfer</p>
-                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white mt-1">Send funds</h2>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 flex items-center justify-center text-white shadow-md">
+                    <Send className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <p className="text-xs uppercase tracking-wider text-emerald-500 dark:text-emerald-400">Transfer</p>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Send funds</h2>
+                  </div>
                 </div>
-                <button onClick={() => setShowAdvanced(!showAdvanced)} className="p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white">
+                <button onClick={() => setShowAdvanced(!showAdvanced)} className={iconBtnCls}>
                   <Sliders className="w-3.5 h-3.5" />
                 </button>
               </div>
@@ -503,19 +560,25 @@ export default function WalletPage() {
               <form onSubmit={sendTx} className="space-y-4">
                 <div>
                   <label className="text-xs uppercase text-slate-500 dark:text-slate-400 mb-2 block">Recipient address</label>
-                  <input value={recipient} onChange={e => setRecipient(e.target.value)} placeholder="0x..."
-                    className="w-full px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 font-mono" />
+                  <input value={recipient} onChange={e => setRecipient(e.target.value)} placeholder="0x..." className={`${inputCls} font-mono`} />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="text-xs uppercase text-slate-500 dark:text-slate-400 mb-2 block">Amount (NBL)</label>
-                    <input value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0" step="any" placeholder="0.00"
-                      className="w-full px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500" />
+                    <input value={amount} onChange={e => setAmount(e.target.value)} type="number" min="0" step="any" placeholder="0.00" className={inputCls} />
+                    <div className="flex gap-1 mt-1.5">
+                      {[{ p: 0.25, l: '25%' }, { p: 0.5, l: '50%' }, { p: 0.75, l: '75%' }, { p: 1, l: 'Max' }].map(({ p, l }) => (
+                        <button key={l} onClick={() => setQuickAmount(p)} disabled={!keyPair || parseFloat(balance) <= 0}
+                          className="flex-1 px-1 py-1 rounded-lg bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-[10px] font-medium text-slate-500 dark:text-slate-400 hover:bg-slate-300/50 dark:hover:bg-slate-600/50 hover:text-slate-700 dark:hover:text-slate-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
+                          {l}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                   <div>
                     <label className="text-xs uppercase text-slate-500 dark:text-slate-400 mb-2 block flex items-center gap-1"><Fuel className="w-3 h-3" /> Fee</label>
-                    <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-600 dark:text-slate-300">
+                    <div className="flex items-center justify-between px-3 py-2.5 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-600 dark:text-slate-300">
                       ~0.000021 NBL
                       <span className="text-xs text-slate-400 dark:text-slate-500" title="Standard gas: 21000 units × base fee">ⓘ</span>
                     </div>
@@ -523,23 +586,26 @@ export default function WalletPage() {
                 </div>
 
                 {showAdvanced && (
-                  <div className="p-4 rounded-xl bg-slate-100 dark:bg-slate-700/40 space-y-3">
+                  <div className="p-4 rounded-xl bg-slate-100/70 dark:bg-slate-700/40 space-y-3">
                     <div>
                       <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Gas limit</label>
-                      <input value={gasLimit} onChange={e => setGasLimit(Number(e.target.value))} type="number" step="1000" min="21000"
-                        className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200" />
+                      <input value={gasLimit} onChange={e => setGasLimit(Number(e.target.value))} type="number" step="1000" min="21000" className={inputCls} />
                     </div>
                     <div>
                       <label className="text-xs text-slate-500 dark:text-slate-400 mb-1 block">Max fee per gas (Gwei)</label>
-                      <input defaultValue="1" type="number" step="0.1" min="0.1"
-                        className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200" />
+                      <input defaultValue="1" type="number" step="0.1" min="0.1" className={inputCls} />
                     </div>
                   </div>
                 )}
 
-                <button type="submit" className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-sm font-medium hover:opacity-90 transition-all">
+                <button type="submit" className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-sm font-semibold shadow-lg shadow-blue-600/20 hover:opacity-90 hover:-translate-y-0.5 transition-all">
                   <Send className="w-4 h-4" /> Send transaction
                 </button>
+
+                <div className="flex items-center justify-between text-xs text-slate-400 dark:text-slate-500">
+                  <span>Network: <code className="text-slate-500 dark:text-slate-400">{apiUrl}</code></span>
+                  <span>Nonce: <code className="text-slate-600 dark:text-slate-300 font-bold tabular-nums">{nonce}</code></span>
+                </div>
               </form>
 
               {status && (
@@ -554,9 +620,14 @@ export default function WalletPage() {
             {/* ─── Transaction History ─── */}
             <div className="p-5 rounded-2xl glass animate-fade-in">
               <button onClick={() => setShowHistory(!showHistory)} className="flex items-center justify-between w-full">
-                <div className="flex items-center gap-2">
-                  <History className="w-4 h-4 text-blue-500 dark:text-blue-300" />
-                  <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Transaction History</h2>
+                <div className="flex items-center gap-3">
+                  <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center text-white shadow-md">
+                    <History className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Transaction History</h2>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Recent activity on this device</p>
+                  </div>
                   {txHistory.length > 0 && (
                     <span className="text-xs bg-blue-500/20 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-full">{txHistory.length}</span>
                   )}
@@ -565,12 +636,12 @@ export default function WalletPage() {
               </button>
 
               {showHistory && (
-                <div className="mt-4 space-y-2 max-h-80 overflow-y-auto">
+                <div className="mt-4 space-y-2 max-h-80 overflow-y-auto scrollbar-thin">
                   {txHistory.length === 0 ? (
                     <p className="text-sm text-slate-500 dark:text-slate-400 italic text-center py-4">No transactions yet. Send funds to see history.</p>
                   ) : (
                     txHistory.map((tx, i) => (
-                      <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-100 dark:bg-slate-700/40 hover:bg-slate-200/50 dark:hover:bg-slate-700/60 transition-colors">
+                      <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/40 hover:bg-slate-200/50 dark:hover:bg-slate-700/60 transition-colors">
                         <div className="flex items-center gap-3 min-w-0">
                           <div className={`w-2 h-2 rounded-full shrink-0 ${
                             tx.status === 'confirmed' ? 'bg-emerald-400' :
@@ -608,19 +679,18 @@ export default function WalletPage() {
       {/* New Account Modal */}
       {showNewAccount && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowNewAccount(false)}>
-          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700/50 rounded-2xl w-[90%] max-w-sm shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-slate-700/50">
+          <div className="glass-strong rounded-2xl w-[90%] max-w-sm shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-slate-200/50 dark:border-slate-700/50">
               <h3 className="text-lg font-semibold text-slate-900 dark:text-white">New Account</h3>
               <button onClick={() => setShowNewAccount(false)} className="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white text-xl">&times;</button>
             </div>
             <div className="p-5 space-y-4">
               <div>
                 <label className="text-xs text-slate-500 dark:text-slate-400 mb-2 block">Account name (optional)</label>
-                <input value={newAccountName} onChange={e => setNewAccountName(e.target.value)} placeholder="My Wallet"
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500" autoFocus />
+                <input value={newAccountName} onChange={e => setNewAccountName(e.target.value)} placeholder="My Wallet" className={inputCls} autoFocus />
               </div>
               <button onClick={() => { generateKeyPair(newAccountName.trim() || undefined); setShowNewAccount(false) }}
-                className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-sm font-medium hover:opacity-90 transition-all">
+                className="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-sm font-semibold hover:opacity-90 transition-all">
                 Generate
               </button>
             </div>
@@ -631,21 +701,20 @@ export default function WalletPage() {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50" onClick={() => setShowSettings(false)}>
-          <div className="bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700/50 rounded-2xl w-[90%] max-w-md shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center justify-between p-5 border-b border-slate-200 dark:border-slate-700/50">
+          <div className="glass-strong rounded-2xl w-[90%] max-w-md shadow-2xl animate-fade-in" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-5 border-b border-slate-200/50 dark:border-slate-700/50">
               <h3 className="text-lg font-semibold text-slate-900 dark:text-white">Settings</h3>
               <button onClick={() => setShowSettings(false)} className="text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white text-xl">&times;</button>
             </div>
             <div className="p-5 space-y-4">
               <div>
                 <label className="text-xs text-slate-500 dark:text-slate-400 mb-2 block">RPC API URL</label>
-                <input value={settingsUrl} onChange={e => setSettingsUrl(e.target.value)}
-                  className="w-full px-3 py-2.5 rounded-xl bg-slate-50 dark:bg-slate-700/60 border border-slate-200 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200" />
+                <input value={settingsUrl} onChange={e => setSettingsUrl(e.target.value)} className={`${inputCls} font-mono`} />
               </div>
             </div>
-            <div className="flex justify-end gap-3 p-5 border-t border-slate-200 dark:border-slate-700/50">
+            <div className="flex justify-end gap-3 p-5 border-t border-slate-200/50 dark:border-slate-700/50">
               <button onClick={() => setShowSettings(false)} className="px-4 py-2 rounded-xl bg-slate-100 dark:bg-slate-700/50 text-slate-600 dark:text-slate-300 text-sm">Cancel</button>
-              <button onClick={saveSettings} className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-600 text-white text-sm">Save</button>
+              <button onClick={saveSettings} className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-sm font-semibold">Save</button>
             </div>
           </div>
         </div>

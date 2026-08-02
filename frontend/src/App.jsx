@@ -71,7 +71,7 @@ function Navbar() {
             >
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
-            <a href="https://github.com/your-org/nebula" target="_blank" rel="noopener noreferrer"
+            <a href="https://github.com/fewzfewz/scratchBlockchain" target="_blank" rel="noopener noreferrer"
               className="hidden sm:flex p-2 rounded-lg text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/40 transition-all">
               <Github className="w-4 h-4" />
             </a>
@@ -113,7 +113,7 @@ function Navbar() {
             ))}
           </div>
           <div className="mt-8 pt-6 border-t border-slate-200 dark:border-slate-700/50">
-            <a href="https://github.com/your-org/nebula" target="_blank" rel="noopener noreferrer"
+            <a href="https://github.com/fewzfewz/scratchBlockchain" target="_blank" rel="noopener noreferrer"
               className="flex items-center gap-3 px-4 py-3 rounded-xl text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-200/50 dark:hover:bg-slate-700/40 transition-all">
               <Github className="w-4 h-4" />
               GitHub
@@ -141,7 +141,25 @@ export default function App() {
           <Route path="/sdk" element={<SdkPortal />} />
           <Route path="/governance/*" element={<Governance />} />
           <Route path="/api-docs" element={
-            <Suspense fallback={<div className="flex items-center justify-center h-64 text-slate-400">Loading API docs...</div>}>
+            <Suspense fallback={
+              <div className="relative min-h-[70vh] overflow-hidden animate-fade-in">
+                <div className="absolute inset-0 bg-grid pointer-events-none" />
+                <div className="relative z-10 max-w-7xl mx-auto px-4 py-10">
+                  <div className="text-center mb-8">
+                    <div className="mx-auto mb-5 h-8 w-56 rounded-full glass animate-pulse" />
+                    <div className="flex items-center justify-center gap-3 mb-2">
+                      <div className="w-12 h-12 rounded-2xl bg-slate-200 dark:bg-slate-700/60 animate-pulse" />
+                      <div className="h-12 w-64 rounded-xl bg-slate-200 dark:bg-slate-700/60 animate-pulse" />
+                    </div>
+                    <div className="mx-auto h-4 w-96 max-w-full rounded-lg bg-slate-200 dark:bg-slate-700/60 animate-pulse" />
+                  </div>
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-8">
+                    {[0, 1, 2, 3].map(i => <div key={i} className="h-24 rounded-2xl glass-strong animate-pulse" />)}
+                  </div>
+                  <div className="h-96 rounded-2xl glass-strong animate-pulse" />
+                </div>
+              </div>
+            }>
               <ApiDocs />
             </Suspense>
           } />

@@ -12,14 +12,14 @@
 ## What's Working Now
 
 ### Frontend (Unified React SPA, port 5173)
-- **Wallet** — Ed25519 key generation via TweetNaCl, address derivation (20-byte), balance/nonce queries, send tx with gas params, test address presets
-- **Explorer** — Dashboard (chain status), Validators (3 genesis validators), Staking tab — all with light/dark mode
+- **Wallet** — Ed25519 key generation via TweetNaCl, address derivation (20-byte), balance/nonce queries, send tx with gas params, test address presets; redesigned with gradient balance hero, aurora/grid backdrop, and icon-chipped sections
+- **Explorer** — Dashboard (chain status + live recent-blocks feed), Validators (3 genesis validators), Staking tab — redesigned to match Home's design language (aurora blobs, gradient tabs, glass cards, loading skeletons); all with light/dark mode
 - **Faucet** — Direct `POST /faucet/request` to node RPC; credits the state trie; no separate faucet backend needed; offline banner when node unreachable
-- **Governance** — Proposals list, vote modal, create proposal form — dark/light mode compatible
-- **Docs** — Human-readable API reference with real `curl` examples
-- **API Docs** — Interactive Swagger UI (lazy-loaded), try-all-17-endpoints from the browser
-- **SDK Portal** — JavaScript SDK reference
-- **Dev Portal** — Developer dashboard
+- **Governance** — Proposals with status filters + live search, vote modal with quorum progress, create proposal form, treasury, analytics — redesigned to match Home's design language (aurora/grid backdrop, gradient hero, glass cards, network strip, skeletons); dark/light mode compatible
+- **Docs** — Human-readable API reference with real `curl` examples; redesigned to match Home's design language (aurora/grid backdrop, gradient hero, glass sidebar with search, live network strip, reading progress bar, prev/next + keyboard navigation, skeletons)
+- **API Docs** — Interactive Swagger UI (lazy-loaded), try-all-17-endpoints from the browser; redesigned shell to match the design language (aurora/grid backdrop, gradient hero, live network strip, quick stats, loading skeleton)
+- **SDK Portal** — JavaScript SDK reference; redesigned to match the design language (aurora/grid backdrop, gradient hero, live network strip, copyable code blocks, quick stats, quick links, skeletons)
+- **Dev Portal** — Developer dashboard; redesigned to match the design language (aurora/grid backdrop, gradient hero, live network strip, SDK/starter-kit/CLI sections, CTA, skeletons)
 
 ### Node RPC (port 8545, 17 endpoints)
 - `GET /health`, `/status`, `/mempool`, `/metrics`
@@ -42,6 +42,7 @@
 - Rejection handler no longer defaults to 429 for non-rate-limit errors (e.g. JSON parse → 400)
 - `submit_tx` now has rate limiting
 - Genesis validators written to state trie at startup (`/validators` returns real data)
+- **`/validators` fixed**: handler read `chain_store.get_state(b"validators")` which never matched (the trie persists only node hashes). The RPC server now reads the live `state_trie` directly, so all 3 genesis validators (address, stake, commission) are returned
 - Wallet address fixed: derives 20-byte address from 32-byte public key
 - Faucet credits the state trie directly instead of just returning success
 - "No validators configured" fixed: `get_validator_list()` loads validators from the state trie instead of returning `vec![]`
@@ -64,7 +65,8 @@
 - Coin code still building; balance for faucet-credited addresses shows immediately via `/balance` endpoint
 - No WebSocket support (HTTP-only RPC)
 - No EVM contract deployment UI (needs contract interaction page)
-- No transaction history view
+- No transaction history view on the chain (wallet keeps a local history only)
+- Delegation/staking RPC returns empty until the delegation feature is implemented (explorer shows an empty state)
 - Rust build requires ~5 GB disk space
 
 ---

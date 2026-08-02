@@ -3,11 +3,13 @@ import { Compass, Activity, Shield } from 'lucide-react'
 import DashboardTab from './explorer/DashboardTab.jsx'
 import ValidatorsTab from './explorer/ValidatorsTab.jsx'
 import StakingTab from './explorer/StakingTab.jsx'
+import BlocksTab from './explorer/BlocksTab.jsx'
 
 const API_URL = 'http://localhost:8545'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
+  { id: 'blocks', label: 'Blocks' },
   { id: 'validators', label: 'Validators' },
   { id: 'staking', label: 'Staking' },
 ]
@@ -100,6 +102,7 @@ export default function Explorer() {
 
         <div key={activeTab} className="animate-in">
           {activeTab === 'dashboard' && <DashboardTab />}
+          {activeTab === 'blocks' && <BlocksTab />}
           {activeTab === 'validators' && <ValidatorsTab />}
           {activeTab === 'staking' && <StakingTab />}
         </div>

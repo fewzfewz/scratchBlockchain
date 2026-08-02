@@ -1,13 +1,15 @@
-import { useState, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   BarChart3, Vote, FileText, PlusCircle, Wallet, TrendingUp,
   TrendingDown, Clock, CheckCircle, XCircle, AlertTriangle,
-  Users, Award, Search, X, ChevronRight, Send, ExternalLink,
+  Users, Award, Search, X, ChevronRight, Send,
   PieChart, Activity, Shield, ArrowUpRight, ArrowDownRight,
-  Info, LogIn, Hash, Calendar, Tag, MessageSquare, ThumbsUp,
-  ThumbsDown, Minus, Zap, Layers, Target, BookOpen, Loader2,
-  Bell, Gauge, Star, Hexagon, Menu,
+  Info, Hash, Calendar, Tag, ThumbsUp,
+  ThumbsDown, Minus, Zap, Layers, Target, Loader2,
+  Bell, Gauge, ShieldCheck, WifiOff, Copy, PenLine, Rocket, BookOpen,
 } from "lucide-react";
+
+const RPC_URL = "http://localhost:8545";
 
 const TABS = [
   { id: "dashboard", label: "Dashboard", icon: BarChart3 },
@@ -80,6 +82,10 @@ function formatNbl(wei, decimals = 18) {
   }
 }
 
+function fmt(v) {
+  return v == null || isNaN(Number(v)) ? "--" : Number(v).toLocaleString();
+}
+
 function formatTime(ts) {
   const diff = Date.now() - ts;
   const mins = Math.floor(diff / 60000);
@@ -130,42 +136,29 @@ function NotificationBar({ proposals, onDismiss, onViewProposals }) {
   );
 }
 
-function TabBar({ activeTab, onTabChange }) {
-  return (
-    <div className="flex flex-wrap gap-1 p-1 rounded-2xl bg-slate-100/60 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/50">
-      {TABS.map(({ id, label, icon: Icon }) => (
-        <button
-          key={id}
-          onClick={() => onTabChange(id)}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-medium transition-all ${
-            activeTab === id
-              ? "bg-gradient-to-r from-blue-600/80 to-indigo-600/80 text-white shadow-lg shadow-blue-600/20"
-              : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/50"
-          }`}
-        >
-          <Icon className="w-4 h-4" />
-          <span>{label}</span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
 function StatCard({ label, value, sub, icon: Icon, trend, color = "blue" }) {
-  const colors = { blue: "from-blue-500/20 to-blue-600/10 border-blue-500/20", emerald: "from-emerald-500/20 to-emerald-600/10 border-emerald-500/20", amber: "from-amber-500/20 to-amber-600/10 border-amber-500/20", violet: "from-violet-500/20 to-violet-600/10 border-violet-500/20", rose: "from-rose-500/20 to-rose-600/10 border-rose-500/20" };
-  const iconColors = { blue: "text-blue-400", emerald: "text-emerald-400", amber: "text-amber-400", violet: "text-violet-400", rose: "text-rose-400" };
+  const chips = {
+    blue: "from-blue-600 to-cyan-600",
+    emerald: "from-emerald-600 to-teal-600",
+    amber: "from-amber-500 to-orange-600",
+    violet: "from-violet-600 to-purple-600",
+    rose: "from-rose-500 to-pink-600",
+  };
+  const trendColor = trend === "up" ? "text-emerald-400" : trend === "down" ? "text-rose-400" : "text-slate-400 dark:text-slate-500";
   return (
-    <div className={`p-4 md:p-5 rounded-2xl bg-gradient-to-br ${colors[color]} border backdrop-blur-sm`}>
-      <div className="flex items-start justify-between mb-2">
-        <span className="text-xs uppercase tracking-wider text-slate-400">{label}</span>
-        {Icon && <Icon className={`w-5 h-5 ${iconColors[color]}`} />}
+    <div className="p-4 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
+      <div className="flex items-center gap-2 mb-3">
+        <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${chips[color] || chips.blue} flex items-center justify-center text-white shadow-md`}>
+          {Icon && <Icon className="w-4 h-4" />}
+        </div>
+        <span className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">{label}</span>
       </div>
-      <div className="text-2xl md:text-3xl font-bold text-white">{value}</div>
+      <div className="text-2xl font-bold text-slate-900 dark:text-white tabular-nums">{value}</div>
       {sub && (
-        <div className="flex items-center gap-1 mt-1.5 text-xs">
+        <div className="flex items-center gap-1 mt-1 text-xs">
           {trend === "up" && <ArrowUpRight className="w-3 h-3 text-emerald-400" />}
           {trend === "down" && <ArrowDownRight className="w-3 h-3 text-rose-400" />}
-          <span className={trend === "up" ? "text-emerald-400" : trend === "down" ? "text-rose-400" : "text-slate-400"}>{sub}</span>
+          <span className={trendColor}>{sub}</span>
         </div>
       )}
     </div>
@@ -200,6 +193,22 @@ function VoteBreakdown({ yes, no, abstain }) {
         <span className="text-slate-400">{aPct}% Abstain</span>
         <span className="text-rose-400 font-medium">{nPct}% Against</span>
       </div>
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-6 animate-fade-in">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4">
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="h-28 rounded-2xl glass-strong animate-pulse" />
+        ))}
+      </div>
+      <div className="grid md:grid-cols-2 gap-4 md:gap-6">
+        {[0, 1].map(i => <div key={i} className="h-56 rounded-2xl glass-strong animate-pulse" />)}
+      </div>
+      <div className="h-64 rounded-2xl glass-strong animate-pulse" />
     </div>
   );
 }
@@ -310,18 +319,54 @@ function Dashboard({ proposals, treasury, validators, govParams, onTabChange }) 
           })}
         </div>
       </div>
+
+      <div className="p-5 rounded-2xl glass-strong">
+        <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4 flex items-center gap-2">
+          <BookOpen className="w-4 h-4 text-blue-400" />
+          How governance works
+        </h3>
+        <div className="grid md:grid-cols-3 gap-4">
+          {[
+            { step: "01", title: "Propose", desc: "Submit an on-chain proposal with a refundable deposit. Include calldata that executes automatically if it passes.", icon: PenLine, chip: "from-blue-600 to-cyan-600" },
+            { step: "02", title: "Vote", desc: `Validators and delegators vote For, Against, or Abstain during the ${govParams.votingPeriod}-epoch voting period. Quorum is ${govParams.quorum}%.`, icon: Vote, chip: "from-emerald-600 to-teal-600" },
+            { step: "03", title: "Execute", desc: `Passed proposals are timelocked for ${govParams.timelockPeriod} epochs, then executed on-chain. Failed deposits are forfeited.`, icon: Rocket, chip: "from-violet-600 to-purple-600" },
+          ].map(({ step, title, desc, icon: Icon, chip }) => (
+            <div key={step} className="p-4 rounded-xl bg-slate-100/50 dark:bg-slate-700/20 hover:-translate-y-0.5 transition-all">
+              <div className="flex items-center justify-between mb-3">
+                <div className={`w-9 h-9 rounded-xl bg-gradient-to-br ${chip} flex items-center justify-center text-white shadow-md`}>
+                  <Icon className="w-4 h-4" />
+                </div>
+                <span className="text-2xl font-bold text-slate-200 dark:text-slate-700">{step}</span>
+              </div>
+              <div className="text-sm font-semibold text-slate-700 dark:text-slate-200 mb-1">{title}</div>
+              <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed">{desc}</p>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
 
 function Proposals({ proposals, onVote }) {
   const [filter, setFilter] = useState("All");
+  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(null);
   const [voting, setVoting] = useState(null);
   const [toast, setToast] = useState(null);
   const filters = ["All", "Active", "Pending", "Passed", "Rejected", "Executed"];
 
-  const filtered = filter === "All" ? proposals : proposals.filter(p => p.status === filter);
+  const filtered = proposals.filter(p => {
+    if (filter !== "All" && p.status !== filter) return false;
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      p.title.toLowerCase().includes(q) ||
+      p.description.toLowerCase().includes(q) ||
+      p.proposer.toLowerCase().includes(q) ||
+      String(p.id).includes(q)
+    );
+  });
 
   const showToast = (msg) => {
     setToast(msg);
@@ -346,20 +391,38 @@ function Proposals({ proposals, onVote }) {
         </div>
       )}
 
-      <div className="flex flex-wrap gap-2">
-        {filters.map(f => (
-          <button
-            key={f}
-            onClick={() => { setFilter(f); setSelected(null); }}
-            className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
-              filter === f
-                ? "bg-blue-600/80 text-white"
-                : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-700/80"
-            }`}
-          >
-            {f}
-          </button>
-        ))}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap gap-2">
+          {filters.map(f => (
+            <button
+              key={f}
+              onClick={() => { setFilter(f); setSelected(null); }}
+              className={`px-3.5 py-1.5 rounded-full text-xs font-medium transition-all ${
+                filter === f
+                  ? "bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-md shadow-blue-600/20"
+                  : "bg-slate-200/50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/60 dark:hover:bg-slate-700/80"
+              }`}
+            >
+              {f}
+            </button>
+          ))}
+        </div>
+        <div className="flex-1 min-w-[220px] ml-auto">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-400" />
+            <input
+              value={query}
+              onChange={e => { setQuery(e.target.value); setSelected(null); }}
+              placeholder="Search proposals..."
+              className="w-full pl-9 pr-8 py-2 rounded-full bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-700 dark:text-slate-200 placeholder-slate-500 focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/20 transition-all"
+            />
+            {query && (
+              <button onClick={() => setQuery("")} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
       {selected ? (
@@ -394,7 +457,18 @@ function Proposals({ proposals, onVote }) {
                   <Icon className="w-3 h-3" />
                   {label}
                 </div>
-                <div className="text-sm font-mono text-slate-700 dark:text-slate-200">{value}</div>
+                <div className="text-sm font-mono text-slate-700 dark:text-slate-200 flex items-center gap-1.5">
+                  {value}
+                  {label === "Proposer" && (
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(selected.proposer); showToast("Proposer address copied"); }}
+                      className="text-slate-400 hover:text-blue-400 transition-colors"
+                      title="Copy address"
+                    >
+                      <Copy className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
               </div>
             ))}
           </div>
@@ -419,6 +493,31 @@ function Proposals({ proposals, onVote }) {
               no={Number(selected.noVotes)}
               abstain={Number(selected.abstainVotes || 0)}
             />
+            {(() => {
+              const cast = Number(selected.yesVotes) + Number(selected.noVotes) + Number(selected.abstainVotes || 0);
+              const threshold = 4000000;
+              const pct = Math.min(100, (cast / threshold) * 100);
+              const reached = cast >= threshold;
+              return (
+                <div className="mt-4">
+                  <div className="flex items-center justify-between text-xs mb-1.5">
+                    <span className="text-slate-500 flex items-center gap-1.5">
+                      <Shield className="w-3 h-3 text-violet-400" />
+                      Quorum ({threshold.toLocaleString()} votes)
+                    </span>
+                    <span className={reached ? "text-emerald-400 font-medium" : "text-amber-400 font-medium"}>
+                      {reached ? "Reached" : `${cast.toLocaleString()} / ${threshold.toLocaleString()}`}
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-slate-200 dark:bg-slate-700/50 overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${reached ? "bg-gradient-to-r from-emerald-500 to-teal-400" : "bg-gradient-to-r from-amber-500 to-orange-400"}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {selected.status === "Active" && (
@@ -446,10 +545,22 @@ function Proposals({ proposals, onVote }) {
         </div>
       ) : (
         <div className="space-y-3">
+          <div className="text-xs text-slate-500 dark:text-slate-400">
+            Showing <span className="font-semibold text-slate-700 dark:text-slate-200">{filtered.length}</span> of {proposals.length} proposals
+            {query.trim() && <> matching <span className="font-mono">"{query.trim()}"</span></>}
+            {filter !== "All" && <> in <span className="font-semibold">{filter}</span></>}
+          </div>
           {filtered.length === 0 ? (
             <div className="p-8 rounded-2xl border border-dashed border-slate-300 dark:border-slate-600/40 text-center">
-              <FileText className="w-8 h-8 text-slate-500 mx-auto mb-2" />
-              <p className="text-sm text-slate-400">No proposals found in "{filter}" status.</p>
+              <Search className="w-8 h-8 text-slate-500 mx-auto mb-2" />
+              <p className="text-sm text-slate-400">
+                {query.trim() ? `No proposals match "${query.trim()}".` : `No proposals found in "${filter}" status.`}
+              </p>
+              {query.trim() && (
+                <button onClick={() => setQuery("")} className="mt-3 text-xs text-blue-400 hover:text-blue-300">
+                  Clear search
+                </button>
+              )}
             </div>
           ) : (
             filtered.map(p => {
@@ -785,13 +896,44 @@ function Analytics({ proposals, validators }) {
 export default function Governance() {
   const [activeTab, setActiveTab] = useState("dashboard");
   const [notifDismissed, setNotifDismissed] = useState(false);
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [backendOnline, setBackendOnline] = useState(true);
+  const [network, setNetwork] = useState(null);
   const [proposals, setProposals] = useState(PROPOSALS_MOCK);
   const [treasury] = useState(TREASURY_MOCK);
   const [govParams] = useState(GOV_PARAMS_MOCK);
   const [validators] = useState(VALIDATORS_MOCK);
 
   const activeProposals = useMemo(() => proposals.filter(p => p.status === "Active"), [proposals]);
+
+  // Node health + network info polling (matches Explorer/Faucet)
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const [hr, sr, gr] = await Promise.all([
+          window.fetch(`${RPC_URL}/health`),
+          window.fetch(`${RPC_URL}/status`),
+          window.fetch(`${RPC_URL}/gas_price`),
+        ]);
+        if (!hr.ok) throw new Error("offline");
+        const sd = await sr.json();
+        const gd = await gr.json();
+        setBackendOnline(true);
+        setNetwork({ height: sd.height, finalized: sd.finalized_height, baseFee: gd.base_fee });
+      } catch {
+        setBackendOnline(false);
+      }
+    };
+    poll();
+    const t = setInterval(poll, 5000);
+    return () => clearInterval(t);
+  }, []);
+
+  // Brief skeleton so the page feels live
+  useEffect(() => {
+    const t = setTimeout(() => setLoading(false), 450);
+    return () => clearTimeout(t);
+  }, []);
 
   const handleVote = (proposalId, support) => {
     setProposals(prev => prev.map(p => {
@@ -804,35 +946,79 @@ export default function Governance() {
   };
 
   return (
-    <div className="relative min-h-screen">
-      <div className="fixed w-[30rem] h-[30rem] rounded-full opacity-30 pointer-events-none"
-        style={{ top: "-8rem", left: "-9rem", background: "radial-gradient(circle, rgba(14,165,233,0.44), transparent 70%)" }} />
-      <div className="fixed w-[30rem] h-[30rem] rounded-full opacity-30 pointer-events-none"
-        style={{ right: "-10rem", bottom: "-12rem", background: "radial-gradient(circle, rgba(251,146,60,0.3), transparent 70%)" }} />
+    <div className="relative min-h-screen overflow-hidden">
+      {/* Aurora blobs + grid backdrop */}
+      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
+        style={{ background: "radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)" }} />
+      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
+        style={{ background: "radial-gradient(circle, rgba(139,92,246,0.4), transparent 70%)" }} />
+      <div className="absolute inset-0 bg-grid pointer-events-none" />
 
-      <div className="relative z-10 w-full max-w-5xl mx-auto px-4 md:px-6 py-6 md:py-8">
-        <header className="flex items-center justify-between mb-6">
-          <div>
-            <p className="text-xs uppercase tracking-widest text-blue-400 font-medium">Scratch Blockchain</p>
-            <h1 className="text-3xl md:text-5xl font-bold text-slate-900 dark:text-white mt-1" style={{ lineHeight: 0.96 }}>Nebula Governance</h1>
+      <div className="relative z-10 max-w-5xl mx-auto px-4 md:px-6 py-8 md:py-10 animate-fade-in">
+        {/* ── Header ─────────────────────────────────────────────── */}
+        <header className="text-center mb-8">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
+            <span className={`w-2 h-2 rounded-full ${backendOnline ? "bg-emerald-400 animate-pulse-dot" : "bg-red-400"}`} />
+            {backendOnline ? "Governance online" : "Node offline"}
+            <span className="text-slate-400 dark:text-slate-500">· BFT</span>
           </div>
-          <div className="hidden md:flex items-center gap-3">
-            <div className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-xs">
-              <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              Live Network
+
+          <div className="flex items-center justify-center gap-3 mb-2">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
+              <Vote className="w-6 h-6" />
             </div>
-            <button className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-slate-700 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white hover:border-slate-500/60 text-xs font-medium transition-all">
-              <LogIn className="w-3.5 h-3.5" />
-              Connect
-            </button>
+            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
+              Nebula
+              <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Governance</span>
+            </h1>
           </div>
-          <button className="md:hidden p-2 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-slate-700 dark:text-slate-300" onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
-            <Menu className="w-5 h-5" />
-          </button>
+          <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
+            Propose, vote, and steer the network — community-led parameter changes, runtime upgrades, and treasury allocations.
+          </p>
+
+          {/* Network strip */}
+          {network && (
+            <div className="flex items-center justify-center flex-wrap gap-2 mt-5 text-xs">
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
+                <Activity className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" /> Tip #{fmt(network.height)}
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
+                <Gauge className="w-3.5 h-3.5 text-emerald-500" /> Base fee {fmt(network.baseFee)}
+              </span>
+              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
+                <ShieldCheck className="w-3.5 h-3.5 text-violet-500" /> Finalized #{fmt(network.finalized)}
+              </span>
+            </div>
+          )}
         </header>
 
+        {!backendOnline && (
+          <div className="mb-6 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
+            <WifiOff className="w-4 h-4 shrink-0" />
+            <span>Node not reachable at {RPC_URL}. Governance data below is sample data — start the testnet to connect.</span>
+          </div>
+        )}
+
+        {/* ── Tab bar ────────────────────────────────────────────── */}
+        <div className="flex flex-wrap gap-1 p-1 rounded-2xl glass-strong mb-6 max-w-md mx-auto">
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              onClick={() => setActiveTab(id)}
+              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+                activeTab === id
+                  ? "bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-600/25"
+                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/40"
+              }`}
+            >
+              <Icon className="w-4 h-4" />
+              {label}
+            </button>
+          ))}
+        </div>
+
         {!notifDismissed && activeProposals.length > 0 && (
-          <div className="mb-4">
+          <div className="mb-6">
             <NotificationBar
               proposals={activeProposals}
               onDismiss={() => setNotifDismissed(true)}
@@ -841,25 +1027,25 @@ export default function Governance() {
           </div>
         )}
 
-        <div className="mb-6">
-          <TabBar activeTab={activeTab} onTabChange={(t) => { setActiveTab(t); setMobileMenuOpen(false); }} />
+        <div key={activeTab} className="animate-in">
+          {activeTab === "dashboard" && (
+            loading
+              ? <DashboardSkeleton />
+              : <Dashboard proposals={proposals} treasury={treasury} validators={validators} govParams={govParams} onTabChange={setActiveTab} />
+          )}
+          {activeTab === "proposals" && (
+            <Proposals proposals={proposals} onVote={handleVote} />
+          )}
+          {activeTab === "create" && (
+            <CreateProposal />
+          )}
+          {activeTab === "treasury" && (
+            <Treasury treasury={treasury} govParams={govParams} />
+          )}
+          {activeTab === "analytics" && (
+            <Analytics proposals={proposals} validators={validators} />
+          )}
         </div>
-
-        {activeTab === "dashboard" && (
-          <Dashboard proposals={proposals} treasury={treasury} validators={validators} govParams={govParams} onTabChange={setActiveTab} />
-        )}
-        {activeTab === "proposals" && (
-          <Proposals proposals={proposals} onVote={handleVote} />
-        )}
-        {activeTab === "create" && (
-          <CreateProposal />
-        )}
-        {activeTab === "treasury" && (
-          <Treasury treasury={treasury} govParams={govParams} />
-        )}
-        {activeTab === "analytics" && (
-          <Analytics proposals={proposals} validators={validators} />
-        )}
 
         <footer className="mt-12 pt-6 border-t border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-600">
           Nebula Governance v1.0.0 · Scratch Blockchain · Data reflects the current network state
