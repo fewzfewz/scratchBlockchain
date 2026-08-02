@@ -183,9 +183,10 @@ impl PatriciaTrie {
                 let root_hash = empty_node.hash();
                 
                 let mut c = HashMap::new();
-                c.insert(root_hash, empty_node);
+                c.insert(root_hash, empty_node.clone());
                 
                 db.put(ColumnFamily::State, b"root", &root_hash)?;
+                db.put(ColumnFamily::State, &root_hash, &empty_node.encode())?;
                 db.flush()?;
                 
                 (root_hash, c)
@@ -217,6 +218,9 @@ impl PatriciaTrie {
         
         // Update root
         *self.root.write().unwrap() = new_root;
+        
+        // Persist the new root pointer so the trie survives restarts
+        self.db.put(ColumnFamily::State, b"root", &new_root)?;
         
         // Persist changed nodes to disk
         for (hash, node) in changed_nodes {
@@ -260,6 +264,9 @@ impl PatriciaTrie {
         
         // Update root
         *self.root.write().unwrap() = new_root;
+        
+        // Persist the new root pointer so the trie survives restarts
+        self.db.put(ColumnFamily::State, b"root", &new_root)?;
         
         // Persist changed nodes
         for (hash, node) in changed_nodes {

@@ -10,6 +10,8 @@
 //! - Metrics (monitoring)
 
 use clap::{Parser, Subcommand};
+use libp2p::request_response::{RequestId, ResponseChannel};
+use libp2p::PeerId;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
@@ -38,6 +40,7 @@ use consensus::{EnhancedConsensus, FinalityGadget, ValidatorInfo, SlashingCondit
 
 use execution::evm::EvmExecutor;
 
+use network::protocol::BlockResponse;
 use network::{NetworkCommand, NetworkEvent, NetworkService};
 
 use mempool::Mempool;
@@ -52,6 +55,11 @@ use node::fork_choice::ForkChoice;
 use node::metrics::Metrics;
 use node::light_client::{LightClient, SyncCommittee, SyncCommitteeManager};
 use node::runtime_upgrade::RuntimeUpgradeManager;
+
+/// Seconds without a finalized block before a node attempts to re-sync from peers.
+const SYNC_GRACE_SECS: u64 = 20;
+/// Number of blocks requested per sync batch.
+const SYNC_BATCH_SIZE: u32 = 128;
 
 /// CLI arguments parser
 #[derive(Parser)]
@@ -205,6 +213,11 @@ struct Node {
     
     // Persistence
     bft_state_path: PathBuf,
+    
+    // Block sync / catch-up state
+    syncing: bool,
+    last_sync_attempt_at: Instant,
+    last_finalize_at: Instant,
 }
 
 impl Node {
@@ -313,10 +326,20 @@ impl Node {
         // 7. Initialize BFT Engine
         // ================================================================
         let bft_state_path = PathBuf::from(data_dir).join("bft_state.json");
+        // Resume consensus from the persisted chain tip on restart. A fresh chain
+        // (only the genesis block at slot 0) keeps the historical start (slot 0,
+        // BFT height 1); an existing chain continues at slot tip+1 / height tip+2
+        // so restarts don't re-produce blocks from slot 0 and break quorum.
+        let chain_tip = chain_store.get_latest_height()?.unwrap_or(0);
+        let (producer_start_slot, bft_start_height) = if chain_tip == 0 {
+            (0u64, 1u64)
+        } else {
+            (chain_tip + 1, chain_tip + 2)
+        };
         let bft_engine = Arc::new(Mutex::new(BftEngine::new(
             public_key.clone(),
             validators.clone(),
-            1,
+            bft_start_height,
             signing_key.clone(),
         )));
         
@@ -349,6 +372,10 @@ impl Node {
             public_key.clone().try_into().unwrap_or([0u8; 20]),
             block_producer_config,
         )));
+        {
+            let mut producer = block_producer.lock().await;
+            producer.set_current_slot(producer_start_slot);
+        }
         
         // ================================================================
         // 12. Initialize Economic Components
@@ -373,12 +400,6 @@ impl Node {
         network_cmd_sender
             .send(NetworkCommand::StartListening(p2p_addr))
             .await?;
-        
-        // Set network channel for block producer
-        {
-            let mut producer = block_producer.lock().await;
-            producer.set_network_channel((*network_cmd_sender).clone());
-        }
         
         // Spawn network task
         tokio::spawn(network.run());
@@ -407,10 +428,29 @@ impl Node {
         
         let rpc_port = config.network.rpc_port;
         let enable_cors = !config.api.cors_origins.is_empty();
-        tokio::spawn(async move {
-            info!("🔌 RPC server listening on port {}", rpc_port);
-            rpc_server.run(rpc_port, enable_cors).await;
+        let rpc_server = Arc::new(rpc_server);
+        tokio::spawn({
+            let rpc_server = rpc_server.clone();
+            async move {
+                info!("🔌 RPC server listening on port {}", rpc_port);
+                rpc_server.run(rpc_port, enable_cors).await;
+            }
         });
+        
+        if config.api.enabled {
+            let api_port = api_port_from_address(&config.api.address);
+            if let Some(api_port) = api_port {
+                tokio::spawn({
+                    let rpc_server = rpc_server.clone();
+                    async move {
+                        info!("🔌 API server listening on port {}", api_port);
+                        rpc_server.run(api_port, enable_cors).await;
+                    }
+                });
+            } else {
+                warn!("⚠️ Invalid API address {:?}, API server not started", config.api.address);
+            }
+        }
         
         Ok(Self {
             config,
@@ -429,6 +469,9 @@ impl Node {
             circuit_breaker,
             stats: NodeStats::new(),
             bft_state_path,
+            syncing: false,
+            last_sync_attempt_at: Instant::now(),
+            last_finalize_at: Instant::now(),
         })
     }
     
@@ -444,27 +487,55 @@ impl Node {
             engine.start_round(current_round)
         };
         
-        let mut interval = interval(Duration::from_millis(1));
-        let latest_block = self.get_latest_block().await?;
+        let mut consensus_interval = interval(Duration::from_millis(1));
+        let mut metrics_interval = interval(Duration::from_secs(5));
+        let mut sync_interval = interval(Duration::from_secs(5));
+        let mut repropose_interval = interval(Duration::from_secs(1));
         
         loop {
             // Process BFT events
             let mut new_events = Vec::new();
             for event in pending_events.drain(..) {
-                self.handle_bft_event(event, &mut new_events, &latest_block).await?;
+                if let Err(e) = self.handle_bft_event(event, &mut new_events).await {
+                    warn!("Error handling BFT event: {}", e);
+                }
             }
             pending_events.extend(new_events);
             
             tokio::select! {
-                _ = interval.tick() => {
+                _ = consensus_interval.tick() => {
                     let mut engine = self.bft_engine.lock().await;
                     if let Some(timeout) = engine.check_timeout() {
                         pending_events.push(timeout);
                     }
                 }
                 
+                _ = metrics_interval.tick() => {
+                    if let Err(e) = self.update_live_metrics().await {
+                        warn!("Error updating metrics: {}", e);
+                    }
+                }
+                
+                _ = sync_interval.tick() => {
+                    if let Err(e) = self.maybe_trigger_sync().await {
+                        warn!("Error in sync tick: {}", e);
+                    }
+                }
+                
+                _ = repropose_interval.tick() => {
+                    // Re-broadcast our proposal so peers that entered this
+                    // height/round late still receive it and can vote.
+                    let events = {
+                        let mut engine = self.bft_engine.lock().await;
+                        engine.re_propose()
+                    };
+                    pending_events.extend(events);
+                }
+                
                 Some(event) = self.network_event_receiver.recv() => {
-                    self.handle_network_event(event, &mut pending_events).await?;
+                    if let Err(e) = self.handle_network_event(event, &mut pending_events).await {
+                        warn!("Error handling network event: {}", e);
+                    }
                 }
                 
                 _ = tokio::signal::ctrl_c() => {
@@ -483,7 +554,6 @@ impl Node {
         &mut self,
         event: BftEvent,
         new_events: &mut Vec<BftEvent>,
-        latest_block: &Block,
     ) -> Result<(), Box<dyn std::error::Error>> {
         match event {
             BftEvent::BroadcastVote(vote) => {
@@ -502,6 +572,7 @@ impl Node {
             
             BftEvent::FinalizeBlock(block) => {
                 info!("🔒 Finalizing block at height {}", block.header.slot);
+                self.last_finalize_at = Instant::now();
                 
                 // Execute and commit block
                 let receipts = self.block_executor.lock().await.execute_and_commit(&block)?;
@@ -531,6 +602,7 @@ impl Node {
                 
                 // Update metrics
                 self.metrics.record_block();
+                self.metrics.update_finalized_height(block.header.slot);
                 self.stats.record_block(block.extrinsics.len());
                 
                 // Remove transactions from mempool
@@ -559,7 +631,7 @@ impl Node {
                 if is_proposer {
                     info!("🎁 I am the proposer for round {}/{}", height, round);
                     let mut producer = self.block_producer.lock().await;
-                    match producer.produce_block(latest_block).await {
+                    match producer.produce_block().await {
                         Ok(block) => {
                             info!("✅ Produced block with {} transactions", block.extrinsics.len());
                             let mut engine = self.bft_engine.lock().await;
@@ -618,6 +690,21 @@ impl Node {
                 self.handle_incoming_block(block, source).await?;
             }
             
+            NetworkEvent::BlockRequestReceived {
+                peer,
+                request_id,
+                start_height,
+                limit,
+                channel,
+            } => {
+                self.handle_block_request(peer, request_id, start_height, limit, channel)
+                    .await?;
+            }
+            
+            NetworkEvent::BlockResponseReceived { peer, blocks, .. } => {
+                self.handle_block_response(peer, blocks, pending_events).await?;
+            }
+            
             NetworkEvent::ListeningOn(addr) => {
                 info!("🔊 Network listening on {}", addr);
             }
@@ -628,11 +715,17 @@ impl Node {
         Ok(())
     }
     
-    /// Handle incoming block from network
+    /// Handle an incoming block from gossip.
+    ///
+    /// Only blocks that extend our chain tip by exactly one (with a matching
+    /// parent) are applied immediately. A block that skips heights indicates a
+    /// gap in our chain — we request a contiguous sync from the sender instead
+    /// of committing it out of order (which previously let the chain fork or
+    /// regress). Blocks behind our tip are ignored.
     async fn handle_incoming_block(
         &mut self,
         block: Block,
-        _source: libp2p::PeerId,
+        source: PeerId,
     ) -> Result<(), Box<dyn std::error::Error>> {
         // Check if we already have this block
         let block_hash = block.hash();
@@ -641,25 +734,77 @@ impl Node {
             return Ok(());
         }
         
-        // Verify block
-        let validators = self.get_validator_list().await?;
-        let consensus = EnhancedConsensus::new(validators);
-        if let Err(e) = consensus.verify_block(&block) {
-            warn!("Invalid block: {}", e);
+        let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+        let block_slot = block.header.slot;
+        
+        // Ignore genesis-shadow blocks delivered via gossip; the canonical
+        // genesis lives at slot 0 and the first produced block is committed
+        // through the BFT finalize path.
+        if block_slot == 0 {
             return Ok(());
         }
         
-        // Execute block
-        let receipts = self.block_executor.lock().await.execute_and_commit(&block)?;
-        
-        // Verify state root
-        let computed_root = {
-            let trie = self.state_trie.lock().await;
-            trie.root_hash()
-        };
-        if computed_root != block.header.state_root {
-            warn!("State root mismatch");
+        // A block ahead of our tip means we are missing intermediate blocks.
+        // Trigger a contiguous sync from the sender to fill the gap.
+        if block_slot > tip + 1 {
+            info!("Block at slot {} ahead of tip {} — requesting sync", block_slot, tip);
+            if !self.syncing {
+                self.syncing = true;
+                self.network_cmd_sender
+                    .send(NetworkCommand::RequestBlock {
+                        peer: source,
+                        start_height: if tip == 0 { 0 } else { tip + 1 },
+                        limit: SYNC_BATCH_SIZE,
+                    })
+                    .await?;
+            }
             return Ok(());
+        }
+        
+        // Stale block (already past).
+        if block_slot <= tip {
+            return Ok(());
+        }
+        
+        // block_slot == tip + 1: must extend our current tip.
+        let tip_hash = self.current_tip_hash()?;
+        if block.header.parent_hash != tip_hash {
+            warn!("Block at slot {} has mismatched parent (fork) — ignoring", block_slot);
+            return Ok(());
+        }
+        
+        if let Err(e) = self.apply_block(&block).await {
+            warn!("Failed to apply gossip block at slot {}: {}", block_slot, e);
+        }
+        Ok(())
+    }
+    
+    /// Verify, execute, and commit a block that we know is a contiguous
+    /// extension of our chain. Shared by the gossip path and the sync path.
+    async fn apply_block(&mut self, block: &Block) -> Result<(), Box<dyn std::error::Error>> {
+        // Verify block signature by a known validator
+        let validators = self.get_validator_list().await?;
+        let consensus = EnhancedConsensus::new(validators);
+        if let Err(e) = consensus.verify_block(block) {
+            warn!("Invalid block: {}", e);
+            return Err(format!("Invalid block: {}", e).into());
+        }
+        
+        // Execute block
+        let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
+        
+        // Verify state root. Produced blocks carry a zero placeholder state_root
+        // (EVM state diffs are not yet persisted to the trie), so the check is
+        // only meaningful for headers that actually recorded a root.
+        if block.header.state_root.iter().any(|b| *b != 0) {
+            let computed_root = {
+                let trie = self.state_trie.lock().await;
+                trie.root_hash()
+            };
+            if computed_root != block.header.state_root {
+                warn!("State root mismatch");
+                return Err("State root mismatch".into());
+            }
         }
         
         // Process rewards
@@ -669,7 +814,7 @@ impl Node {
         
         let rewards = {
             let mut rm = self.reward_manager.lock().await;
-            rm.process_block(&block, proposer, &voters, total_fees)
+            rm.process_block(block, proposer, &voters, total_fees)
         };
         for (validator, amount) in rewards {
             if amount > 0 {
@@ -687,24 +832,272 @@ impl Node {
         Ok(())
     }
     
-    /// Get latest block from storage
-    async fn get_latest_block(&self) -> Result<Block, Box<dyn std::error::Error>> {
+    /// Hash of the block currently at our chain tip.
+    fn current_tip_hash(&self) -> Result<[u8; 32], Box<dyn std::error::Error>> {
         match self.chain_store.get_latest_height()? {
-            Some(height) => {
-                let data = self.chain_store
-                    .get_block_by_height(height)?
-                    .ok_or_else(|| format!("Block not found at height {}", height))?;
-                let block: Block = serde_json::from_slice(&data)?;
-                Ok(block)
-            }
-            None => Ok(Block::genesis()),
+            Some(height) => match self.chain_store.get_block_by_height(height)? {
+                Some(data) => Ok(serde_json::from_slice::<Block>(&data)?.hash()),
+                None => Ok(Block::genesis().hash()),
+            },
+            None => Ok(Block::genesis().hash()),
         }
+    }
+    
+    /// Periodically check whether consensus has stalled and, if so, request a
+    /// contiguous block sync from a connected peer so the node can catch up.
+    async fn maybe_trigger_sync(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.syncing {
+            return Ok(());
+        }
+        // Don't hammer peers if a previous sync attempt found nothing.
+        if self.last_sync_attempt_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS) {
+            return Ok(());
+        }
+        if self.last_finalize_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS) {
+            return Ok(());
+        }
+        
+        let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+        
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.network_cmd_sender
+            .send(NetworkCommand::ListConnectedPeers(reply_tx))
+            .await?;
+        let peers = reply_rx.await.unwrap_or_default();
+        let peer = peers.into_iter().next();
+        
+        match peer {
+            Some(peer) => {
+                info!(
+                    "⚠️ Consensus stalled at height {} for {}s — requesting sync from {}",
+                    tip, SYNC_GRACE_SECS, peer
+                );
+                self.syncing = true;
+                self.network_cmd_sender
+                    .send(NetworkCommand::RequestBlock {
+                        peer,
+                        start_height: if tip == 0 { 0 } else { tip + 1 },
+                        limit: SYNC_BATCH_SIZE,
+                    })
+                    .await?;
+            }
+            None => {
+                debug!("Consensus stalled but no peers connected — will retry");
+            }
+        }
+        Ok(())
+    }
+    
+    /// Serve a block-sync request from a peer with the blocks we have stored.
+    async fn handle_block_request(
+        &self,
+        peer: PeerId,
+        _request_id: RequestId,
+        start_height: u64,
+        limit: u32,
+        channel: ResponseChannel<BlockResponse>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let mut blocks = Vec::new();
+        let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+        if start_height <= tip {
+            let end = (start_height + limit as u64 - 1).min(tip);
+            for height in start_height..=end {
+                if let Some(data) = self.chain_store.get_block_by_height(height)? {
+                    if let Ok(block) = serde_json::from_slice::<Block>(&data) {
+                        blocks.push(block);
+                    }
+                }
+            }
+        }
+        debug!(
+            "Serving {} blocks to {} starting at height {}",
+            blocks.len(),
+            peer,
+            start_height
+        );
+        self.network_cmd_sender
+            .send(NetworkCommand::SendBlockResponse { channel, blocks })
+            .await?;
+        Ok(())
+    }
+    
+    /// Apply a batch of blocks received in response to a sync request.
+    ///
+    /// Blocks must arrive in contiguous order. The first block may be a
+    /// replacement of our current tip (e.g. the produced slot-0 block replacing
+    /// the genesis entry at height 0) — that is adopted if it differs. When the
+    /// peer's chain has been fully fetched the BFT engine is reset to the new
+    /// chain tip so consensus resumes on the canonical chain.
+    async fn handle_block_response(
+        &mut self,
+        peer: PeerId,
+        blocks: Vec<Block>,
+        pending_events: &mut Vec<BftEvent>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        if !self.syncing {
+            return Ok(());
+        }
+        
+        let total_received = blocks.len();
+        let mut applied = 0usize;
+        let mut advanced = 0usize;
+        
+        for block in blocks {
+            let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+            let slot = block.header.slot;
+            
+            // Replacement of our current tip (handles genesis → produced block 0).
+            if slot == tip {
+                let tip_hash = self.current_tip_hash()?;
+                if block.hash() != tip_hash {
+                    if let Err(e) = self.apply_block(&block).await {
+                        warn!("Sync: failed to replace tip at slot {}: {} — stopping", slot, e);
+                        break;
+                    }
+                    applied += 1;
+                }
+                continue;
+            }
+            
+            if slot != tip + 1 {
+                warn!(
+                    "Sync: block at slot {} not contiguous with tip {} — stopping",
+                    slot, tip
+                );
+                break;
+            }
+            if block.header.parent_hash != self.current_tip_hash()? {
+                warn!(
+                    "Sync: block at slot {} has mismatched parent — stopping",
+                    slot
+                );
+                break;
+            }
+            
+            if let Err(e) = self.apply_block(&block).await {
+                warn!("Sync: failed to apply block at slot {}: {} — stopping", slot, e);
+                break;
+            }
+            applied += 1;
+            advanced += 1;
+        }
+        
+        if applied == 0 {
+            warn!("Sync: no blocks applied from {}", peer);
+            self.syncing = false;
+            self.last_sync_attempt_at = Instant::now();
+            return Ok(());
+        }
+        
+        let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+        debug!("Sync: applied {} blocks (advanced {}) — tip now {}", applied, advanced, tip);
+        
+        // If the peer sent fewer blocks than the batch size, we've reached the
+        // end of its chain. Reset consensus to the synced tip and resume.
+        if total_received < SYNC_BATCH_SIZE as usize && advanced > 0 {
+            self.finish_sync(pending_events).await?;
+            return Ok(());
+        }
+        
+        // Fetch the next contiguous batch from the same peer.
+        let start = if tip == 0 { 0 } else { tip + 1 };
+        self.network_cmd_sender
+            .send(NetworkCommand::RequestBlock {
+                peer,
+                start_height: start,
+                limit: SYNC_BATCH_SIZE,
+            })
+            .await?;
+        Ok(())
+    }
+    
+    /// Stop syncing and re-align the BFT engine with the (now caught-up) chain
+    /// tip so the node resumes producing/voting on the canonical chain.
+    async fn finish_sync(
+        &mut self,
+        pending_events: &mut Vec<BftEvent>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        self.syncing = false;
+        self.last_sync_attempt_at = Instant::now();
+        
+        let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+        if tip == 0 {
+            return Ok(());
+        }
+        
+        // BFT height h finalizes block slot h-1, so a chain tip of `tip`
+        // corresponds to resuming consensus at height tip+2.
+        let bft_height = tip + 2;
+        let events = {
+            let mut engine = self.bft_engine.lock().await;
+            engine.reset_to_height(bft_height)
+        };
+        {
+            let mut producer = self.block_producer.lock().await;
+            producer.set_current_slot(tip + 1);
+        }
+        info!(
+            "🔄 Chain re-synced to height {} — BFT resumed at height {}",
+            tip, bft_height
+        );
+        pending_events.extend(events);
+        Ok(())
     }
     
     /// Get current validator list
     async fn get_validator_list(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
-        // In production, load from state
-        Ok(vec![])
+        // Load validator set from the state trie (populated at genesis init)
+        #[derive(serde::Deserialize)]
+        struct ValidatorEntry {
+            public_key: String,
+            stake: String,
+        }
+
+        let trie = self.state_trie.lock().await;
+        match trie.get(b"validators")? {
+            Some(data) => {
+                let entries: Vec<ValidatorEntry> = serde_json::from_slice(&data)?;
+                Ok(entries
+                    .into_iter()
+                    .map(|v| ValidatorInfo {
+                        public_key: hex::decode(&v.public_key).unwrap_or_default(),
+                        stake: v.stake.parse().unwrap_or(0),
+                        slashed: false,
+                    })
+                    .collect())
+            }
+            None => Ok(vec![]),
+        }
+    }
+    
+    /// Periodically refresh live metrics (peers, mempool, consensus round, network bytes)
+    async fn update_live_metrics(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Mempool size
+        self.metrics.update_mempool_size(self.mempool.size());
+
+        // Consensus round
+        let round = self.bft_engine.lock().await.round;
+        self.metrics.update_consensus_round(round);
+
+        // Validator set (count + total stake)
+        let validators = self.get_validator_list().await?;
+        let stake_total = validators
+            .iter()
+            .map(|v| v.stake)
+            .fold(0u64, |acc, s| acc.saturating_add(s));
+        self.metrics.update_validator_set(validators.len(), stake_total);
+
+        // Network stats (peer count, connection count, gossip bytes)
+        let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+        self.network_cmd_sender
+            .send(NetworkCommand::GetStats(reply_tx))
+            .await?;
+        if let Ok(stats) = reply_rx.await {
+            self.metrics.update_peer_count(stats.peer_count);
+            self.metrics.update_network_bytes_rx(stats.bytes_rx);
+            self.metrics.update_network_bytes_tx(stats.bytes_tx);
+        }
+        Ok(())
     }
     
     /// Apply reward to validator
@@ -851,8 +1244,12 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
             })
     };
     
-    info!("🌊 Faucet listening on http://0.0.0.0:3006/faucet");
-    warp::serve(route).run(([0, 0, 0, 0], 3006)).await;
+    let faucet_port = env::var("FAUCET_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+        .unwrap_or(3006);
+    info!("🌊 Faucet listening on http://0.0.0.0:{}/faucet", faucet_port);
+    warp::serve(route).run(([0, 0, 0, 0], faucet_port)).await;
     
     Ok(())
 }
@@ -965,4 +1362,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     
     Ok(())
+}
+
+/// Extract the port from an API address like "0.0.0.0:8545".
+/// Returns None if the address has no usable port.
+fn api_port_from_address(address: &str) -> Option<u16> {
+    let addr = address.trim();
+    let port_str = if addr.starts_with('[') {
+        // IPv6 like [::1]:8545
+        let end = addr.rfind(':')?;
+        &addr[end + 1..]
+    } else {
+        match addr.rfind(':') {
+            Some(idx) => &addr[idx + 1..],
+            None => addr,
+        }
+    };
+    port_str.trim().parse::<u16>().ok()
 }

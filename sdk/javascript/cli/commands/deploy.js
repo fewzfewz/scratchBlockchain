@@ -3,7 +3,7 @@ const path = require("path");
 
 module.exports = async function deploy(options) {
   const contractName = options.contract || "ERC20";
-  const rpcUrl = options.rpc || "http://localhost:9933";
+  const rpcUrl = options.rpc || "http://localhost:8545";
   const privateKey = options.key;
   const args = options.args ? options.args.split(",").map(s => s.trim()) : [];
 

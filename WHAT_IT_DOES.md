@@ -22,7 +22,7 @@ A **modular Rust blockchain** with a **unified React frontend** for local develo
 | **Dev Portal** | Developer tools overview |
 | **Home** | Quick links to all pages |
 
-### Node RPC (http://localhost:9933 — 17 endpoints)
+### Node RPC (http://localhost:8545 — 17 endpoints)
 
 | Method | Endpoint | What it does |
 |--------|----------|-------------|
@@ -84,7 +84,7 @@ cd frontend && npm install && npm run dev
 ## Architecture
 
 ```
-Frontend (port 5173) ←──→ Node RPC (port 9933)
+Frontend (port 5173) ←──→ Node RPC (port 8545)
   React SPA                 warp HTTP server
   9 pages                   17 endpoints
   dark/light mode           rate-limited
@@ -112,7 +112,7 @@ The frontend is a single-page React app. The node is a single Rust binary. No se
 
 ## Known Issues
 
-- **Faucet offline**: Node must be running at port 9933; frontend shows amber warning if unreachable
+- **Faucet offline**: Node must be running at port 8545; frontend shows amber warning if unreachable
 - **No tx history**: Wallet shows balance/nonce but no list of past transactions
 - **No EVM contract UI**: Can't deploy or query smart contracts from the frontend
 - **No WebSocket**: Frontend polls every 10-15s instead of receiving push events

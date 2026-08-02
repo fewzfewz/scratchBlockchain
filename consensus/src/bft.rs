@@ -46,6 +46,10 @@ pub struct BftEngine {
 
     proposal: Option<Proposal>,
 
+    /// The most recent proposal this node created itself (for re-broadcasting
+    /// so peers that enter a height/round late still receive the proposal).
+    own_proposal: Option<Proposal>,
+
     votes: HashMap<(u64, Step), HashMap<Vec<u8>, Vote>>,
     max_votes_per_round: usize,  // FIX: Added memory protection
 
@@ -80,6 +84,7 @@ impl BftEngine {
             validators: val_map,
             total_stake,
             proposal: None,
+            own_proposal: None,
             votes: HashMap::new(),
             max_votes_per_round: 1000,  // FIX: Prevent memory DoS
             locked_block: None,
@@ -115,22 +120,39 @@ impl BftEngine {
         self.round = round;
         self.step = Step::Propose;
         self.proposal = None;
+        self.own_proposal = None;
         self.start_timeout(Step::Propose);
         vec![BftEvent::NewRound(self.height, self.round)]
     }
 
     pub fn handle_proposal(&mut self, proposal: Proposal) -> Vec<BftEvent> {
-        if proposal.height != self.height || proposal.round != self.round {
+        if proposal.height != self.height {
             return vec![];
         }
+
+        let mut events = Vec::new();
+
+        // Round-sync: accept a proposal for a higher round of this height by
+        // first jumping to that round (see handle_vote).
+        if proposal.round > self.round {
+            tracing::info!(
+                "Round-sync: jumping to round {} (was {}) for proposal",
+                proposal.round, self.round
+            );
+            events.extend(self.start_round(proposal.round));
+        }
+
+        if proposal.round != self.round {
+            return events;
+        }
         if self.step != Step::Propose {
-            return vec![];
+            return events;
         }
 
         let expected_proposer = self.select_proposer(self.height, self.round);
         if proposal.proposer != expected_proposer {
             tracing::warn!("Proposal from wrong proposer");
-            return vec![];
+            return events;
         }
 
         let proposal_bytes = self.serialize_proposal(&proposal);
@@ -138,7 +160,7 @@ impl BftEngine {
             crypto::verify_signature(&proposal.proposer, &proposal_bytes, &proposal.signature)
         {
             tracing::warn!("Invalid proposal signature: {}", e);
-            return vec![];
+            return events;
         }
 
         self.proposal = Some(proposal.clone());
@@ -165,7 +187,8 @@ impl BftEngine {
         vote.signature = self.signing_key.sign(&vote_bytes);
 
         self.add_vote(vote.clone());
-        vec![BftEvent::BroadcastVote(vote)]
+        events.push(BftEvent::BroadcastVote(vote));
+        events
     }
 
     pub fn create_proposal(&mut self, block: Block) -> Vec<BftEvent> {
@@ -190,6 +213,7 @@ impl BftEngine {
         proposal.signature = self.signing_key.sign(&proposal_bytes);
 
         self.proposal = Some(proposal.clone());
+        self.own_proposal = Some(proposal.clone());
         self.step = Step::Prevote;
 
         let vote_hash = match &self.locked_block {
@@ -219,21 +243,40 @@ impl BftEngine {
     }
 
     pub fn handle_vote(&mut self, vote: Vote) -> Vec<BftEvent> {
-        if vote.height != self.height || vote.round != self.round {
+        if vote.height != self.height {
             return vec![];
         }
         if !self.validators.contains_key(&vote.voter) {
             return vec![];
         }
 
+        let mut events = Vec::new();
+
+        // Round-sync: if a peer is already voting at a higher round of this
+        // height, jump to that round so we stay aligned and can still vote.
+        // This prevents the network from drifting apart on local timeouts,
+        // which previously stalled consensus for many rounds per height.
+        if vote.round > self.round {
+            tracing::info!(
+                "Round-sync: jumping to round {} (was {})",
+                vote.round, self.round
+            );
+            events.extend(self.start_round(vote.round));
+        }
+
+        if vote.round != self.round {
+            return events;
+        }
+
         let vote_bytes = self.serialize_vote(&vote);
         if let Err(e) = crypto::verify_signature(&vote.voter, &vote_bytes, &vote.signature) {
             tracing::warn!("Invalid vote signature: {}", e);
-            return vec![];
+            return events;
         }
 
         self.add_vote(vote.clone());
-        self.check_quorum()
+        events.extend(self.check_quorum());
+        events
     }
 
     pub fn add_vote_public(&mut self, vote: Vote) {
@@ -308,6 +351,7 @@ impl BftEngine {
                         self.round = 0;
                         self.step = Step::Propose;
                         self.proposal = None;
+                        self.own_proposal = None;
                         self.locked_block = None;
                         self.valid_block = None;
                         self.votes.clear();
@@ -337,9 +381,12 @@ impl BftEngine {
             *counts.entry(vote.block_hash).or_default() += stake;
         }
 
+        // Standard 2/3+ quorum. Using >= (rather than >) means a 3-validator
+        // set with equal stakes can finalize with any 2 of 3 — otherwise all 3
+        // would be required, making the network stall whenever one node lags.
         let threshold = (self.total_stake * 2) / 3;
         for (hash, stake) in counts {
-            if stake > threshold {
+            if stake >= threshold {
                 return Some(hash);
             }
         }
@@ -450,6 +497,42 @@ impl BftEngine {
             .filter(|((round, _step), _)| *round < self.round)
             .flat_map(|(_, voter_map)| voter_map.values())
             .collect()
+    }
+
+    /// Reset consensus state to begin voting at a new height.
+    ///
+    /// Used after a node has fallen behind (e.g. it locked a losing block and
+    /// could no longer reach quorum) and has re-synced its chain from peers.
+    /// Clears any stale lock/proposal/vote state so the node rejoins consensus
+    /// on the canonical chain at the given height.
+    pub fn reset_to_height(&mut self, new_height: u64) -> Vec<BftEvent> {
+        self.height = new_height.max(1);
+        self.round = 0;
+        self.step = Step::Propose;
+        self.proposal = None;
+        self.own_proposal = None;
+        self.locked_block = None;
+        self.valid_block = None;
+        self.votes.clear();
+        self.current_timeout = None;
+        self.timeout_step = None;
+        self.start_round(0)
+    }
+
+    /// Re-broadcast our current proposal if we are still at the height/round it
+    /// was created for. This lets peers that entered the height/round late (and
+    /// therefore missed the original broadcast) still receive it and vote.
+    pub fn re_propose(&mut self) -> Vec<BftEvent> {
+        match &self.own_proposal {
+            Some(proposal)
+                if proposal.height == self.height
+                    && proposal.round == self.round
+                    && self.step != Step::Commit =>
+            {
+                vec![BftEvent::BroadcastProposal(proposal.clone())]
+            }
+            _ => vec![],
+        }
     }
 }
 
@@ -672,6 +755,184 @@ mod tests {
             assert!(events.iter().any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Precommit)),
                     "should transition to Precommit and broadcast");
         }
+    }
+
+    #[test]
+    fn test_handle_vote_jumps_to_higher_round() {
+        let sk1 = crypto::SigningKey::generate();
+        let pk1 = sk1.public_key();
+        let sk2 = crypto::SigningKey::generate();
+        let pk2 = sk2.public_key();
+        let sk3 = crypto::SigningKey::generate();
+        let pk3 = sk3.public_key();
+
+        let validators = vec![
+            ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false },
+            ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false },
+            ValidatorInfo { public_key: pk3.clone(), stake: 100, slashed: false },
+        ];
+
+        let mut engine = BftEngine::new(pk1, validators, 1, sk1.clone());
+        engine.start_round(0);
+
+        // A peer (pk2) prevotes at round 3 of the same height.
+        let block = make_block(1);
+        let block_hash = block.hash();
+        let mut vote = Vote {
+            height: 1,
+            round: 3,
+            step: Step::Prevote,
+            block_hash: Some(block_hash),
+            signature: vec![],
+            voter: pk2,
+        };
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&vote.height.to_le_bytes());
+        bytes.extend_from_slice(&vote.round.to_le_bytes());
+        bytes.push(vote.step as u8);
+        bytes.extend_from_slice(&block_hash);
+        bytes.extend_from_slice(&vote.voter);
+        vote.signature = sk2.sign(&bytes);
+
+        let events = engine.handle_vote(vote);
+        assert_eq!(engine.round, 3, "engine should round-sync to the vote's round");
+        assert!(
+            events.iter().any(|e| matches!(e, BftEvent::NewRound(1, 3))),
+            "round-sync should emit a NewRound event"
+        );
+
+        // A stale vote from a lower round is now ignored.
+        assert!(engine.handle_vote(Vote {
+            height: 1,
+            round: 1,
+            step: Step::Prevote,
+            block_hash: Some(block_hash),
+            signature: vec![],
+            voter: pk3,
+        }).is_empty());
+    }
+
+    #[test]
+    fn test_re_propose_rebroadcasts_current_proposal() {
+        let sk1 = crypto::SigningKey::generate();
+        let pk1 = sk1.public_key();
+        let sk2 = crypto::SigningKey::generate();
+        let pk2 = sk2.public_key();
+        let sk3 = crypto::SigningKey::generate();
+        let pk3 = sk3.public_key();
+
+        let validators = vec![
+            ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false },
+            ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false },
+            ValidatorInfo { public_key: pk3.clone(), stake: 100, slashed: false },
+        ];
+
+        // Build the engine with whoever is the proposer at height 1, round 0.
+        let mut sorted: Vec<&Vec<u8>> = vec![&pk1, &pk2, &pk3];
+        sorted.sort();
+        let mut seed_input = Vec::new();
+        seed_input.extend_from_slice(&1u64.to_le_bytes());
+        seed_input.extend_from_slice(&0u64.to_le_bytes());
+        let seed = crypto::hash(&seed_input);
+        let index = u64::from_le_bytes(seed[..8].try_into().unwrap()) as usize % 3;
+        let proposer_pk = sorted[index].clone();
+        let proposer_key = if proposer_pk == pk1 {
+            sk1
+        } else if proposer_pk == pk2 {
+            sk2
+        } else {
+            sk3
+        };
+
+        let mut engine = BftEngine::new(proposer_pk, validators, 1, proposer_key);
+        engine.start_round(0);
+        engine.create_proposal(make_block(0));
+
+        let events = engine.re_propose();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], BftEvent::BroadcastProposal(_)),
+            "Proposer should re-broadcast its proposal");
+
+        // After moving to a new round the old proposal must not be re-broadcast.
+        engine.start_round(1);
+        assert!(engine.re_propose().is_empty());
+    }
+
+    #[test]
+    fn test_quorum_reached_with_two_of_three_equal_stakes() {
+        let sk1 = crypto::SigningKey::generate();
+        let pk1 = sk1.public_key();
+        let sk2 = crypto::SigningKey::generate();
+        let pk2 = sk2.public_key();
+        let sk3 = crypto::SigningKey::generate();
+        let pk3 = sk3.public_key();
+
+        let validators = vec![
+            ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false },
+            ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false },
+            ValidatorInfo { public_key: pk3.clone(), stake: 100, slashed: false },
+        ];
+
+        let mut engine = BftEngine::new(pk1.clone(), validators, 1, sk1.clone());
+        let block = make_block(1);
+        let block_hash = block.hash();
+
+        // Two of the three validators prevote the same block.
+        for (voter, key) in [(pk1, &sk1), (pk2, &sk2)] {
+            let mut vote = Vote {
+                height: 1,
+                round: 0,
+                step: Step::Prevote,
+                block_hash: Some(block_hash),
+                signature: vec![],
+                voter,
+            };
+            let bytes = {
+                let mut b = Vec::new();
+                b.extend_from_slice(&vote.height.to_le_bytes());
+                b.extend_from_slice(&vote.round.to_le_bytes());
+                b.push(vote.step as u8);
+                b.extend_from_slice(&block_hash);
+                b.extend_from_slice(&vote.voter);
+                b
+            };
+            vote.signature = key.sign(&bytes);
+            engine.add_vote_public(vote);
+        }
+
+        let quorum = engine.has_quorum_public(0, Step::Prevote);
+        assert_eq!(quorum, Some(Some(block_hash)),
+            "2 of 3 equal-stake validators must reach the 2/3 quorum");
+        let _ = sk3;
+    }
+
+    #[test]
+    fn test_reset_to_height_clears_lock_and_votes() {
+        let signing_key = crypto::SigningKey::generate();
+        let public_key = signing_key.public_key();
+        let validator = ValidatorInfo {
+            public_key: public_key.clone(),
+            stake: 100,
+            slashed: false,
+        };
+        let mut engine = BftEngine::new(public_key, vec![validator], 1, signing_key);
+        engine.start_round(0);
+
+        // Simulate a stuck validator: lock a block and accumulate votes.
+        let block = make_block(5);
+        engine.locked_block = Some((block, 0));
+        engine.handle_timeout_propose();
+        engine.handle_timeout_prevote();
+
+        let events = engine.reset_to_height(42);
+        assert_eq!(engine.height, 42);
+        assert_eq!(engine.round, 0);
+        assert_eq!(engine.step, Step::Propose);
+        assert!(engine.locked_block.is_none());
+        assert!(engine.valid_block.is_none());
+        assert!(engine.proposal.is_none());
+        assert!(engine.votes.is_empty());
+        assert!(events.iter().any(|e| matches!(e, BftEvent::NewRound(42, 0))));
     }
 
     #[test]

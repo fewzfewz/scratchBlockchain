@@ -74,10 +74,12 @@ impl RewardCalculator {
         *rewards.entry(proposer).or_insert(0) += proposer_fees as i64;
         
         // 3. Vote rewards for validators who voted
-        let vote_reward_per_validator = self.config.vote_reward / (voters.len() as u64);
-        for voter in voters {
-            *rewards.entry(voter.clone()).or_insert(0) += vote_reward_per_validator as i64;
-            *self.total_votes_cast.entry(voter.clone()).or_insert(0) += 1;
+        if !voters.is_empty() {
+            let vote_reward_per_validator = self.config.vote_reward / (voters.len() as u64);
+            for voter in voters {
+                *rewards.entry(voter.clone()).or_insert(0) += vote_reward_per_validator as i64;
+                *self.total_votes_cast.entry(voter.clone()).or_insert(0) += 1;
+            }
         }
         
         // Track proposer stats

@@ -18,7 +18,7 @@ npm install @modular-blockchain/sdk
 ```ts
 import { ModularClient, HttpProvider, Wallet } from "@modular-blockchain/sdk";
 
-const provider = new HttpProvider("http://localhost:9933");
+const provider = new HttpProvider("http://localhost:8545");
 const client = new ModularClient(provider);
 
 const status = await client.getNodeStatus();
@@ -82,7 +82,7 @@ Complete examples in `examples/starter-kits/`:
 ### Providers
 ```ts
 // HTTP (REST) — GET for queries, POST for mutations
-const http = new HttpProvider("http://localhost:9933");
+const http = new HttpProvider("http://localhost:8545");
 
 // WebSocket — JSON-RPC with auto-reconnect and polling fallback
 const ws = new WebSocketProvider("ws://localhost:9934");

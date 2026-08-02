@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Droplets, CheckCircle, AlertCircle, Clock, Copy, WifiOff } from 'lucide-react'
 
-const RPC_URL = 'http://localhost:9933'
+const RPC_URL = 'http://localhost:8545'
 const DRIP_AMOUNT = 100
 const COOLDOWN_MS = 24 * 60 * 60 * 1000
 

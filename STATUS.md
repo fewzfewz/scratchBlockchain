@@ -2,8 +2,8 @@
 
 ## Current Status: DEVELOPMENT
 
-**Last Updated**: June 25, 2026  
-**Node RPC**: `http://localhost:9933`  
+**Last Updated**: August 2, 2026  
+**Node RPC**: `http://localhost:8545`  
 **Frontend**: `http://localhost:5173`  
 **Faucet**: Built into node RPC at `POST /faucet/request` (no separate service needed)
 
@@ -21,7 +21,7 @@
 - **SDK Portal** — JavaScript SDK reference
 - **Dev Portal** — Developer dashboard
 
-### Node RPC (port 9933, 17 endpoints)
+### Node RPC (port 8545, 17 endpoints)
 - `GET /health`, `/status`, `/mempool`, `/metrics`
 - `GET /block/{height}`, `/block/hash/{hash}`, `/block/latest`
 - `GET /balance/{address}`, `/tx/{hash}`
@@ -31,6 +31,12 @@
 - `GET /delegations/{address}`
 - `POST /faucet/request` — credits address directly in state trie
 
+### Docker Local Testnet (5 nodes)
+- 3 validators + 2 RPC nodes, all producing blocks in lockstep
+- Node APIs: `8545`–`8549`; P2P: `26656`–`26657`; metrics scrape on `26657` per node
+- Prometheus: `http://localhost:9095` (container 9090); Grafana: `http://localhost:3000` (`admin`/`admin`); nginx: `80`
+- Live metrics: `blockchain_peer_count`, `blockchain_network_bytes_rx_total/tx_total`, `blockchain_consensus_round`, `blockchain_finalized_height`, `blockchain_mempool_size` all populate on `/metrics`
+
 ### Key Bug Fixes Applied
 - Rate limiter uses config value (was hardcoded 100 req/s) — default 200 req/s
 - Rejection handler no longer defaults to 429 for non-rate-limit errors (e.g. JSON parse → 400)
@@ -38,6 +44,13 @@
 - Genesis validators written to state trie at startup (`/validators` returns real data)
 - Wallet address fixed: derives 20-byte address from 32-byte public key
 - Faucet credits the state trie directly instead of just returning success
+- "No validators configured" fixed: `get_validator_list()` loads validators from the state trie instead of returning `vec![]`
+- Live network/consensus/mempool metrics wired up (`NetworkCommand::GetStats`, per-5s refresh)
+- Frontend API URLs fixed from stale `9933` to `8545` (node API port)
+- **Restart-stall fixed**: `BlockProducer.current_slot` and BFT start height now resume from the persisted chain tip instead of restarting at slot 0, so `docker-compose restart` no longer breaks consensus (verified across repeated restarts)
+- **Consensus stall fixed (BFT liveness)**: quorum threshold `>=` 2/3 so 2 of 3 equal-stake validators can finalize; block slots derived from BFT height with parent from the real chain tip; proposals re-broadcast every 1s; round-sync jumps to a higher round when peers are already voting there. Verified lockstep across all 5 nodes (previously stalled at height 3)
+- **Crash-restart loop fixed**: the always-on state-root check crashed any node using the gossip/sync path (produced blocks carry a zero `state_root` placeholder). The check now only runs for non-placeholder roots, and per-event run-loop errors are logged instead of exiting the process (previously 25+ Docker restarts on one validator)
+- **Recovery verified**: `docker-compose restart` resumes in lockstep; killing one validator leaves the other two finalizing (2/3 quorum); the restarted node syncs and rejoins without a fork
 
 ---
 
@@ -80,7 +93,7 @@ cd frontend && npm install && npm run dev
 │  Wallet │ Explorer │ Faucet │ Governance  │
 │  Docs │ API Docs │ SDK │ Dev Portal      │
 ├──────────────────────────────────────────┤
-│  Node RPC (port 9933)                    │
+│  Node RPC (port 8545)                    │
 │  17 HTTP endpoints ─ warp server          │
 │  Rate-limited ─ CORS-enabled              │
 ├──────────────────────────────────────────┤

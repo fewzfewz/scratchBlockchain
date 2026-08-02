@@ -52,7 +52,7 @@ module.exports = async function init(options) {
   // .env.example
   fs.writeFileSync(path.join(projectDir, ".env.example"),
     "# Modular Blockchain Connection\n" +
-    "RPC_URL=http://localhost:9933\n" +
+    "RPC_URL=http://localhost:8545\n" +
     "PRIVATE_KEY=0x\n"
   );
 
@@ -85,7 +85,7 @@ module.exports = async function init(options) {
 function getDefaultTemplate(name) {
   return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
 
-const RPC_URL = process.env.RPC_URL || "http://localhost:9933";
+const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
 async function main() {
   const provider = new HttpProvider(RPC_URL);
@@ -108,7 +108,7 @@ main().catch(console.error);
 function getDefiTemplate(name) {
   return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
 
-const RPC_URL = process.env.RPC_URL || "http://localhost:9933";
+const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
 async function main() {
   const provider = new HttpProvider(RPC_URL);
@@ -129,7 +129,7 @@ main().catch(console.error);
 function getNFTTemplate(name) {
   return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
 
-const RPC_URL = process.env.RPC_URL || "http://localhost:9933";
+const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
 async function main() {
   const provider = new HttpProvider(RPC_URL);
@@ -147,7 +147,7 @@ main().catch(console.error);
 function getDAOTemplate(name) {
   return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
 
-const RPC_URL = process.env.RPC_URL || "http://localhost:9933";
+const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
 async function main() {
   const provider = new HttpProvider(RPC_URL);

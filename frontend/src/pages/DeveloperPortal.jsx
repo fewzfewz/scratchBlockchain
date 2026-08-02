@@ -39,7 +39,7 @@ export default function DeveloperPortal() {
               { header: 'Quick Start', code: `import { ModularClient, HttpProvider, Wallet } from '@modular-blockchain/sdk';
 
 const client = new ModularClient(
-  new HttpProvider('http://localhost:9933')
+  new HttpProvider('http://localhost:8545')
 );
 
 // Generate a wallet

@@ -3,13 +3,13 @@ info:
   title: Nebula RPC API
   description: |
     HTTP JSON-RPC API for the Nebula blockchain node.
-    Default endpoint: http://localhost:9933
+    Default endpoint: http://localhost:8545
   version: "0.1.0"
   contact:
     name: Nebula Team
 
 servers:
-  - url: http://localhost:9933
+  - url: http://localhost:8545
     description: Local node
 
 paths:

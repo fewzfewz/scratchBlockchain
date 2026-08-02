@@ -48,7 +48,7 @@ const config: HardhatUserConfig = {
   solidity: "0.8.20",
   networks: {
     modular: {
-      url: process.env.RPC_URL || "http://localhost:9933",
+      url: process.env.RPC_URL || "http://localhost:8545",
       accounts: process.env.PRIVATE_KEY ? [process.env.PRIVATE_KEY] : [],
     },
   },
@@ -96,7 +96,7 @@ import * as dotenv from "dotenv";
 
 dotenv.config();
 
-const RPC_URL = process.env.RPC_URL || "http://localhost:9933";
+const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
 async function main() {
   const provider = new HttpProvider(RPC_URL);

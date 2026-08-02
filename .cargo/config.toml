@@ -1,0 +1,5 @@
+# GCC 15 removed implicit transitive includes that RocksDB's vendored C++
+# headers rely on (e.g. `uint64_t` from <cstdint>). Force-include it so the
+# librocksdb-sys C++ build succeeds on modern toolchains.
+[env]
+CXXFLAGS = "-include cstdint"

@@ -22,7 +22,7 @@ npx tsx scripts/deploy-token.ts --type erc721
 ```typescript
 import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
 
-const client = new ModularClient(new HttpProvider("http://localhost:9933"));
+const client = new ModularClient(new HttpProvider("http://localhost:8545"));
 const wallet = Wallet.generate();
 
 // Mint tokens

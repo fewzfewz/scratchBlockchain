@@ -133,6 +133,22 @@ impl BlockExecutor {
 
         Ok(receipts)
     }
+
+    /// Fetch the latest committed block from storage.
+    ///
+    /// Used as the parent for newly produced blocks so that headers chain to
+    /// the real previous block (instead of a snapshot taken at node startup).
+    pub fn latest_block(&self) -> Result<Block, Box<dyn std::error::Error>> {
+        match self.chain_store.get_latest_height()? {
+            Some(height) => {
+                let data = self.chain_store
+                    .get_block_by_height(height)?
+                    .ok_or_else(|| format!("Block not found at height {}", height))?;
+                Ok(serde_json::from_slice(&data)?)
+            }
+            None => Ok(Block::genesis()),
+        }
+    }
 }
 
 /// Block producer - creates new blocks and submits to consensus
@@ -157,9 +173,6 @@ pub struct BlockProducer {
     
     /// Block production configuration
     config: BlockProducerConfig,
-    
-    /// Channel to send network commands (for broadcasting)
-    network_tx: Option<tokio::sync::mpsc::Sender<crate::rpc::NetworkCommand>>,
 }
 
 impl BlockProducer {
@@ -180,28 +193,38 @@ impl BlockProducer {
             current_slot: 0,
             validator_address,
             config,
-            network_tx: None,
         }
     }
-    
-    /// Set network channel for broadcasting (required for multi-validator networks)
-    pub fn set_network_channel(&mut self, tx: tokio::sync::mpsc::Sender<crate::rpc::NetworkCommand>) {
-        self.network_tx = Some(tx);
+
+    /// Resume block production from the given slot (used on restart so the chain
+    /// continues from its persisted tip instead of restarting at slot 0).
+    pub fn set_current_slot(&mut self, slot: u64) {
+        self.current_slot = slot;
     }
 
-    /// Produce a new block and submit it to the BFT engine.
+    /// Produce a new block and return it for the caller to submit to the BFT
+    /// engine via `create_proposal()`.
     ///
     /// # Flow
     /// 1. Pull transactions from mempool (respecting gas limit)
     /// 2. Pre-validate transactions (nonce, balance, signature)
     /// 3. Build and sign block header (including state_root)
-    /// 4. Submit to BFT engine via `create_proposal()`
-    /// 5. On `FinalizeBlock` event → `execute_and_commit()`
-    pub async fn produce_block(
-        &mut self,
-        parent: &Block,
-    ) -> Result<Block, Box<dyn std::error::Error>> {
-        info!("Producing block at slot {}", self.current_slot);
+    ///
+    /// The block's slot is derived from the BFT engine's current height: height
+    /// h finalizes the block produced at slot h-1 (genesis occupies slot 0).
+    /// Deriving it here — rather than keeping a free-running counter — means a
+    /// proposer that has been idle for many heights still builds the correct
+    /// block for its height, keeping every validator's chain contiguous. The
+    /// parent is always the actual latest committed block, so headers chain
+    /// properly to their real predecessor.
+    pub async fn produce_block(&mut self) -> Result<Block, Box<dyn std::error::Error>> {
+        let slot = {
+            let engine = self.bft_engine.lock().await;
+            engine.height.saturating_sub(1)
+        };
+        self.current_slot = slot;
+        let parent = self.block_executor.latest_block()?;
+        info!("Producing block at slot {}", slot);
 
         // Step 1: Get transactions from mempool (prioritized by fee)
         let mut transactions = self.mempool.get_transactions(self.config.max_transactions_per_block);
@@ -247,66 +270,9 @@ impl BlockProducer {
 
         let block = Block::new(header, valid_transactions.clone());
 
-        // Step 8: Submit to BFT engine
-        let events = {
-            let mut engine = self.bft_engine.lock().await;
-            engine.create_proposal(block.clone())
-        };
-
-        // Step 9: Process BFT events
-        let mut finalized: Option<Block> = None;
-        
-        for event in events {
-            match event {
-                BftEvent::FinalizeBlock(b) => {
-                    info!("Block finalized by BFT engine");
-                    finalized = Some(b);
-                }
-                BftEvent::BroadcastProposal(p) => {
-                    info!("Broadcasting proposal height={} round={}", p.height, p.round);
-                    // FIX: Send to network layer if channel is available
-                    if let Some(tx) = &self.network_tx {
-                        use crate::rpc::NetworkCommand;
-                        if let Err(e) = tx.send(NetworkCommand::BroadcastConsensusMessage(
-                            common::consensus_types::ConsensusMessage::Proposal(p)
-                        )).await {
-                            warn!("Failed to send proposal to network: {}", e);
-                        }
-                    } else {
-                        warn!("No network channel set - proposal not broadcasted");
-                    }
-                }
-                BftEvent::BroadcastVote(v) => {
-                    debug!("Broadcasting {:?} vote height={} round={}", v.step, v.height, v.round);
-                    if let Some(tx) = &self.network_tx {
-                        use crate::rpc::NetworkCommand;
-                        if let Err(e) = tx.send(NetworkCommand::BroadcastConsensusMessage(
-                            common::consensus_types::ConsensusMessage::Vote(v)
-                        )).await {
-                            warn!("Failed to send vote to network: {}", e);
-                        }
-                    }
-                }
-                BftEvent::NewRound(h, r) => {
-                    info!("BFT new round height={} round={}", h, r);
-                }
-                BftEvent::Timeout(step) => {
-                    warn!("BFT timeout at step {:?}", step);
-                }
-            }
-        }
-
-        // Step 10: Execute and commit if BFT finalized immediately (single-validator case)
-        if let Some(final_block) = finalized {
-            self.block_executor.execute_and_commit(&final_block)?;
-            self.mempool.remove_transactions(&valid_transactions);
-            self.current_slot += 1;
-            return Ok(final_block);
-        }
-
-        // Multi-validator path: block is proposed, waiting for votes from peers.
-        // The node's main loop will call handle_finalized_block() when 2/3 votes arrive.
-        self.current_slot += 1;
+        // The caller (node main loop) submits the block to the BFT engine via
+        // create_proposal(), which broadcasts the proposal and vote. Returning
+        // the block here keeps a single code path for proposing.
         Ok(block)
     }
 
@@ -444,20 +410,31 @@ mod tests {
     #[tokio::test]
     async fn test_empty_block_production() {
         let (mut producer, _mempool) = make_test_setup();
-        let genesis = Block::genesis();
-        let result = producer.produce_block(&genesis).await;
+        let result = producer.produce_block().await;
         assert!(result.is_ok(), "Empty block should be produced: {:?}", result.err());
         let block = result.unwrap();
         assert_eq!(block.extrinsics.len(), 0);
+        // BFT starts at height 1, so the produced block lives at slot 0.
+        assert_eq!(block.header.slot, 0);
     }
 
     #[tokio::test]
-    async fn test_slot_increments_after_production() {
+    async fn test_slot_tracks_bft_height() {
         let (mut producer, _mempool) = make_test_setup();
+        // BFT height 1 -> slot 0
+        producer.produce_block().await.unwrap();
         assert_eq!(producer.current_slot, 0);
-        let genesis = Block::genesis();
-        producer.produce_block(&genesis).await.unwrap();
-        assert_eq!(producer.current_slot, 1);
+
+        // Advance the engine to height 5; a previously-idle proposer must
+        // produce the correct slot for that height (4), not a stale counter.
+        {
+            let mut engine = producer.bft_engine.lock().await;
+            engine.height = 5;
+        }
+        producer.produce_block().await.unwrap();
+        assert_eq!(producer.current_slot, 4);
+        let block = producer.produce_block().await.unwrap();
+        assert_eq!(block.header.slot, 4);
     }
 
     #[tokio::test]
@@ -470,8 +447,7 @@ mod tests {
         tx.signature = vec![]; // empty - should be dropped
         let _ = mempool.add_transaction(tx);
 
-        let genesis = Block::genesis();
-        let result = producer.produce_block(&genesis).await;
+        let result = producer.produce_block().await;
         assert!(result.is_ok());
         // Unsigned tx should have been filtered before EVM
         assert_eq!(result.unwrap().extrinsics.len(), 0);
