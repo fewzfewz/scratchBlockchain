@@ -421,6 +421,7 @@ impl Node {
         let rpc_server = node::rpc::RpcServer::new(
             mempool.clone(),
             chain_store.clone(),
+            state_trie.clone(),
             metrics.clone(),
             (*network_cmd_sender).clone(),
             config.api.rate_limit,
