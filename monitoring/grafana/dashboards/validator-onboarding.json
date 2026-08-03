@@ -1,0 +1,72 @@
+{
+  "annotations": {
+    "list": []
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "id": 1,
+      "title": "Active Validators",
+      "type": "stat",
+      "targets": [{ "expr": "blockchain_validator_count", "legendFormat": "validators" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "id": 2,
+      "title": "Total Stake",
+      "type": "stat",
+      "targets": [{ "expr": "blockchain_validator_stake_total", "legendFormat": "stake" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "id": 3,
+      "title": "Peer Count",
+      "type": "stat",
+      "targets": [{ "expr": "blockchain_peer_count", "legendFormat": "peers" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "id": 4,
+      "title": "Finalized Height",
+      "type": "stat",
+      "targets": [{ "expr": "blockchain_finalized_height", "legendFormat": "height" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 5,
+      "title": "Block Production Rate",
+      "type": "timeseries",
+      "targets": [{ "expr": "rate(blockchain_blocks_total[5m])", "legendFormat": "{{job}}" }]
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 6,
+      "title": "Validator Up",
+      "type": "timeseries",
+      "targets": [{ "expr": "up{job=~\"validator.*\"}", "legendFormat": "{{job}}" }]
+    }
+  ],
+  "schemaVersion": 38,
+  "style": "dark",
+  "tags": ["nebula", "validator", "onboarding"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "Validator Onboarding",
+  "uid": "validator-onboarding",
+  "version": 1
+}

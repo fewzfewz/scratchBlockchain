@@ -5,6 +5,158 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+### SDK & developer docs (Aug 2026)
+- SDK `HttpProvider` aligned to all 32 node RPC routes
+- `ModularClient`: tx history, WASM, faucet, validators, MEV, AA methods
+- `/status` returns `chain_id` for SDK `getChainId()`
+- `BLOCKCHAIN_COMPARISON.md` rewritten for v0.3.4
+- Pre-mainnet marked **100% code-complete**
+
+---
+
+## [0.3.4] - 2026-08-03
+
+### Added
+
+#### Tier A — Polish
+- OpenAPI synced (32 routes including WASM, MEV, AA)
+- CI integration job with Docker testnet smoke tests
+- WASM: fuel metering (wasmtime 21), `POST /deploy_wasm`, `POST /call_wasm`, `GET /wasm/contracts`
+- Block producer executes `WASM:<name>:<func>:<arg>` transaction payloads
+- Bridge integration test improvements
+- Rollup fraud proofs re-execute via EVM and compare `state_root()`
+
+#### Tier B — Production
+- `ChainStoreEvmStore` — EVM accounts/storage/code persist in RocksDB
+- MEV Shamir secret sharing via `sharks` crate
+- DA Merkle-root blob commitments with opening proofs
+
+#### Tier C — Ops
+- Adversarial slashing tests
+- `deployment/cloud/configs/alertmanager.prod.yml.example`
+
+### Changed
+- wasmtime upgraded 14 → 21 for fuel metering
+- Docs updated: ROADMAP, da/README, interop/README, FEATURES_EXHAUSTIVE
+
+---
+
+## [0.3.3] - 2026-08-03
+
+### Added
+
+#### BFT Validator Hot-Reload
+- `BftEngine::update_validator_set()` and `FinalityGadget::update_validator_set()`
+- `governance_store::load_consensus_validators()` — active validators with stake + delegated weight
+- Node syncs validator set after block finalize and every 5s metrics tick
+- Startup loads validators from state trie when `chain_tip > 0`
+
+#### Patricia Trie GC
+- `PatriciaTrie::gc_orphan_nodes()` — removes unreachable 32-byte state nodes
+- Runs automatically after block/receipt prune pass
+
+#### Integration Tests
+- `12-vote-proposal.js`, `13-execute-proposal.js`
+- `17-unstake-tokens.js`, `18-register-validator.js`
+- `run-all-tests.sh` updated with governance vote/execute and staking lifecycle
+
+#### Crypto Hardening
+- DA: Reed–Solomon erasure coding via `reed-solomon-erasure`
+- MEV: AES-256-GCM encryption replaces XOR at rest
+- ZK: block hash bound into state-transition proofs; batch verify checks 32-byte proofs
+
+#### Public Testnet & Audit Prep
+- `PUBLIC_TESTNET.md` and `deployment/cloud/scripts/deploy-public-testnet.sh`
+- `AUDIT_READINESS.md` and `MAINNET_CHECKLIST.md`
+
+### Fixed
+- `PatriciaTrie::gc_orphan_nodes()` batch delete key type (`Vec<u8>` vs `&Vec<u8>`)
+- `node` binary: use `node::governance_store` module path consistently
+
+---
+
+## [0.3.2] - 2026-08-03
+
+### Added
+
+#### State Pruning
+- `storage/src/pruner.rs` with archive/full/minimal modes
+- Automatic prune after block finalize (`blocks_to_keep`, `prune_every_n_blocks` config)
+
+#### Testing
+- Localhost integration tests: governance propose, stake/delegate, bridge readiness, upgrade proposal
+- Load test (`40-load-test.js`) and chaos smoke test (`41-chaos-smoke.js`)
+- Shared test helpers under `tests/localhost/scripts/lib/`
+
+#### Validator Ops
+- `/validators/onboard` frontend page with health checks and registration form
+- Grafana `validator-onboarding` dashboard
+- Alertmanager in local Docker stack; Prometheus alerts on `blockchain_*` metrics
+
+---
+
+## [0.3.1] - 2026-08-03
+
+### Added
+
+#### Node RPC
+- `GET /txs/{address}?limit=N` — on-chain transaction history (scans recent blocks)
+
+#### Frontend
+- `/deploy` — contract deployment page (ERC20/ERC721 presets, gas estimate)
+- Wallet merges on-chain history from `GET /txs/{address}` with local pending txs
+- Staking explorer rewards estimator (5.2% APR minus validator commission)
+
+#### Stub Improvements
+- Interop token registry: real Ethereum mainnet addresses + mapped Nebula addresses
+- Network sync: deterministic state roots, state chunks, pending block request tracking
+- `WasmExecutor::execute_i32` for i32 arg/return WASM calls
+- SDK deploy CLI: preset ERC20/ERC721 init bytecode
+
+---
+
+## [0.3.0] - 2026-08-03
+
+### Added
+
+#### Node Integration (`node/src/tx_pool.rs`)
+- **`TxPool`** — unified transaction pool wrapping `MevMempool` + `AccountAbstractionExecutor`
+- Block producer pulls AA bundles first, then MEV-ready and regular mempool transactions
+
+#### New RPC Endpoints (28 total: 27 HTTP + WebSocket)
+- `POST /submit_user_operation` — ERC-4337 account abstraction
+- `GET /user_operations/pending` — pending AA operation count
+- `POST /mev/commit`, `POST /mev/reveal` — commit-reveal MEV protection
+- `POST /mev/encrypted`, `POST /mev/decryption_share` — threshold-encrypted mempool
+- `GET /slashing/events` — slashed validator list
+- `POST /delegate` — delegate stake to validator
+- `POST /validators/register` — dynamic validator registration
+- `GET /ws` — WebSocket `newHead` events (every 2s)
+- `GET /governance`, `GET /proposal/{id}` — on-chain governance queries (documented)
+
+#### Economic Engine
+- 50% fee burn logged per finalized block
+- 10% of block fees credited to on-chain treasury
+
+#### Consensus
+- BFT height re-anchor every 10s when drifted from chain tip
+- Deterministic state roots: `SHA256(parent_state_root || extrinsics_root)`
+
+### Changed
+- RpcServer uses `TxPool` instead of bare `Mempool`
+- `SlashingTracker` wired into node (height tracking on finalize)
+- Server-side faucet cooldown enforced on `POST /faucet/request` (60s per address)
+- State root verification uses deterministic hash formula (non-zero roots only)
+
+### Known Limitations
+- OpenAPI spec (`docs/openapi.yaml`) not yet updated for all new routes
+- MEV threshold encryption uses simplified XOR (not full Shamir)
+- WASM executor, ZK/KZG, DA erasure coding, bridge crypto still stubs
+- No EVM contract deployment UI; no on-chain tx history page
+- BFT engine does not hot-reload after `POST /validators/register`
+
+---
+
 ## [0.2.0] - 2026-06-25
 
 ### Added
@@ -55,7 +207,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Known Limitations
 
-- No WebSocket support (HTTP-only polling)
+- OpenAPI spec may lag behind latest RPC routes (see README RPC table)
+- MEV/ZK/DA crypto uses simplified implementations in places
 - No EVM contract deployment UI
 - No transaction history page
 - Rust build requires ~5 GB disk space

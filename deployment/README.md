@@ -2,6 +2,20 @@
 
 Infrastructure-as-code for local and cloud deployments of the Modular Blockchain.
 
+## Local testnet (August 2026)
+
+| Service | URL |
+|---------|-----|
+| Node RPC | `http://localhost:8545`–`8549` |
+| WebSocket | `ws://localhost:8545/ws` |
+| Frontend | `http://localhost:5173` |
+| Prometheus | `http://localhost:9095` |
+| Grafana | `http://localhost:3000` |
+
+```bash
+cd deployment/local && docker-compose up -d
+```
+
 ## Structure
 
 | Path | Description |

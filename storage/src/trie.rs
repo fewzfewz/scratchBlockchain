@@ -21,13 +21,14 @@
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::sync::{Arc, RwLock};
 use tracing::debug;
 
 use crate::db::ColumnFamily;
 use crate::db::KeyValueStore;
+use crate::db::WriteBatch;
 
 /// Nibble (4-bit value) used for trie paths
 /// Hex characters (0-15) represent half-bytes
@@ -353,6 +354,55 @@ impl PatriciaTrie {
     /// Get trie statistics
     pub fn get_stats(&self) -> TrieStats {
         self.stats.read().unwrap().clone()
+    }
+
+    /// Remove Patricia trie nodes not reachable from the current root.
+    pub fn gc_orphan_nodes(&mut self) -> Result<usize, Box<dyn Error>> {
+        let root = self.root_hash();
+        let mut reachable = HashSet::new();
+        self.collect_reachable(root, &mut reachable)?;
+
+        let mut batch = WriteBatch::new();
+        let mut deleted = 0usize;
+        for (key, _) in self.db.iter(ColumnFamily::State)? {
+            if key == b"root" || key.len() != 32 {
+                continue;
+            }
+            let mut hash = [0u8; 32];
+            hash.copy_from_slice(&key);
+            if !reachable.contains(&hash) {
+                batch.delete(ColumnFamily::State, key);
+                deleted += 1;
+            }
+        }
+
+        if deleted > 0 {
+            self.db.write_batch(batch)?;
+            let mut cache = self.node_cache.write().unwrap();
+            cache.retain(|h, _| reachable.contains(h));
+        }
+
+        Ok(deleted)
+    }
+
+    fn collect_reachable(
+        &self,
+        hash: NodeHash,
+        seen: &mut HashSet<NodeHash>,
+    ) -> Result<(), Box<dyn Error>> {
+        if hash == EMPTY_TRIE_HASH || !seen.insert(hash) {
+            return Ok(());
+        }
+        match self.get_node(hash)? {
+            TrieNode::Empty | TrieNode::Leaf { .. } => {}
+            TrieNode::Extension { child, .. } => self.collect_reachable(child, seen)?,
+            TrieNode::Branch { children, .. } => {
+                for child in children.into_iter().flatten() {
+                    self.collect_reachable(child, seen)?;
+                }
+            }
+        }
+        Ok(())
     }
     
     // ========================================================================

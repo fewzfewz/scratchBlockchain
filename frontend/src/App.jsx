@@ -2,7 +2,8 @@ import { useState, lazy, Suspense } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Wallet, Droplets, Compass, BookOpen,
-  FileCode, Vote, ExternalLink, Github, Sun, Moon, Menu, X, FileJson,
+  FileCode, Vote, ExternalLink, Github, Sun, Moon, Menu, X, FileJson, Rocket, Shield,
+  History, Layers, GitBranch,
 } from 'lucide-react'
 import { useTheme } from './ThemeContext.jsx'
 import Home from './pages/Home.jsx'
@@ -13,6 +14,13 @@ import DocsPage from './pages/DocsPage.jsx'
 import DeveloperPortal from './pages/DeveloperPortal.jsx'
 import SdkPortal from './pages/SdkPortal.jsx'
 import Governance from './pages/Governance.jsx'
+import ContractDeployPage from './pages/ContractDeployPage.jsx'
+import ValidatorOnboardPage from './pages/ValidatorOnboardPage.jsx'
+import HistoryPage from './pages/HistoryPage.jsx'
+import DeFiPage from './pages/DeFiPage.jsx'
+import ContractInteractPage from './pages/ContractInteractPage.jsx'
+import BridgePage from './pages/BridgePage.jsx'
+import NftPage from './pages/NftPage.jsx'
 
 const ApiDocs = lazy(() => import('./pages/ApiDocs.jsx'))
 
@@ -20,8 +28,14 @@ const NAV_ITEMS = [
   { to: '/', icon: LayoutDashboard, label: 'Home' },
   { to: '/explorer', icon: Compass, label: 'Explorer' },
   { to: '/wallet', icon: Wallet, label: 'Wallet' },
+  { to: '/history', icon: History, label: 'History' },
+  { to: '/deploy', icon: Rocket, label: 'Deploy' },
+  { to: '/contracts', icon: FileCode, label: 'Contracts' },
+  { to: '/defi', icon: Layers, label: 'DeFi' },
+  { to: '/bridge', icon: GitBranch, label: 'Bridge' },
   { to: '/faucet', icon: Droplets, label: 'Faucet' },
   { to: '/governance', icon: Vote, label: 'Governance' },
+  { to: '/validators/onboard', icon: Shield, label: 'Validators' },
   { to: '/docs', icon: BookOpen, label: 'Docs' },
   { to: '/api-docs', icon: FileJson, label: 'API' },
   { to: '/sdk', icon: FileCode, label: 'SDK' },
@@ -34,7 +48,7 @@ function Navbar() {
 
   return (
     <>
-      <nav className="glass-nav fixed top-0 left-0 right-0 z-50 h-14">
+      <nav className="glass-nav fixed top-0 left-0 right-0 z-50 h-14 transition-all duration-300">
         <div className="max-w-7xl mx-auto px-4 h-full flex items-center justify-between">
           <NavLink to="/" className="flex items-center gap-2 font-bold">
             <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-xs text-white shadow-lg shadow-blue-500/25">
@@ -50,7 +64,7 @@ function Navbar() {
                 to={to}
                 end={to === '/'}
                 className={({ isActive }) =>
-                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                  `flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all duration-200 nav-glow ${
                     isActive
                       ? 'bg-blue-500/15 text-blue-600 dark:text-blue-400'
                       : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/40'
@@ -135,11 +149,18 @@ export default function App() {
           <Route path="/" element={<Home />} />
           <Route path="/explorer" element={<Explorer />} />
           <Route path="/wallet" element={<WalletPage />} />
+          <Route path="/history" element={<HistoryPage />} />
+          <Route path="/deploy" element={<ContractDeployPage />} />
+          <Route path="/contracts" element={<ContractInteractPage />} />
+          <Route path="/defi" element={<DeFiPage />} />
+          <Route path="/bridge" element={<BridgePage />} />
+          <Route path="/nft" element={<NftPage />} />
           <Route path="/faucet" element={<FaucetPage />} />
           <Route path="/docs" element={<DocsPage />} />
           <Route path="/developer-portal" element={<DeveloperPortal />} />
           <Route path="/sdk" element={<SdkPortal />} />
           <Route path="/governance/*" element={<Governance />} />
+          <Route path="/validators/onboard" element={<ValidatorOnboardPage />} />
           <Route path="/api-docs" element={
             <Suspense fallback={
               <div className="relative min-h-[70vh] overflow-hidden animate-fade-in">

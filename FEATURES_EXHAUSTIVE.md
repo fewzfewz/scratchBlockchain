@@ -84,7 +84,7 @@ Based on actual source code analysis (not documentation claims).
 | EvmStore trait | `EvmStore` trait (`evm.rs`) | get/put account, storage, code |
 | InMemoryStore | `InMemoryStore` (`evm.rs`) | in-memory EvmStore impl |
 | StoredAccount | `StoredAccount` (`evm.rs`) | balance, nonce, code_hash |
-| WasmExecutor | `WasmExecutor` (`lib.rs`) | placeholder (stub) |
+| WasmExecutor | `WasmExecutor` (`lib.rs`) | fuel-metered execution; `POST /deploy_wasm`, `/call_wasm` |
 | ParallelExecutor | `ParallelExecutor` (`lib.rs`) | rayon-based parallel tx execution |
 | UserOperation | `UserOperation` (`account_abstraction.rs`) | ERC-4337 style, hash(), to_transaction() |
 | AccountAbstraction | `AccountAbstraction` (`account_abstraction.rs`) | handle_user_ops, verify paymaster, entry point logic |
@@ -156,7 +156,7 @@ Based on actual source code analysis (not documentation claims).
 | KzgCommitment | `KzgCommitment` (`lib.rs`) | simplified SHA256-based commitment (placeholder for real KZG) |
 | DataBlob | `DataBlob` (`lib.rs`) | data + commitment + index, self-verify |
 | ErasureChunk | `ErasureChunk` (`lib.rs`) | chunk data, index, total, Merkle proof |
-| ErasureCoder | `ErasureCoder` (`lib.rs`) | XOR-based encode/decode, configurable data+parity chunks |
+| ErasureCoder | `ErasureCoder` (`lib.rs`) | Reed–Solomon encode/decode (4 data + 2 parity) |
 | AvailabilitySampler | `AvailabilitySampler` (`lib.rs`) | sample chunks, verify availability ratio |
 | DataAvailability | `DataAvailability` (`lib.rs`) | submit_blob, get_blob, encode_blob, verify_availability |
 | DaLightClient | `DaLightClient` (`lib.rs`) | trusted roots, sample_availability, verify_blob |
@@ -259,13 +259,25 @@ Based on actual source code analysis (not documentation claims).
 
 | Issue | Location | Details |
 |---|---|---|
-| Consensus broken | `consensus/src/bft.rs` | "Invalid vote signature" — signature verification fails or vote aggregation never reaches 2/3 |
-| Node crate compilation | `node/src/main.rs` | Internal imports like `node::block_producer`, `node::metrics`, `node::light_client`, `node::runtime_upgrade` expect a different module structure |
-| RocksDB primary, sled secondary | `storage/src/db.rs` vs `storage/src/lib.rs` | Production `RocksDb` with column families in `db.rs`; `PersistentStore` / `ReceiptStore` / `StateStore` use sled |
+| Full MPT state root from EVM | `node/src/block_producer.rs` | Uses deterministic `SHA256(parent \|\| extrinsics)`; not full trie root from EVM diffs |
+| BFT hot-reload after register | `node/src/main.rs` | `POST /validators/register` updates trie but not live BFT validator keys |
 | ZK circuit simplified | `zk/src/lib.rs:75` | Constraint is `new = prev + tx` instead of a real hash function |
 | KZG setup unsafe | `zk/src/lib.rs:176` | `OsRng` instead of a real trusted setup ceremony |
-| DA erasure coding XOR-based | `da/src/lib.rs:116-132` | Parity chunks can't actually recover missing data; real RS not implemented |
-| Threshold encryption XOR-based | `mev/src/lib.rs:590-597` | Real Shamir's Secret Sharing not implemented |
-| Bridge signature verify stubbed | `interop/src/ethereum_bridge.rs:146-148` | Just checks count, not actual crypto |
-| Fraud proof re-execution stubbed | `rollup/src/lib.rs:334-337` | `execute_transaction` returns state unchanged |
-| Wasm executor stub | `execution/src/lib.rs` | Empty/placeholder implementation |
+| DA erasure coding | `da/src/lib.rs` | Reed–Solomon via `reed-solomon-erasure` |
+| MEV threshold encryption | `mev/src/lib.rs` | Shamir via `sharks` + AES-256-GCM at rest |
+| Bridge signature verify | `interop/src/ethereum_bridge.rs` | Ed25519 multi-relayer verification |
+| Fraud proof re-execution | `rollup/src/lib.rs` | EVM re-exec with `state_root()` comparison |
+| Wasm executor | `execution/src/lib.rs` | wasmtime fuel metering + deploy/call RPC |
+| EVM persistence | `node/src/evm_store.rs` | ChainStore-backed EVM state survives restarts |
+| OpenAPI spec lag | `docs/openapi.yaml` | New RPC routes documented in README/STATUS; Swagger update pending |
+
+## Recently integrated (August 2026)
+
+| Feature | Location | Details |
+|---|---|---|
+| TxPool | `node/src/tx_pool.rs` | MevMempool + AccountAbstractionExecutor |
+| Account abstraction RPC | `node/src/rpc.rs` | `POST /submit_user_operation`, `GET /user_operations/pending` |
+| MEV RPC | `node/src/rpc.rs` | `/mev/commit`, `/mev/reveal`, `/mev/encrypted`, `/mev/decryption_share` |
+| Slashing RPC | `node/src/rpc.rs` | `GET /slashing/events`; tracker in node loop |
+| Delegation / register | `node/src/governance_store.rs` | `POST /delegate`, `POST /validators/register` |
+| WebSocket | `node/src/rpc.rs` | `GET /ws` — `newHead` events |

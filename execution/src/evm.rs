@@ -23,6 +23,23 @@ pub trait EvmStore: Send + Sync {
     fn get_code(&self, code_hash: &B256) -> Option<Bytecode>;
     fn put_code(&self, code_hash: B256, bytecode: Bytecode);
     fn delete_account(&self, address: &Address);
+
+    /// Deterministic state root over all EVM accounts, storage slots, and code.
+    fn state_root(&self) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let accounts = self.accounts_for_root();
+        let mut hasher = Sha256::new();
+        for (k, v) in accounts {
+            hasher.update(&k);
+            hasher.update(&v);
+        }
+        hasher.finalize().into()
+    }
+
+    /// Override for efficient iteration; default scans in-memory structures only.
+    fn accounts_for_root(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        Vec::new()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -65,6 +82,30 @@ impl EvmStore for InMemoryStore {
     fn delete_account(&self, address: &Address) {
         self.accounts.write().unwrap().remove(address);
     }
+
+    fn accounts_for_root(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let mut pairs = Vec::new();
+        for (addr, acc) in self.accounts.read().unwrap().iter() {
+            let mut k = b"acc:".to_vec();
+            k.extend_from_slice(addr.as_slice());
+            let mut v = acc.balance.as_le_slice().to_vec();
+            v.extend_from_slice(&acc.nonce.to_le_bytes());
+            pairs.push((k, v));
+        }
+        for ((addr, slot), val) in self.storage.read().unwrap().iter() {
+            let mut k = b"sto:".to_vec();
+            k.extend_from_slice(addr.as_slice());
+            k.extend_from_slice(slot.as_le_slice());
+            pairs.push((k, val.as_le_slice().to_vec()));
+        }
+        for (hash, code) in self.code.read().unwrap().iter() {
+            let mut k = b"cod:".to_vec();
+            k.extend_from_slice(hash.as_slice());
+            pairs.push((k, code.bytecode.to_vec()));
+        }
+        pairs.sort_by(|a, b| a.0.cmp(&b.0));
+        pairs
+    }
 }
 
 pub struct EvmDb {
@@ -88,6 +129,10 @@ impl EvmDb {
     {
         self.block_hash_provider = Some(Arc::new(provider));
         self
+    }
+
+    pub fn state_root(&self) -> [u8; 32] {
+        self.store.state_root()
     }
 }
 
@@ -445,6 +490,52 @@ impl EvmExecutor {
             Address::from_str(address).map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
         let account = self.db.basic(addr)?;
         Ok(account.map(|a| a.nonce).unwrap_or(0))
+    }
+
+    /// Current EVM state root (for rollups and fraud proofs).
+    pub fn state_root(&self) -> [u8; 32] {
+        self.db.db.state_root()
+    }
+
+    /// Read-only EVM call (no state commit, no signature required).
+    pub fn static_call(
+        store: Arc<dyn EvmStore>,
+        from: Address,
+        to: Address,
+        data: Vec<u8>,
+        value: U256,
+    ) -> Result<Vec<u8>> {
+        let mut db = CacheDB::new(EvmDb::new(store));
+        let mut evm = EVM::new();
+        evm.database(&mut db);
+        evm.env.tx.caller = from;
+        evm.env.tx.transact_to = TransactTo::Call(to);
+        evm.env.tx.data = Bytes::from(data);
+        evm.env.tx.value = value;
+        evm.env.tx.gas_limit = 30_000_000;
+        evm.env.tx.gas_price = U256::ZERO;
+        evm.env.tx.nonce = None;
+        evm.env.tx.chain_id = None;
+        evm.env.cfg.disable_balance_check = true;
+        evm.env.cfg.disable_nonce_check = true;
+        evm.env.cfg.disable_base_fee = true;
+
+        let result = evm
+            .transact()
+            .map_err(|e| anyhow::anyhow!("EVM call error: {:?}", e))?;
+
+        match result.result {
+            ExecutionResult::Success { output, .. } => match output {
+                Output::Call(bytes) => Ok(bytes.to_vec()),
+                Output::Create(bytes, _) => Ok(bytes.to_vec()),
+            },
+            ExecutionResult::Revert { output, .. } => {
+                anyhow::bail!("Call reverted: 0x{}", hex::encode(output))
+            }
+            ExecutionResult::Halt { reason, .. } => {
+                anyhow::bail!("Call halted: {:?}", reason)
+            }
+        }
     }
 }
 

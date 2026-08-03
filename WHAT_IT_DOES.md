@@ -22,7 +22,7 @@ A **modular Rust blockchain** with a **unified React frontend** for local develo
 | **Dev Portal** | Developer tools overview |
 | **Home** | Quick links to all pages |
 
-### Node RPC (http://localhost:8545 — 17 endpoints)
+### Node RPC (http://localhost:8545 — 29 endpoints)
 
 | Method | Endpoint | What it does |
 |--------|----------|-------------|
@@ -30,6 +30,15 @@ A **modular Rust blockchain** with a **unified React frontend** for local develo
 | GET | `/status` | Height, finalized height, mempool size, peer count |
 | GET | `/mempool` | Pending transactions |
 | POST | `/submit_tx` | Submit a signed transaction |
+| POST | `/submit_user_operation` | Submit ERC-4337 UserOperation |
+| GET | `/user_operations/pending` | Pending AA ops count |
+| POST | `/mev/commit` | MEV commit-reveal commitment |
+| POST | `/mev/reveal` | Reveal committed transaction |
+| POST | `/mev/encrypted` | Submit encrypted transaction |
+| POST | `/mev/decryption_share` | Validator decryption share |
+| GET | `/slashing/events` | Slashed validators |
+| POST | `/delegate` | Delegate stake to validator |
+| POST | `/validators/register` | Register new validator |
 | GET | `/block/{height}` | Block by number |
 | GET | `/block/hash/{hash}` | Block by hash |
 | GET | `/block/latest` | Most recent block |
@@ -38,12 +47,15 @@ A **modular Rust blockchain** with a **unified React frontend** for local develo
 | GET | `/gas_price` | EIP-1559 gas price suggestions |
 | POST | `/estimate_gas` | Estimate gas for a transaction |
 | GET | `/fee_history/{count}` | Historical base fees |
-| GET | `/validators` | Active validators (from genesis) |
+| GET | `/validators` | Active validators |
 | GET | `/delegations/{address}` | Delegations for an address |
+| GET | `/governance` | On-chain governance state |
+| GET | `/proposal/{id}` | Single proposal |
 | POST | `/connect_peer` | Connect to a libp2p peer |
 | GET | `/peers` | Connected peers list |
 | GET | `/metrics` | Prometheus metrics |
-| POST | `/faucet/request` | Credit an address with test tokens |
+| POST | `/faucet/request` | Credit address (60s server cooldown) |
+| WS | `/ws` | WebSocket `newHead` events |
 
 ### Blockchain Backend
 
@@ -51,9 +63,10 @@ A **modular Rust blockchain** with a **unified React frontend** for local develo
 - **Execution**: EVM (revm), Native, WASM-ready (wasmtime)
 - **Storage**: RocksDB with column families + in-memory fallback
 - **Networking**: libp2p (gossipsub, Kademlia, request-response)
-- **Mempool**: Priority-ordered, fee-based eviction, per-sender limits
-- **Gas**: EIP-1559 style (base fee, priority fee, fee burning)
-- **Staking/Slashing**: Commission rates, delegation, slashing (double-sign, downtime, invalid state)
+- **Mempool**: Priority-ordered via `TxPool` (MEV + account abstraction + regular pool)
+- **Account abstraction**: ERC-4337 bundler wired; `POST /submit_user_operation`
+- **MEV**: Commit-reveal + encrypted mempool wired; `/mev/*` RPC routes
+- **Staking/Slashing**: `POST /delegate`, `GET /slashing/events`; slashing tracker in node loop
 - **Governance**: Proposals, voting, treasury
 - **Runtime upgrades**: Hot-swap, migration, rollback
 - **MEV**: Threshold encryption, commit-reveal, builder auction
@@ -85,8 +98,8 @@ cd frontend && npm install && npm run dev
 
 ```
 Frontend (port 5173) ←──→ Node RPC (port 8545)
-  React SPA                 warp HTTP server
-  9 pages                   17 endpoints
+  React SPA                 warp HTTP + WebSocket
+  9 pages                   28 endpoints
   dark/light mode           rate-limited
   Swagger UI docs           CORS-enabled
 ```
@@ -113,11 +126,13 @@ The frontend is a single-page React app. The node is a single Rust binary. No se
 ## Known Issues
 
 - **Faucet offline**: Node must be running at port 8545; frontend shows amber warning if unreachable
+- **Faucet cooldown**: Server enforces 60s between drips to the same address
 - **No tx history**: Wallet shows balance/nonce but no list of past transactions
 - **No EVM contract UI**: Can't deploy or query smart contracts from the frontend
-- **No WebSocket**: Frontend polls every 10-15s instead of receiving push events
+- **OpenAPI lag**: Swagger UI may not list all new routes yet — see README RPC table
+- **Simplified crypto**: MEV threshold encryption, ZK, DA use stub/simplified implementations
 - **Rust build**: Requires ~5 GB disk space for compilation
 
 ---
 
-*Version: 1.0.0-alpha | Last Updated: June 25, 2026 | Status: Development*
+*Version: 1.0.0-alpha | Last Updated: August 3, 2026 | Status: Development (~87%)*

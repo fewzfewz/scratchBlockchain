@@ -1,15 +1,19 @@
 import { useEffect, useState } from 'react'
 import { Compass, Activity, Shield } from 'lucide-react'
+import PageShell from '../components/PageShell.jsx'
+import AnimatedSection from '../components/AnimatedSection.jsx'
 import DashboardTab from './explorer/DashboardTab.jsx'
 import ValidatorsTab from './explorer/ValidatorsTab.jsx'
 import StakingTab from './explorer/StakingTab.jsx'
 import BlocksTab from './explorer/BlocksTab.jsx'
+import AddressTab from './explorer/AddressTab.jsx'
 
 const API_URL = 'http://localhost:8545'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
   { id: 'blocks', label: 'Blocks' },
+  { id: 'address', label: 'Address' },
   { id: 'validators', label: 'Validators' },
   { id: 'staking', label: 'Staking' },
 ]
@@ -39,15 +43,8 @@ export default function Explorer() {
   }, [])
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Aurora blobs */}
-      <div className="absolute -top-40 -right-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
-      <div className="absolute top-40 -left-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-slow pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.4), transparent 70%)' }} />
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
-
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-10 animate-fade-in">
+    <PageShell variant="default">
+      <div className="max-w-5xl mx-auto px-4 py-10 animate-fade-in">
         {/* ── Header ─────────────────────────────────────────────── */}
         <header className="text-center mb-8">
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
@@ -84,7 +81,7 @@ export default function Explorer() {
         </header>
 
         {/* ── Tab bar ────────────────────────────────────────────── */}
-        <div className="flex gap-1 p-1 rounded-2xl glass-strong mb-6 max-w-md mx-auto">
+        <div className="flex flex-wrap gap-1 p-1 rounded-2xl glass-strong mb-6 max-w-2xl mx-auto">
           {TABS.map(({ id, label }) => (
             <button
               key={id}
@@ -103,10 +100,11 @@ export default function Explorer() {
         <div key={activeTab} className="animate-in">
           {activeTab === 'dashboard' && <DashboardTab />}
           {activeTab === 'blocks' && <BlocksTab />}
+          {activeTab === 'address' && <AddressTab />}
           {activeTab === 'validators' && <ValidatorsTab />}
           {activeTab === 'staking' && <StakingTab />}
         </div>
       </div>
-    </div>
+    </PageShell>
   )
 }

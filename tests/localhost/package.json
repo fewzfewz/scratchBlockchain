@@ -11,7 +11,8 @@
     "test:metrics": "./scripts/check-metrics.sh"
   },
   "dependencies": {
-    "@modular-blockchain/sdk": "file:../../sdk/javascript"
+    "@modular-blockchain/sdk": "file:../../sdk/javascript",
+    "tweetnacl": "^1.0.3"
   },
   "devDependencies": {}
 }

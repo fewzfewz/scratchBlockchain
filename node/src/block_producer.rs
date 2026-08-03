@@ -17,7 +17,8 @@ use common::crypto::SigningKey;
 use common::types::{Block, Header, Transaction};
 use consensus::{BftEngine, BftEvent, ValidatorInfo};
 use execution::evm::{SignedTransaction, EvmExecutor, TransactionReceipt};
-use mempool::Mempool;
+use governance::ChainGovernance;
+use crate::tx_pool::TxPool;
 use storage::{ChainStore, ColumnFamily, WriteBatch};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -65,21 +66,117 @@ impl BlockExecutor {
         Self { evm, chain_store }
     }
 
+    fn execute_wasm_tx(payload: &[u8], chain_store: &Arc<ChainStore>) -> TransactionReceipt {
+        let rest = match std::str::from_utf8(&payload[execution::WASM_TX_PREFIX.len()..]) {
+            Ok(s) => s,
+            Err(_) => {
+                return TransactionReceipt {
+                    success: false,
+                    gas_used: 21_000,
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: Some("Invalid WASM payload encoding".into()),
+                    logs: vec![],
+                };
+            }
+        };
+        let parts: Vec<&str> = rest.splitn(3, ':').collect();
+        if parts.len() < 2 {
+            return TransactionReceipt {
+                success: false,
+                gas_used: 21_000,
+                output: vec![],
+                created_address: None,
+                revert_reason: Some("Invalid WASM payload".into()),
+                logs: vec![],
+            };
+        }
+        let name = parts[0];
+        let func = parts[1];
+        let arg: i32 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let registry = crate::wasm_registry::WasmRegistry::new(chain_store.clone());
+        let wasm = match registry.get(name) {
+            Ok(Some(b)) => b,
+            _ => {
+                return TransactionReceipt {
+                    success: false,
+                    gas_used: 21_000,
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: Some(format!("WASM contract '{}' not found", name)),
+                    logs: vec![],
+                };
+            }
+        };
+        match execution::WasmExecutor::new() {
+            Ok(exec) => match exec.execute_i32(&wasm, func, arg) {
+                Ok((_result, gas)) => TransactionReceipt {
+                    success: true,
+                    gas_used: gas.max(21_000),
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: None,
+                    logs: vec![],
+                },
+                Err(e) => TransactionReceipt {
+                    success: false,
+                    gas_used: 21_000,
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: Some(e.to_string()),
+                    logs: vec![],
+                },
+            },
+            Err(e) => TransactionReceipt {
+                success: false,
+                gas_used: 21_000,
+                output: vec![],
+                created_address: None,
+                revert_reason: Some(e.to_string()),
+                logs: vec![],
+            },
+        }
+    }
+
     /// Execute all transactions in a block and commit everything atomically.
     /// Called by BlockProducer after BFT finalizes a block.
-    /// 
+    ///
+    /// Governance transactions are detected by their payload and applied to the
+    /// node's own state trie (by `governance_store::apply_extrinsics`) rather
+    /// than the EVM. A failing transaction produces a failed receipt instead of
+    /// aborting the whole block, so a single bad transaction cannot stall the
+    /// chain.
+    ///
     /// # Returns
     /// * `Vec<TransactionReceipt>` - Execution receipts for each transaction
     pub fn execute_and_commit(
         &mut self, 
         block: &Block,
     ) -> Result<Vec<TransactionReceipt>, Box<dyn std::error::Error>> {
-        // Convert block transactions to EVM format
         use revm::primitives::{Address, Bytes, U256};
-        let txns: Vec<SignedTransaction> = block
-            .extrinsics
-            .iter()
-            .map(|tx| SignedTransaction {
+
+        let mut receipts = Vec::with_capacity(block.extrinsics.len());
+        for tx in &block.extrinsics {
+            if ChainGovernance::is_governance_payload(&tx.payload) {
+                receipts.push(TransactionReceipt {
+                    success: true,
+                    gas_used: 21_000,
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: None,
+                    logs: vec![],
+                });
+                continue;
+            }
+
+            // WASM contract call: payload `WASM:<name>:<func>:<arg>`
+            if tx.payload.starts_with(execution::WASM_TX_PREFIX) {
+                let receipt = Self::execute_wasm_tx(&tx.payload, &self.chain_store);
+                receipts.push(receipt);
+                continue;
+            }
+
+            let stx = SignedTransaction {
                 caller: Address::from_slice(&tx.sender),
                 to: tx.to.map(|a| Address::from_slice(&a)),
                 value: U256::from(tx.value),
@@ -89,12 +186,23 @@ impl BlockExecutor {
                 gas_price: U256::from(tx.max_fee_per_gas),
                 chain_id: tx.chain_id.unwrap_or(1),
                 signature: None,
-            })
-            .collect();
+            };
 
-        // Execute all transactions sequentially - each transaction sees state changes
-        // from previous transactions in the same block
-        let receipts = self.evm.execute_block(txns)?;
+            match self.evm.execute_transaction(stx) {
+                Ok(receipt) => receipts.push(receipt),
+                Err(e) => {
+                    warn!("Transaction {} failed: {}", hex::encode(tx.hash()), e);
+                    receipts.push(TransactionReceipt {
+                        success: false,
+                        gas_used: 21_000,
+                        output: vec![],
+                        created_address: None,
+                        revert_reason: Some(format!("{}", e)),
+                        logs: vec![],
+                    });
+                }
+            }
+        }
 
         // Build state diff from execution results
         // In a full implementation, this would extract the actual state changes
@@ -153,8 +261,8 @@ impl BlockExecutor {
 
 /// Block producer - creates new blocks and submits to consensus
 pub struct BlockProducer {
-    /// Mempool for transaction selection
-    mempool: Arc<Mempool>,
+    /// Transaction pool (mempool + MEV + account abstraction)
+    tx_pool: Arc<TxPool>,
     
     /// BFT engine for consensus
     bft_engine: Arc<Mutex<BftEngine>>,
@@ -178,7 +286,7 @@ pub struct BlockProducer {
 impl BlockProducer {
     /// Create a new block producer
     pub fn new(
-        mempool: Arc<Mempool>,
+        tx_pool: Arc<TxPool>,
         bft_engine: Arc<Mutex<BftEngine>>,
         block_executor: BlockExecutor,
         signing_key: SigningKey,
@@ -186,7 +294,7 @@ impl BlockProducer {
         config: BlockProducerConfig,
     ) -> Self {
         Self {
-            mempool,
+            tx_pool,
             bft_engine,
             block_executor,
             signing_key,
@@ -226,9 +334,11 @@ impl BlockProducer {
         let parent = self.block_executor.latest_block()?;
         info!("Producing block at slot {}", slot);
 
-        // Step 1: Get transactions from mempool (prioritized by fee)
-        let mut transactions = self.mempool.get_transactions(self.config.max_transactions_per_block);
-        info!("Mempool: {} transactions available", transactions.len());
+        // Step 1: Get transactions from pool (AA bundles + MEV-ready + regular)
+        let transactions = self
+            .tx_pool
+            .get_transactions_for_block(self.config.max_transactions_per_block);
+        info!("Tx pool: {} transactions available", transactions.len());
 
         // Step 2: Calculate gas limits and filter transactions
         let mut total_gas_used = 0u64;
@@ -257,12 +367,14 @@ impl BlockProducer {
         // Step 5: Build extrinsics root (Merkle root of transactions)
         let extrinsics_root = self.compute_extrinsics_root(&valid_transactions);
 
-        // Step 6: Build block header (state_root will be filled after execution)
+        // Step 5: Compute state root (deterministic from parent + extrinsics)
+        let state_root = Self::compute_state_root(&parent.header.state_root, &extrinsics_root);
+
+        // Step 6: Build block header
         let mut header = Header::new(parent.hash(), self.current_slot);
         header.base_fee = base_fee;
         header.extrinsics_root = extrinsics_root;
-        // FIX: state_root will be set after execution - for now use placeholder
-        header.state_root = [0u8; 32]; // Will be updated during finalization
+        header.state_root = state_root;
 
         // Step 7: Sign the header
         let header_hash = header.hash();
@@ -288,7 +400,7 @@ impl BlockProducer {
         );
         
         let receipts = self.block_executor.execute_and_commit(block)?;
-        self.mempool.remove_transactions(&block.extrinsics);
+        self.tx_pool.remove_transactions(&block.extrinsics);
         
         Ok(receipts)
     }
@@ -358,6 +470,15 @@ impl BlockProducer {
         
         hashes[0]
     }
+
+    /// Deterministic state root from parent root + extrinsics root.
+    pub fn compute_state_root(parent_root: &[u8; 32], extrinsics_root: &[u8; 32]) -> [u8; 32] {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(parent_root);
+        hasher.update(extrinsics_root);
+        hasher.finalize().into()
+    }
 }
 
 #[cfg(test)]
@@ -365,11 +486,11 @@ mod tests {
     use super::*;
     use consensus::ValidatorInfo;
     use execution::evm::{EvmExecutor, InMemoryStore};
-    use mempool::{Mempool, MempoolConfig};
+    use mempool::MempoolConfig;
     use storage::{ChainStore, MemDb};
     use std::sync::Arc;
 
-    fn make_test_setup() -> (BlockProducer, Arc<Mempool>) {
+    fn make_test_setup() -> (BlockProducer, Arc<TxPool>) {
         let signing_key = SigningKey::from_bytes(&[1u8; 32]);
         let public_key = signing_key.public_key();
         let validator_addr = [0x01u8; 20];
@@ -393,10 +514,10 @@ mod tests {
         let chain_store = Arc::new(ChainStore::new(db));
         let executor = BlockExecutor::new(evm, chain_store);
 
-        let mempool = Arc::new(Mempool::new(MempoolConfig::default()));
+        let tx_pool = Arc::new(TxPool::new(MempoolConfig::default(), vec![]));
 
         let producer = BlockProducer::new(
-            mempool.clone(),
+            tx_pool.clone(),
             bft_engine,
             executor,
             signing_key,
@@ -404,7 +525,7 @@ mod tests {
             BlockProducerConfig::default(),
         );
 
-        (producer, mempool)
+        (producer, tx_pool)
     }
 
     #[tokio::test]

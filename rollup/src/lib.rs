@@ -146,14 +146,22 @@ impl RollupNode {
                 Err(anyhow::anyhow!("No ZK proof found for ZK rollup batch"))
             }
             RollupType::Optimistic => {
-                // For optimistic rollups, re-execute transactions
+                use execution::evm::{SignedTransaction, EvmExecutor};
+                use revm::primitives::{Address, U256};
+
+                let mut executor = EvmExecutor::new();
                 for tx in &batch.transactions {
-                    let _res = self.executor.execute_transaction(
-                        "0x0000000000000000000000000000000000000000",
-                        None,
-                        0,
-                        &tx.payload,
+                    let stx = SignedTransaction::new(
+                        Address::from_slice(&tx.sender),
+                        tx.to.map(|a| Address::from_slice(&a)),
+                        U256::from(tx.value),
+                        tx.payload.clone(),
+                        tx.nonce,
+                        tx.gas_limit,
+                        U256::from(tx.max_fee_per_gas),
+                        tx.chain_id.unwrap_or(1),
                     );
+                    executor.execute_transaction(stx)?;
                 }
                 Ok(true)
             }
@@ -332,38 +340,33 @@ impl FraudVerifier {
         Ok(is_fraud)
     }
     
-    fn execute_transaction(&self, rollup: &RollupNode, state: &[u8], tx: &Transaction) -> Result<Vec<u8>, String> {
-        // Execute the transaction using the EVM executor from the rollup node
-        let result = rollup.executor.execute_transaction(
-            "0x0000000000000000000000000000000000000000",
-            None,
-            0,
-            &tx.payload,
+    fn execute_transaction(&self, rollup: &RollupNode, _state: &[u8], tx: &Transaction) -> Result<Vec<u8>, String> {
+        use execution::evm::{SignedTransaction, EvmExecutor};
+        use revm::primitives::{Address, Bytes, U256};
+
+        let mut executor = EvmExecutor::new();
+        let stx = SignedTransaction::new(
+            Address::from_slice(&tx.sender),
+            tx.to.map(|a| Address::from_slice(&a)),
+            U256::from(tx.value),
+            Bytes::from(tx.payload.clone()),
+            tx.nonce,
+            tx.gas_limit,
+            U256::from(tx.max_fee_per_gas),
+            tx.chain_id.unwrap_or(1),
         );
-        
-        match result {
-            Ok(receipt) => {
-                // Update state based on transaction execution result
-                let mut new_state = state.to_vec();
-                // Include the receipt hash in state for fraud proof determinism
-                let receipt_hash = receipt.transaction_hash;
-                let mut hasher = Sha256::new();
-                hasher.update(&new_state);
-                hasher.update(&receipt_hash);
-                new_state = hasher.finalize().to_vec();
-                Ok(new_state)
-            }
-            Err(_) => {
-                // Transaction execution failed; hash state with failure marker
-                let mut hasher = Sha256::new();
-                hasher.update(state);
-                hasher.update(b"failed");
-                Ok(hasher.finalize().to_vec())
-            }
-        }
+        executor
+            .execute_transaction(stx)
+            .map_err(|e| e.to_string())?;
+        Ok(executor.state_root().to_vec())
     }
-    
+
     fn hash_state(&self, state: &[u8]) -> [u8; 32] {
+        if state.len() == 32 {
+            let mut root = [0u8; 32];
+            root.copy_from_slice(state);
+            return root;
+        }
         let mut hasher = Sha256::new();
         hasher.update(state);
         hasher.finalize().into()

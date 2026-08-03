@@ -1,4 +1,6 @@
 const hre = require("hardhat");
+const fs = require("fs");
+const path = require("path");
 
 async function main() {
   console.log("Deploying Bridge contract...");
@@ -38,7 +40,6 @@ async function main() {
   const usdtAddress = await usdt.getAddress();
   console.log("Mock USDT deployed to:", usdtAddress);
 
-  // Save deployment info
   const deployment = {
     bridge: bridgeAddress,
     usdc: usdcAddress,
@@ -47,11 +48,35 @@ async function main() {
     requiredSignatures: requiredSignatures,
     chainId: chainId,
     destChainId: destChainId,
-    deployer: deployer.address
+    deployer: deployer.address,
+    ethRpcUrl: process.env.ETH_RPC_URL || "http://127.0.0.1:9545",
+    deployedAt: new Date().toISOString(),
   };
+
+  const deployOut =
+    process.env.BRIDGE_DEPLOY_OUT ||
+    path.join(__dirname, "../../deployment/local/configs/bridge-deployment.json");
+  const frontendOut =
+    process.env.FRONTEND_BRIDGE_CONFIG ||
+    path.join(__dirname, "../../frontend/public/bridge-config.json");
+
+  fs.mkdirSync(path.dirname(deployOut), { recursive: true });
+  fs.mkdirSync(path.dirname(frontendOut), { recursive: true });
+  fs.writeFileSync(deployOut, JSON.stringify(deployment, null, 2));
+
+  const frontendConfig = {
+    bridge: bridgeAddress,
+    ethRpcUrl: deployment.ethRpcUrl,
+    usdc: usdcAddress,
+    usdt: usdtAddress,
+    deployed: true,
+  };
+  fs.writeFileSync(frontendOut, JSON.stringify(frontendConfig, null, 2));
 
   console.log("\nDeployment complete!");
   console.log(JSON.stringify(deployment, null, 2));
+  console.log(`\nSaved: ${deployOut}`);
+  console.log(`Saved: ${frontendOut}`);
 
   // Verify contracts on Etherscan (if not localhost)
   if (hre.network.name !== "localhost" && hre.network.name !== "hardhat") {

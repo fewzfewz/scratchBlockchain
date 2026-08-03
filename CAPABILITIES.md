@@ -1104,7 +1104,7 @@ This modular blockchain is a **comprehensive codebase in development** with broa
 ✅ **Multiple execution environments** (EVM, WASM, Native) — code exists, integrated
 ✅ **Advanced consensus** (BFT + Finality) — working; 3-validator Docker testnet produces blocks in lockstep
 ⚠️ **Cross-chain interoperability** (Ethereum, Cosmos) — code exists, not deployed
-✅ **Developer-friendly tools** (SDK, Faucet, RPC) — working; faucet built into node RPC, 17 endpoints live
-⚠️ **Production features** (Monitoring, Governance, MEV protection) — monitoring live; governance static; MEV not wired into node
+✅ **Developer-friendly tools** (SDK, Faucet, RPC) — 28 endpoints live; AA, MEV, delegation, WebSocket wired
+✅ **Production features** (Monitoring, Governance, MEV) — monitoring live; governance on-chain RPC; MEV integrated via TxPool
 
-**Core testnet runs end-to-end locally; remaining work is wiring dormant features (AA/MEV/slashing), hardening, and production readiness.**
+**Core testnet runs end-to-end locally; remaining work is stub hardening (ZK/DA/WASM/bridge), frontend gaps, public testnet, and security audit.**

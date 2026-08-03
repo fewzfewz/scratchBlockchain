@@ -23,6 +23,8 @@ Node5 ──/metrics──┘   └───────────┘
 
 **Concrete value for you**: you can see the block height climb in real time, spot a validator that stopped producing, watch TPS when you send transactions, and get alerted if a node goes down.
 
+Node metrics are scraped from each container's `/metrics` endpoint (port 26657 in Docker). JSON-RPC for applications is on port **8545**; WebSocket at `ws://localhost:8545/ws`.
+
 ---
 
 ## 2. Starting and Accessing

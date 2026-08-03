@@ -6,15 +6,25 @@ On-chain governance, staking, delegation, slashing, treasury, and tokenomics.
 
 | Module | Description |
 |---|---|
-| `StakingContract` | Register/delegate/undelegate validators, auto-slash at 100 missed blocks, reward distribution |
-| `InflationSchedule` | Halving-based block rewards (64 halvings, ~4yr intervals at 6s blocks), 50% fee burn, 10% treasury |
-| `Governance` | Proposal lifecycle (create/vote/tally/execute), validator-only proposals, simple majority |
-| `GovernanceExecutor` | Parameter changes, validator set updates, treasury spend, runtime upgrades, inflation adjustment |
+| `ChainGovernance` | Persisted on-chain state (proposals, votes, treasury) — keyed `b"governance"` in state trie |
+| `StakingContract` | Register/delegate/undelegate validators, slashing, reward distribution |
+| `InflationSchedule` | Halving-based block rewards, 50% fee burn, 10% treasury |
+| `GovernanceExecutor` | Parameter changes, validator set updates, treasury spend, runtime upgrades |
 | `Treasury` | Deposit/spend with balance checks |
-| `Slashing` | Double-sign (5%), downtime (0.1%), invalid state transition (10%) penalties |
-| `Delegation` | Delegator/validator/rewards tracking with commission rates (0–100%) |
-| `UnbondingRequest` | Timelocked unstaking |
+| `Slashing` | Double-sign, downtime, invalid state penalties |
+| `Delegation` | Delegator/validator tracking with commission rates |
+
+## Node Integration (August 2026)
+
+| RPC / Module | Purpose |
+|--------------|---------|
+| `GET /governance` | Full on-chain governance state |
+| `GET /proposal/{id}` | Single proposal with live status |
+| `POST /delegate` | Delegate stake (`governance_store::apply_delegate`) |
+| `POST /validators/register` | Add validator to dynamic set |
+| `governance_store.rs` | Trie wiring, treasury fee collection on block finalize |
+| Governance txs in blocks | `apply_extrinsics` for `vote` / `propose` payloads |
 
 ## Tests
 
-`tests/economic_tests.rs` — 14 integration tests covering inflation, staking, delegation, slashing, rewards, treasury.
+`tests/economic_tests.rs` — integration tests covering inflation, staking, delegation, slashing, rewards, treasury.

@@ -1,9 +1,13 @@
 pub mod block_producer;
 pub mod circuit_breaker;
+pub mod evm_store;
 pub mod fork_choice;
+pub mod governance_store;
 pub mod light_client;
 pub mod metrics;
 pub mod rpc;
 pub mod runtime_upgrade;
 pub mod test_utils;
 pub mod faucet;
+pub mod tx_pool;
+pub mod wasm_registry;

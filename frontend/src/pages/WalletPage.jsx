@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
 import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Fingerprint, Coins, Fuel, Sliders, ShieldAlert, Droplets, FlaskConical, Plus, Check, History } from 'lucide-react'
+import PageShell from '../components/PageShell.jsx'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b }
@@ -52,6 +53,7 @@ export default function WalletPage() {
   // Tx history
   const [txHistory, setTxHistory] = useState([])
   const [showHistory, setShowHistory] = useState(false)
+  const [historyLoading, setHistoryLoading] = useState(false)
 
   // Tokens tab
   const [walletTab, setWalletTab] = useState('balance') // balance | tokens
@@ -78,6 +80,42 @@ export default function WalletPage() {
       setTxHistory(saved)
     }
   }, [address])
+
+  const fetchChainHistory = useCallback(async () => {
+    if (!address) return
+    setHistoryLoading(true)
+    try {
+      const r = await window.fetch(`${apiUrl}/txs/${address}?limit=25`)
+      if (!r.ok) return
+      const d = await r.json()
+      const chain = (d.transactions || []).map((t) => ({
+        hash: t.hash,
+        to: t.is_contract_creation ? 'Contract deploy' : (t.to || '--'),
+        amount: t.value ? weiToNbl(String(t.value)) : '0',
+        timestamp: Date.now() - (d.scanned_blocks - t.block_height) * 2000,
+        status: t.status || 'confirmed',
+        blockHeight: t.block_height,
+      }))
+      const local = JSON.parse(localStorage.getItem(`nebula_tx_history_${address}`) || '[]')
+      const byHash = new Map()
+      for (const tx of [...chain, ...local]) {
+        const existing = byHash.get(tx.hash)
+        byHash.set(tx.hash, existing ? { ...existing, ...tx, status: tx.status === 'pending' ? existing.status : tx.status } : tx)
+      }
+      const merged = Array.from(byHash.values())
+        .sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+        .slice(0, 50)
+      setTxHistory(merged)
+    } catch {
+      /* keep local history on RPC failure */
+    } finally {
+      setHistoryLoading(false)
+    }
+  }, [address, apiUrl])
+
+  useEffect(() => {
+    if (showHistory && address) fetchChainHistory()
+  }, [showHistory, address, fetchChainHistory])
 
   useEffect(() => {
     const saved = JSON.parse(localStorage.getItem('nebula_accounts') || '[]')
@@ -320,15 +358,8 @@ export default function WalletPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Aurora blobs + grid backdrop */}
-      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
-      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(251,146,60,0.32), transparent 70%)' }} />
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
-
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8 animate-fade-in">
+    <PageShell variant="default">
+      <div className="max-w-5xl mx-auto px-4 py-8 animate-fade-in">
         {/* ── Header ─────────────────────────────────────────────── */}
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <div className="flex items-center gap-3">
@@ -626,7 +657,10 @@ export default function WalletPage() {
                   </div>
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Transaction History</h2>
-                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">Recent activity on this device</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+                      On-chain activity + local pending txs ·{' '}
+                      <Link to={`/history?address=${encodeURIComponent(address)}`} className="text-violet-500 hover:underline">Full history</Link>
+                    </p>
                   </div>
                   {txHistory.length > 0 && (
                     <span className="text-xs bg-blue-500/20 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-full">{txHistory.length}</span>
@@ -637,6 +671,9 @@ export default function WalletPage() {
 
               {showHistory && (
                 <div className="mt-4 space-y-2 max-h-80 overflow-y-auto scrollbar-thin">
+                  {historyLoading && (
+                    <p className="text-xs text-slate-400 text-center py-2">Loading on-chain history...</p>
+                  )}
                   {txHistory.length === 0 ? (
                     <p className="text-sm text-slate-500 dark:text-slate-400 italic text-center py-4">No transactions yet. Send funds to see history.</p>
                   ) : (
@@ -719,6 +756,6 @@ export default function WalletPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   )
 }

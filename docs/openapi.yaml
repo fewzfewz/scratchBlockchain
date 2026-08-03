@@ -4,7 +4,7 @@ info:
   description: |
     HTTP JSON-RPC API for the Nebula blockchain node.
     Default endpoint: http://localhost:8545
-  version: "0.1.0"
+  version: "0.3.4"
   contact:
     name: Nebula Team
 
@@ -43,6 +43,10 @@ paths:
                     type: integer
                     description: Number of connected peers
                     example: 3
+                  chain_id:
+                    type: integer
+                    description: Chain identifier (EIP-155 replay protection)
+                    example: 1
 
   /health:
     get:
@@ -392,6 +396,83 @@ paths:
                   address:
                     type: string
 
+  # ─── Governance ───────────────────────────────────────────────────────────
+  /governance:
+    get:
+      summary: Governance state
+      description: Returns on-chain governance state (proposals, treasury, parameters) read directly from the state trie.
+      operationId: getGovernance
+      responses:
+        "200":
+          description: Governance overview
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  params:
+                    type: object
+                    properties:
+                      proposal_deposit:
+                        type: string
+                      voting_period_blocks:
+                        type: integer
+                      quorum_threshold_bps:
+                        type: integer
+                      pass_threshold_bps:
+                        type: integer
+                  treasury:
+                    type: object
+                    properties:
+                      balance:
+                        type: string
+                      total_collected:
+                        type: string
+                      total_spent:
+                        type: string
+                  total_stake:
+                    type: string
+                  next_proposal_id:
+                    type: integer
+                  height:
+                    type: integer
+                  proposals:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Proposal"
+
+  /proposal/{id}:
+    get:
+      summary: Get proposal
+      description: Returns a single proposal with its live status resolved against the current block height.
+      operationId: getProposal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Proposal detail
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  proposal:
+                    allOf:
+                      - $ref: "#/components/schemas/Proposal"
+                      - type: object
+                        properties:
+                          status:
+                            type: string
+                            enum: [active, passed, rejected, executed]
+                          quorum:
+                            type: string
+                  error:
+                    type: [string, "null"]
+
   # ─── Network ──────────────────────────────────────────────────────────────
   /peers:
     get:
@@ -454,6 +535,193 @@ paths:
             text/plain:
               schema:
                 type: string
+
+  /txs/{address}:
+    get:
+      summary: Transaction history for address
+      operationId: getTxsForAddress
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Transaction list
+
+  /faucet/request:
+    post:
+      summary: Request test tokens
+      operationId: faucetRequest
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: string
+                amount:
+                  type: string
+      responses:
+        "200":
+          description: Faucet result
+
+  /delegate:
+    post:
+      summary: Delegate stake to validator
+      operationId: delegateStake
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                delegator:
+                  type: string
+                validator:
+                  type: string
+                amount:
+                  type: string
+      responses:
+        "200":
+          description: Delegation result
+
+  /validators/register:
+    post:
+      summary: Register a new validator
+      operationId: registerValidator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                address:
+                  type: string
+                public_key:
+                  type: string
+                stake:
+                  type: string
+                commission_rate:
+                  type: integer
+      responses:
+        "200":
+          description: Registration result
+
+  /slashing/events:
+    get:
+      summary: Slashing events
+      operationId: getSlashingEvents
+      responses:
+        "200":
+          description: Slashed validators
+
+  /submit_user_operation:
+    post:
+      summary: Submit ERC-4337 user operation
+      operationId: submitUserOperation
+      responses:
+        "200":
+          description: Submission result
+
+  /user_operations/pending:
+    get:
+      summary: Pending user operations count
+      operationId: getPendingUserOps
+      responses:
+        "200":
+          description: Pending count
+
+  /mev/commit:
+    post:
+      summary: MEV commit-reveal commit phase
+      operationId: mevCommit
+      responses:
+        "200":
+          description: Commit result
+
+  /mev/reveal:
+    post:
+      summary: MEV commit-reveal reveal phase
+      operationId: mevReveal
+      responses:
+        "200":
+          description: Reveal result
+
+  /mev/encrypted:
+    post:
+      summary: Submit threshold-encrypted transaction
+      operationId: mevEncrypted
+      responses:
+        "200":
+          description: Encrypted tx accepted
+
+  /mev/decryption_share:
+    post:
+      summary: Submit validator decryption share
+      operationId: mevDecryptionShare
+      responses:
+        "200":
+          description: Share accepted
+
+  /deploy_wasm:
+    post:
+      summary: Deploy WASM contract
+      operationId: deployWasm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                wasm:
+                  type: string
+                  description: Base64-encoded WASM module
+      responses:
+        "200":
+          description: Deploy result
+
+  /call_wasm:
+    post:
+      summary: Call WASM contract
+      operationId: callWasm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                func:
+                  type: string
+                arg:
+                  type: integer
+      responses:
+        "200":
+          description: Call result
+
+  /wasm/contracts:
+    get:
+      summary: List deployed WASM contracts
+      operationId: listWasmContracts
+      responses:
+        "200":
+          description: Contract names
 
 components:
   schemas:
@@ -527,3 +795,38 @@ components:
           type: integer
         total_delegated:
           type: string
+
+    Proposal:
+      type: object
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        proposer:
+          type: string
+        status:
+          type: string
+          enum: [active, passed, rejected, executed]
+        start_block:
+          type: integer
+        end_block:
+          type: integer
+        voting_period_blocks:
+          type: integer
+        yes_votes:
+          type: string
+        no_votes:
+          type: string
+        abstain_votes:
+          type: string
+        total_votes:
+          type: string
+        quorum:
+          type: string
+        voters:
+          type: object
+          additionalProperties:
+            type: string

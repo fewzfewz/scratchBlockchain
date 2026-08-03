@@ -14,23 +14,84 @@ pub struct KzgCommitment {
 }
 
 impl KzgCommitment {
-    /// Create a commitment from data (simplified - uses hash for MVP)
+    /// Create a Merkle-root commitment over fixed-size chunks (production path to full KZG).
     pub fn commit(data: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let commitment = hasher.finalize().to_vec();
-
+        let chunk_size = 4096usize;
+        let mut leaves: Vec<[u8; 32]> = Vec::new();
+        for chunk in data.chunks(chunk_size) {
+            let mut hasher = Sha256::new();
+            hasher.update(chunk);
+            leaves.push(hasher.finalize().into());
+        }
+        if leaves.is_empty() {
+            leaves.push([0u8; 32]);
+        }
+        let root = merkle_root(&leaves);
         Self {
-            commitment,
-            degree: data.len(),
+            commitment: root.to_vec(),
+            degree: leaves.len(),
         }
     }
 
-    /// Verify a commitment (simplified for MVP)
+    /// Verify data against the Merkle-root commitment.
     pub fn verify(&self, data: &[u8]) -> bool {
-        let expected = Self::commit(data);
-        self.commitment == expected.commitment
+        Self::commit(data).commitment == self.commitment
     }
+
+    /// Merkle opening proof for chunk at `index`.
+    pub fn opening_proof(data: &[u8], index: usize) -> Vec<[u8; 32]> {
+        let chunk_size = 4096usize;
+        let leaves: Vec<[u8; 32]> = data
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let mut hasher = Sha256::new();
+                hasher.update(chunk);
+                hasher.finalize().into()
+            })
+            .collect();
+        merkle_proof(&leaves, index)
+    }
+}
+
+fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return [0u8; 32];
+    }
+    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::new();
+        for pair in level.chunks(2) {
+            let mut hasher = Sha256::new();
+            hasher.update(&pair[0]);
+            hasher.update(pair.get(1).unwrap_or(&pair[0]));
+            next.push(hasher.finalize().into());
+        }
+        level = next;
+    }
+    level[0]
+}
+
+fn merkle_proof(leaves: &[[u8; 32]], mut index: usize) -> Vec<[u8; 32]> {
+    let mut proof = Vec::new();
+    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+    while level.len() > 1 {
+        let sibling = if index % 2 == 0 {
+            *level.get(index + 1).unwrap_or(&level[index])
+        } else {
+            level[index - 1]
+        };
+        proof.push(sibling);
+        index /= 2;
+        let mut next = Vec::new();
+        for pair in level.chunks(2) {
+            let mut hasher = Sha256::new();
+            hasher.update(&pair[0]);
+            hasher.update(pair.get(1).unwrap_or(&pair[0]));
+            next.push(hasher.finalize().into());
+        }
+        level = next;
+    }
+    proof
 }
 
 /// Data blob with KZG commitment
@@ -89,54 +150,44 @@ impl ErasureCoder {
         }
     }
 
-    /// Encode data into erasure-coded chunks
-    /// Simplified: In production, use reed-solomon or similar
+    /// Encode data into erasure-coded chunks (Reed–Solomon over GF(2^8))
     pub fn encode(&self, data: &[u8]) -> Result<Vec<ErasureChunk>> {
-        let chunk_size = data.len().div_ceil(self.data_chunks);
-        let mut chunks = Vec::new();
+        use reed_solomon_erasure::galois_8::ReedSolomon;
 
-        // Create data chunks
-        for i in 0..self.data_chunks {
-            let start = i * chunk_size;
-            let end = std::cmp::min(start + chunk_size, data.len());
-            let chunk_data = if start < data.len() {
-                data[start..end].to_vec()
-            } else {
-                vec![0; chunk_size]
-            };
+        let rs = ReedSolomon::new(self.data_chunks, self.parity_chunks)
+            .map_err(|e| anyhow::anyhow!("Reed-Solomon init: {}", e))?;
+        let chunk_size = data.len().div_ceil(self.data_chunks).max(1);
+        let padded_len = chunk_size * self.data_chunks;
+        let mut padded = vec![0u8; padded_len];
+        padded[..data.len()].copy_from_slice(data);
 
-            chunks.push(ErasureChunk {
-                data: chunk_data,
+        let mut shards: Vec<Vec<u8>> = (0..self.data_chunks)
+            .map(|i| padded[i * chunk_size..(i + 1) * chunk_size].to_vec())
+            .collect();
+        shards.resize(
+            self.data_chunks + self.parity_chunks,
+            vec![0u8; chunk_size],
+        );
+        rs.encode(&mut shards)
+            .map_err(|e| anyhow::anyhow!("Reed-Solomon encode: {}", e))?;
+
+        let total = self.data_chunks + self.parity_chunks;
+        Ok(shards
+            .into_iter()
+            .enumerate()
+            .map(|(i, shard)| ErasureChunk {
+                data: shard,
                 index: i,
-                total_chunks: self.data_chunks + self.parity_chunks,
-                proof: vec![], // Simplified - would compute Merkle proof
-            });
-        }
-
-        // Create parity chunks (simplified XOR-based parity)
-        for i in 0..self.parity_chunks {
-            let mut parity = vec![0u8; chunk_size];
-            for chunk in &chunks {
-                for (j, byte) in chunk.data.iter().enumerate() {
-                    if j < parity.len() {
-                        parity[j] ^= byte;
-                    }
-                }
-            }
-
-            chunks.push(ErasureChunk {
-                data: parity,
-                index: self.data_chunks + i,
-                total_chunks: self.data_chunks + self.parity_chunks,
+                total_chunks: total,
                 proof: vec![],
-            });
-        }
-
-        Ok(chunks)
+            })
+            .collect())
     }
 
-    /// Decode data from chunks (requires at least data_chunks)
+    /// Decode data from any `data_chunks` of `data_chunks + parity_chunks` shards
     pub fn decode(&self, chunks: &[ErasureChunk]) -> Result<Vec<u8>> {
+        use reed_solomon_erasure::galois_8::ReedSolomon;
+
         if chunks.len() < self.data_chunks {
             return Err(anyhow::anyhow!(
                 "Insufficient chunks for decoding: need {}, got {}",
@@ -145,82 +196,23 @@ impl ErasureCoder {
             ));
         }
 
-        // Separate data and parity chunks
-        let mut data_chunks: Vec<&ErasureChunk> = chunks.iter().filter(|c| c.index < self.data_chunks).collect();
-        let parity_chunks: Vec<&ErasureChunk> = chunks.iter().filter(|c| c.index >= self.data_chunks).collect();
-
-        // Check if we have all data chunks
-        if data_chunks.len() == self.data_chunks {
-            // Fast path: all data present, just concatenate
-            data_chunks.sort_by_key(|c| c.index);
-            let mut data = Vec::new();
-            for chunk in data_chunks {
-                data.extend_from_slice(&chunk.data);
+        let rs = ReedSolomon::new(self.data_chunks, self.parity_chunks)
+            .map_err(|e| anyhow::anyhow!("Reed-Solomon init: {}", e))?;
+        let total = self.data_chunks + self.parity_chunks;
+        let mut shards: Vec<Option<Vec<u8>>> = vec![None; total];
+        for chunk in chunks {
+            if chunk.index < total {
+                shards[chunk.index] = Some(chunk.data.clone());
             }
-            return Ok(data);
         }
+        rs.reconstruct(&mut shards)
+            .map_err(|e| anyhow::anyhow!("Reed-Solomon reconstruct: {}", e))?;
 
-        // Recovery path: use XOR parity to reconstruct missing data chunks
-        // Identify which data indices are missing
-        let mut present_indices: Vec<usize> = data_chunks.iter().map(|c| c.index).collect();
-        present_indices.sort();
-        let missing_indices: Vec<usize> = (0..self.data_chunks)
-            .filter(|i| !present_indices.contains(i))
-            .collect();
-
-        if missing_indices.is_empty() {
-            let mut data = Vec::new();
-            data_chunks.sort_by_key(|c| c.index);
-            for chunk in data_chunks {
-                data.extend_from_slice(&chunk.data);
-            }
-            return Ok(data);
-        }
-
-        // With XOR parity, we can recover at most `parity_chunks` missing indices
-        // if we have at least `missing_indices.len()` distinct parity chunks
-        if missing_indices.len() > self.parity_chunks {
-            return Err(anyhow::anyhow!(
-                "Cannot recover: {} missing chunks, only {} parity chunks available",
-                missing_indices.len(),
-                self.parity_chunks
-            ));
-        }
-
-        let chunk_size = data_chunks[0].data.len();
-
-        // Recovery: XOR all available data chunks and parity chunks
-        // For each missing index, XOR all present data + all parity
-        // This works when exactly one parity chunk encodes all data chunks
-        // In a proper RS implementation, each parity encodes a different linear combination
-        let mut recovered_chunks: Vec<ErasureChunk> = Vec::new();
-        for &missing_idx in &missing_indices {
-            let mut recovered = vec![0u8; chunk_size];
-            for chunk in &data_chunks {
-                for (j, byte) in chunk.data.iter().enumerate() {
-                    if j < chunk_size {
-                        recovered[j] ^= byte;
-                    }
-                }
-            }
-            for chunk in &parity_chunks {
-                for (j, byte) in chunk.data.iter().enumerate() {
-                    if j < chunk_size {
-                        recovered[j] ^= byte;
-                    }
-                }
-            }
-            recovered_chunks.push(ErasureChunk {
-                data: recovered,
-                index: missing_idx,
-                total_chunks: 0,
-                proof: vec![],
-            });
-        }
-        recovered_chunks.sort_by_key(|c| c.index);
         let mut data = Vec::new();
-        for chunk in recovered_chunks {
-            data.extend_from_slice(&chunk.data);
+        for i in 0..self.data_chunks {
+            if let Some(ref shard) = shards[i] {
+                data.extend_from_slice(shard);
+            }
         }
         Ok(data)
     }

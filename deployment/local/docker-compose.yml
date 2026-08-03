@@ -1,6 +1,62 @@
 version: '3.8'
 
 services:
+  # Ethereum Hardhat node (Bridge.sol target chain — port 9545 avoids Nebula 8545)
+  hardhat:
+    image: node:20-bookworm-slim
+    container_name: hardhat
+    working_dir: /interop
+    volumes:
+      - ../../interop:/interop
+      - ../../frontend/public:/frontend-public
+      - ./configs:/configs-out
+    ports:
+      - "9545:9545"
+    environment:
+      - ETH_RPC_URL=http://127.0.0.1:9545
+      - BRIDGE_DEPLOY_OUT=/configs-out/bridge-deployment.json
+      - FRONTEND_BRIDGE_CONFIG=/frontend-public/bridge-config.json
+    command: >
+      bash -c "apt-get update -qq && apt-get install -y -qq curl >/dev/null &&
+               npm install &&
+               npx hardhat compile &&
+               npx hardhat node --hostname 0.0.0.0 --port 9545"
+    networks:
+      testnet:
+        aliases:
+          - hardhat
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf -X POST http://127.0.0.1:9545 -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}' || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 45s
+    restart: unless-stopped
+
+  # Nebula React frontend (Vite dev server)
+  frontend:
+    image: node:20-bookworm-slim
+    container_name: nebula-frontend
+    working_dir: /frontend
+    volumes:
+      - ../../frontend:/frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_NEBULA_RPC=http://localhost:8545
+      - VITE_ETH_RPC_URL=http://localhost:9545
+    command: >
+      bash -c "npm install --legacy-peer-deps &&
+               npm run dev -- --host 0.0.0.0 --port 5173"
+    networks:
+      testnet:
+        aliases:
+          - frontend
+    depends_on:
+      validator1:
+        condition: service_healthy
+    restart: unless-stopped
+
   # Validator 1 (Bootstrap node)
   validator1:
     build:
@@ -22,11 +78,15 @@ services:
     environment:
       - VALIDATOR_NAME=validator1
       - RUST_LOG=info
+      - ETH_RPC_URL=http://hardhat:9545
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
           - validator1
+    depends_on:
+      hardhat:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
       interval: 10s
@@ -123,13 +183,17 @@ services:
     environment:
       - NODE_NAME=rpc1
       - RUST_LOG=info
+      - ETH_RPC_URL=http://hardhat:9545
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
           - rpc1
     depends_on:
-      - validator1
+      validator1:
+        condition: service_healthy
+      hardhat:
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
       interval: 8s
@@ -188,6 +252,25 @@ services:
       testnet:
         aliases:
           - prometheus
+    depends_on:
+      - alertmanager
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:latest
+    container_name: alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./configs/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+    networks:
+      testnet:
+        aliases:
+          - alertmanager
     restart: unless-stopped
 
   # Grafana
@@ -198,6 +281,7 @@ services:
       - "3000:3000"
     volumes:
       - ../monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ../monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro
       - grafana_data:/var/lib/grafana
     environment:
       - GF_SECURITY_ADMIN_PASSWORD=admin
@@ -269,3 +353,4 @@ volumes:
   rpc2_data:
   prometheus_data:
   grafana_data:
+  alertmanager_data:

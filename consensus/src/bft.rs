@@ -499,6 +499,22 @@ impl BftEngine {
             .collect()
     }
 
+    pub fn validator_count(&self) -> usize {
+        self.validators.len()
+    }
+
+    /// Hot-reload validator set from on-chain state (call at height boundaries).
+    pub fn update_validator_set(&mut self, validators: Vec<ValidatorInfo>) {
+        self.validators.clear();
+        self.total_stake = 0;
+        for v in validators {
+            if !v.slashed {
+                self.total_stake = self.total_stake.saturating_add(v.stake);
+                self.validators.insert(v.public_key.clone(), v);
+            }
+        }
+    }
+
     /// Reset consensus state to begin voting at a new height.
     ///
     /// Used after a node has fallen behind (e.g. it locked a losing block and

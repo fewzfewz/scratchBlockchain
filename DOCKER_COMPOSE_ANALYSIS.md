@@ -1,5 +1,7 @@
 # Docker Compose Files Analysis
 
+> **Port note (August 2026):** The active local testnet exposes node JSON-RPC on **8545–8549** and WebSocket on **ws://localhost:8545/ws**. Some sections below reference older port schemes (9933/26657) from alternate compose files.
+
 ## Overview
 Your project has **3 docker-compose files** serving different purposes:
 

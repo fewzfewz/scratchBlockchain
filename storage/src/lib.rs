@@ -1,4 +1,5 @@
 mod db;
+pub mod pruner;
 pub mod trie;
 pub mod receipt_store;
 
@@ -8,6 +9,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 pub use db::{ChainStore, ColumnFamily, WriteBatch, DbMetrics, DbError, MemDb};
+pub use pruner::{PruneConfig, PruneStats};
 
 pub struct MemStore {
     db: Box<dyn KeyValueStore>,

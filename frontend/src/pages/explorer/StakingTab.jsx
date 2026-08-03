@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Users, Coins, Percent, TrendingUp, Search, Inbox, Cpu, Sparkles } from 'lucide-react'
+import { Users, Coins, Percent, TrendingUp, Search, Inbox, Cpu } from 'lucide-react'
 
 const API_URL = 'http://localhost:8545'
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
@@ -14,6 +14,10 @@ export default function StakingTab() {
   const [address, setAddress] = useState('')
   const [delegations, setDelegations] = useState(null)
   const [checked, setChecked] = useState(false)
+  const [stakeAmount, setStakeAmount] = useState('1000')
+  const [selectedValidatorIdx, setSelectedValidatorIdx] = useState(0)
+
+  const INFLATION_APR = 0.052
 
   useEffect(() => {
     let active = true
@@ -75,6 +79,15 @@ export default function StakingTab() {
       </div>
     )
   }
+
+  const selectedValidator = validators[selectedValidatorIdx] || validators[0]
+  const stake = parseFloat(stakeAmount) || 0
+  const commissionPct = Number(selectedValidator?.commission_rate || stats?.avgCommission || 10)
+  const commission = commissionPct / 100
+  const grossYear = stake * INFLATION_APR
+  const netYear = grossYear * (1 - commission)
+  const netMonth = netYear / 12
+  const netDay = netYear / 365
 
   const cards = [
     { icon: Users, label: 'Active Validators', value: fmt(stats?.activeValidators), sub: `Of ${fmt(stats?.totalValidators)} total`, chip: 'from-blue-500 to-cyan-600' },
@@ -144,12 +157,50 @@ export default function StakingTab() {
         {/* Rewards estimator */}
         <div className="p-5 rounded-2xl glass-strong flex flex-col">
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4">Estimate Rewards</h3>
-          <div className="flex-1 flex flex-col items-center justify-center py-6 text-center">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-violet-500 to-fuchsia-600 flex items-center justify-center text-white shadow-lg mb-3">
-              <Sparkles className="w-5 h-5" />
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs text-slate-500 dark:text-slate-400">Stake amount (NBL)</label>
+              <input
+                value={stakeAmount}
+                onChange={(e) => setStakeAmount(e.target.value)}
+                type="number"
+                min="0"
+                className="mt-1 w-full px-3 py-2 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+              />
             </div>
-            <p className="text-sm text-slate-400 dark:text-slate-500">Rewards estimation is coming soon.</p>
-            <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Staking with delegation will unlock rewards math here.</p>
+            {validators.length > 0 && (
+              <div>
+                <label className="text-xs text-slate-500 dark:text-slate-400">Validator</label>
+                <select
+                  value={selectedValidatorIdx}
+                  onChange={(e) => setSelectedValidatorIdx(Number(e.target.value))}
+                  className="mt-1 w-full px-3 py-2 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-violet-500/40"
+                >
+                  {validators.map((v, i) => (
+                    <option key={v.address || i} value={i}>
+                      {shorten(v.address || v.public_key, 8, 6)} — {v.commission_rate}% fee
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div className="grid grid-cols-3 gap-2 pt-2">
+              <div className="p-3 rounded-xl bg-violet-500/10 text-center">
+                <p className="text-[10px] uppercase text-slate-500">Daily</p>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white tabular-nums">{netDay.toFixed(4)}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-violet-500/10 text-center">
+                <p className="text-[10px] uppercase text-slate-500">Monthly</p>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white tabular-nums">{netMonth.toFixed(2)}</p>
+              </div>
+              <div className="p-3 rounded-xl bg-violet-500/10 text-center">
+                <p className="text-[10px] uppercase text-slate-500">Yearly</p>
+                <p className="text-sm font-semibold text-slate-900 dark:text-white tabular-nums">{netYear.toFixed(2)}</p>
+              </div>
+            </div>
+            <p className="text-[11px] text-slate-400 dark:text-slate-500">
+              Based on {(INFLATION_APR * 100).toFixed(1)}% inflation APR minus {commissionPct.toFixed(1)}% validator commission.
+            </p>
           </div>
         </div>
       </div>
