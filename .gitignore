@@ -25,14 +25,24 @@ Thumbs.db
 .env
 .env.local
 
-#folders
-sdk/javascript/node_modules
-frontend/governance/node_modules
-node_modules
-
-
+# Node / JS dependencies
+node_modules/
+frontend/node_modules/
+frontend/governance/node_modules/
+sdk/javascript/node_modules/
+interop/node_modules/
 
 package-lock.json
 
+# Dev-only scratch notes (not project documentation)
 GITHUB_PUSH_GUIDE.md
+WHATS_LEFT.md
+STATUS.md
+BLOCKCHAIN_COMPARISON.md
+DOCKER_COMPOSE_ANALYSIS.md
+FEATURES.md
+FEATURES_EXHAUSTIVE.md
+WHAT_IT_DOES.md
+CAPABILITIES.md
+TEST_REPORT.md
 
