@@ -40,6 +40,7 @@ use consensus::{EnhancedConsensus, FinalityGadget, ValidatorInfo, SlashingCondit
 use consensus::slashing::{SlashingTracker, SlashingConfig};
 
 use execution::evm::EvmExecutor;
+use node::evm_store::ChainStoreEvmStore;
 
 use network::protocol::BlockResponse;
 use network::{NetworkCommand, NetworkEvent, NetworkService};
@@ -318,7 +319,7 @@ impl Node {
 
         let chain_tip = chain_store.get_latest_height()?.unwrap_or(0);
         let validators: Vec<ValidatorInfo> = if chain_tip > 0 {
-            match governance_store::load_consensus_validators(&state_trie).await {
+            match node::governance_store::load_consensus_validators(&state_trie).await {
                 Ok(v) if !v.is_empty() => {
                     info!("✅ Loaded {} validators from state trie", v.len());
                     v
@@ -381,7 +382,12 @@ impl Node {
         // ================================================================
         // 9. Initialize Block Executor
         // ================================================================
-        let block_executor = BlockExecutor::new(EvmExecutor::new(), chain_store.clone());
+        let chain_id: u64 = config.network.chain_id.parse().unwrap_or(1);
+        let evm_store = Arc::new(ChainStoreEvmStore::new(chain_store.clone()));
+        let block_executor = BlockExecutor::new(
+            EvmExecutor::with_store(evm_store.clone(), chain_id),
+            chain_store.clone(),
+        );
         let block_executor = Arc::new(Mutex::new(block_executor));
         
         // ================================================================
@@ -393,7 +399,10 @@ impl Node {
             target_gas_utilization: 0.5,
         };
         
-        let producer_executor = BlockExecutor::new(EvmExecutor::new(), chain_store.clone());
+        let producer_executor = BlockExecutor::new(
+            EvmExecutor::with_store(evm_store, chain_id),
+            chain_store.clone(),
+        );
         let block_producer = Arc::new(Mutex::new(BlockProducer::new(
             tx_pool.clone(),
             bft_engine.clone(),
@@ -456,6 +465,7 @@ impl Node {
             (*network_cmd_sender).clone(),
             slashing_tracker.clone(),
             config.api.rate_limit,
+            chain_id,
         );
         
         let rpc_port = config.network.rpc_port;
@@ -1202,14 +1212,14 @@ impl Node {
     
     /// Get current validator list
     async fn get_validator_list(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
-        Ok(governance_store::load_consensus_validators(&self.state_trie)
+        Ok(node::governance_store::load_consensus_validators(&self.state_trie)
             .await
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?)
     }
 
     /// Reload BFT + finality validator sets from the state trie when changed.
     async fn sync_validator_set(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let validators = governance_store::load_consensus_validators(&self.state_trie).await?;
+        let validators = node::governance_store::load_consensus_validators(&self.state_trie).await?;
         if validators.is_empty() {
             return Ok(());
         }

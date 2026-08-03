@@ -21,61 +21,72 @@ pub mod gas;
 pub use evm::EvmExecutor;
 
 use anyhow::{anyhow, Result};
-use wasmtime::{Engine, Linker, Module, Store};
+use wasmtime::{Config, Engine, Linker, Module, Store};
+
+/// Gas budget for WASM execution (fuel units).
+pub const DEFAULT_WASM_FUEL: u64 = 1_000_000;
 
 // ============================================================================
 // WASM Executor (for future contract language support)
 // ============================================================================
 
-/// WebAssembly executor for smart contracts
+/// WASM contract call prefix in transaction payload: `WASM:<name>:<func>:<arg>`
+pub const WASM_TX_PREFIX: &[u8] = b"WASM:";
 ///
 /// This allows running WASM-based contracts (alternative to EVM).
 /// Currently a placeholder - will be fully implemented when contract
 /// language is finalized.
 pub struct WasmExecutor {
     engine: Engine,
+    fuel_limit: u64,
 }
 
 impl WasmExecutor {
-    /// Create a new WASM executor
+    /// Create a new WASM executor with fuel-based gas metering.
     pub fn new() -> Result<Self> {
-        let engine = Engine::default();
-        Ok(Self { engine })
+        Self::with_fuel(DEFAULT_WASM_FUEL)
+    }
+
+    pub fn with_fuel(fuel_limit: u64) -> Result<Self> {
+        let mut config = Config::new();
+        config.consume_fuel(true);
+        let engine = Engine::new(&config)?;
+        Ok(Self { engine, fuel_limit })
     }
 
     /// Execute a WASM function
-    ///
-    /// # Arguments
-    /// * `wasm_binary` - Compiled WASM module bytes
-    /// * `func_name` - Name of the function to call
-    ///
-    /// # Returns
-    /// * `Ok(())` if execution succeeded
-    /// * `Err` if execution failed
-    pub fn execute(&self, wasm_binary: &[u8], func_name: &str) -> Result<()> {
+    pub fn execute(&self, wasm_binary: &[u8], func_name: &str) -> Result<((), u64)> {
         let module = Module::new(&self.engine, wasm_binary)?;
         let mut store = Store::new(&self.engine, ());
+        store.set_fuel(self.fuel_limit)?;
         let linker = Linker::new(&self.engine);
-
         let instance = linker.instantiate(&mut store, &module)?;
+        let fuel_before = store.get_fuel().unwrap_or(self.fuel_limit);
         let func = instance.get_typed_func::<(), ()>(&mut store, func_name)?;
-
         func.call(&mut store, ())?;
-
-        Ok(())
+        let fuel_after = store.get_fuel().unwrap_or(0);
+        Ok(((), fuel_before.saturating_sub(fuel_after)))
     }
 
     /// Execute a WASM function with a single i32 argument and return value.
-    pub fn execute_i32(&self, wasm_binary: &[u8], func_name: &str, arg: i32) -> Result<i32> {
+    pub fn execute_i32(&self, wasm_binary: &[u8], func_name: &str, arg: i32) -> Result<(i32, u64)> {
         let module = Module::new(&self.engine, wasm_binary)?;
         let mut store = Store::new(&self.engine, ());
+        store.set_fuel(self.fuel_limit)?;
         let linker = Linker::new(&self.engine);
-
         let instance = linker.instantiate(&mut store, &module)?;
+        let fuel_before = store.get_fuel().unwrap_or(self.fuel_limit);
         let func = instance.get_typed_func::<i32, i32>(&mut store, func_name)?;
         let result = func.call(&mut store, arg)?;
+        let fuel_after = store.get_fuel().unwrap_or(0);
+        Ok((result, fuel_before.saturating_sub(fuel_after)))
+    }
 
-        Ok(result)
+    /// Deploy: validate module compiles and return bytecode hash.
+    pub fn validate_module(&self, wasm_binary: &[u8]) -> Result<[u8; 32]> {
+        Module::new(&self.engine, wasm_binary)?;
+        use sha2::{Digest, Sha256};
+        Ok(Sha256::digest(wasm_binary).into())
     }
 }
 

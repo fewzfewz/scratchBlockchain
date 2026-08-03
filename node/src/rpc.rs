@@ -47,6 +47,7 @@ struct StatusResponse {
     finalized_height: Option<u64>,
     mempool_size: usize,
     peer_count: usize,
+    chain_id: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -213,6 +214,7 @@ pub struct RpcServer {
     network_cmd_sender: mpsc::Sender<NetworkCommand>,
     slashing_tracker: Arc<Mutex<SlashingTracker>>,
     rate_limit: u32,
+    chain_id: u64,
 }
 
 impl RpcServer {
@@ -224,6 +226,7 @@ impl RpcServer {
         network_cmd_sender: mpsc::Sender<NetworkCommand>,
         slashing_tracker: Arc<Mutex<SlashingTracker>>,
         rate_limit: u32,
+        chain_id: u64,
     ) -> Self {
         Self {
             tx_pool,
@@ -233,6 +236,7 @@ impl RpcServer {
             network_cmd_sender,
             slashing_tracker,
             rate_limit,
+            chain_id,
         }
     }
 
@@ -283,13 +287,16 @@ impl RpcServer {
         // Core Routes
         // ====================================================================
 
+        let chain_id_rpc = self.chain_id;
+
         // GET /status - Node health and height information
         let status = warp::path("status")
             .and(with_rate_limit.clone())
             .and(warp::get())
             .and(with_arc(chain_store.clone()))
             .and(with_arc(tx_pool.clone()))
-            .and_then(|_, chain_store, tx_pool| handle_status(chain_store, tx_pool));
+            .and(warp::any().map(move || chain_id_rpc))
+            .and_then(|_, chain_store, tx_pool, chain_id| handle_status(chain_store, tx_pool, chain_id));
 
         // GET /mempool - List pending transactions
         let mempool_route = warp::path("mempool")
@@ -557,6 +564,37 @@ impl RpcServer {
                 handle_faucet_request(req, chain_store, faucet_cooldowns).await
             });
 
+        // POST /deploy_wasm — deploy a WASM contract module
+        let deploy_wasm = warp::path("deploy_wasm")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, req: DeployWasmRequest, chain_store: Arc<ChainStore>| async move {
+                handle_deploy_wasm(req, chain_store).await
+            });
+
+        // POST /call_wasm — call a deployed WASM contract
+        let call_wasm = warp::path("call_wasm")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, req: CallWasmRequest, chain_store: Arc<ChainStore>| async move {
+                handle_call_wasm(req, chain_store).await
+            });
+
+        // GET /wasm/contracts — list deployed WASM contracts
+        let wasm_contracts = warp::path!("wasm" / "contracts")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, chain_store: Arc<ChainStore>| async move {
+                handle_list_wasm(chain_store).await
+            });
+
         // ====================================================================
         // Combine Routes with CORS
         // ====================================================================
@@ -588,6 +626,9 @@ impl RpcServer {
             .or(governance)
             .or(proposal_by_id)
             .or(faucet_request)
+            .or(deploy_wasm)
+            .or(call_wasm)
+            .or(wasm_contracts)
             .or(metrics_route)
             .or(health)
             .or(connect_peer)
@@ -623,6 +664,7 @@ fn with_arc<T: Clone + Send + Sync>(
 async fn handle_status(
     chain_store: Arc<ChainStore>,
     tx_pool: Arc<TxPool>,
+    chain_id: u64,
 ) -> Result<impl warp::Reply, Infallible> {
     let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
     let finalized_height = Some(height);
@@ -634,6 +676,7 @@ async fn handle_status(
         finalized_height,
         mempool_size,
         peer_count,
+        chain_id,
     }))
 }
 
@@ -1448,6 +1491,126 @@ struct RegisterValidatorRequest {
     commission_rate: Option<u64>,
 }
 
+#[derive(Debug, Deserialize)]
+struct DeployWasmRequest {
+    name: String,
+    /// Base64-encoded WASM module bytes
+    wasm: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CallWasmRequest {
+    name: String,
+    func: String,
+    #[serde(default)]
+    arg: i32,
+}
+
+async fn handle_deploy_wasm(
+    req: DeployWasmRequest,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    use base64::Engine as _;
+    let wasm = match base64::engine::general_purpose::STANDARD.decode(&req.wasm) {
+        Ok(b) => b,
+        Err(e) => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "error",
+                "error": format!("Invalid base64 wasm: {}", e),
+            })));
+        }
+    };
+    let executor = match execution::WasmExecutor::new() {
+        Ok(e) => e,
+        Err(e) => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "error",
+                "error": format!("WASM engine init: {}", e),
+            })));
+        }
+    };
+    let code_hash = match executor.validate_module(&wasm) {
+        Ok(h) => h,
+        Err(e) => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "error",
+                "error": format!("Invalid WASM module: {}", e),
+            })));
+        }
+    };
+    let registry = crate::wasm_registry::WasmRegistry::new(chain_store);
+    match registry.deploy(&req.name, &wasm) {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "success",
+            "name": req.name,
+            "code_hash": hex::encode(code_hash),
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "error",
+            "error": e.to_string(),
+        }))),
+    }
+}
+
+async fn handle_call_wasm(
+    req: CallWasmRequest,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let registry = crate::wasm_registry::WasmRegistry::new(chain_store);
+    let wasm = match registry.get(&req.name) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "error",
+                "error": format!("Contract '{}' not found", req.name),
+            })));
+        }
+        Err(e) => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "error",
+                "error": e.to_string(),
+            })));
+        }
+    };
+    let executor = match execution::WasmExecutor::new() {
+        Ok(e) => e,
+        Err(e) => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "error",
+                "error": format!("WASM engine init: {}", e),
+            })));
+        }
+    };
+    match executor.execute_i32(&wasm, &req.func, req.arg) {
+        Ok((result, gas_used)) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "success",
+            "result": result,
+            "gas_used": gas_used,
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "error",
+            "error": e.to_string(),
+        }))),
+    }
+}
+
+async fn handle_list_wasm(
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, warp::Rejection> {
+    let registry = crate::wasm_registry::WasmRegistry::new(chain_store);
+    match registry.list() {
+        Ok(names) => Ok(warp::reply::json(&serde_json::json!({
+            "contracts": names,
+            "count": names.len(),
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({
+            "error": e.to_string(),
+            "contracts": [],
+            "count": 0,
+        }))),
+    }
+}
+
 fn parse_hex32(s: &str) -> Option<[u8; 32]> {
     let bytes = hex::decode(s.trim_start_matches("0x")).ok()?;
     if bytes.len() != 32 {
@@ -1586,80 +1749,4 @@ async fn handle_delegate(
         return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid validator"})));
     };
     let amount: u128 = req.amount.parse().unwrap_or(0);
-    match governance_store::apply_delegate(&state_trie, &chain_store, delegator, validator, amount).await {
-        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
-    }
-}
-
-async fn handle_register_validator(
-    req: RegisterValidatorRequest,
-    state_trie: Arc<Mutex<PatriciaTrie>>,
-) -> Result<impl warp::Reply, Infallible> {
-    let Some(address) = parse_address(&req.address) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid address"})));
-    };
-    let public_key = hex::decode(req.public_key.trim_start_matches("0x")).unwrap_or_default();
-    let stake: u128 = req.stake.parse().unwrap_or(0);
-    let commission = req.commission_rate.unwrap_or(10);
-    match governance_store::register_validator(&state_trie, address, public_key, stake, commission).await {
-        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
-    }
-}
-
-async fn handle_websocket(ws: warp::ws::WebSocket, chain_store: Arc<ChainStore>) {
-    use futures_util::{SinkExt, StreamExt};
-    use std::time::Duration;
-
-    let (mut tx, mut rx) = ws.split();
-
-    loop {
-        let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
-        let msg = warp::ws::Message::text(format!(
-            r#"{{"event":"newHead","height":{}}}"#,
-            height
-        ));
-        if tx.send(msg).await.is_err() {
-            break;
-        }
-        tokio::select! {
-            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
-            incoming = rx.next() => {
-                if incoming.is_none() { break; }
-            }
-        }
-    }
-}
-
-// ============================================================================
-// Error Handling
-// ============================================================================
-
-/// Custom rejection type for rate limiting (so we can distinguish from other errors)
-#[derive(Debug)]
-struct RateLimited;
-impl warp::reject::Reject for RateLimited {}
-
-async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infallible> {
-    let (status, message) = if err.is_not_found() {
-        (warp::http::StatusCode::NOT_FOUND, "Endpoint not found".to_string())
-    } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
-        (warp::http::StatusCode::METHOD_NOT_ALLOWED, "Method not allowed".to_string())
-    } else if err.find::<warp::reject::PayloadTooLarge>().is_some() {
-        (warp::http::StatusCode::PAYLOAD_TOO_LARGE, "Request body too large (max 1MB)".to_string())
-    } else if err.find::<warp::reject::InvalidQuery>().is_some() {
-        (warp::http::StatusCode::BAD_REQUEST, "Invalid query parameters".to_string())
-    } else if err.find::<RateLimited>().is_some() {
-        (warp::http::StatusCode::TOO_MANY_REQUESTS, "Rate limit exceeded".to_string())
-    } else {
-        #[cfg(debug_assertions)]
-        tracing::warn!("Unhandled rejection: {:?}", err);
-        (warp::http::StatusCode::BAD_REQUEST, "Bad request".to_string())
-    };
-
-    Ok(warp::reply::with_status(
-        warp::reply::json(&ErrorResponse { error: message }),
-        status,
-    ))
-}
+    match governance_store::ap

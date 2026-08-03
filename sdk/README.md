@@ -1,22 +1,33 @@
 # SDK
 
-TypeScript/JavaScript SDK (`@modular-blockchain/sdk`) for interacting with the Modular Blockchain.
+TypeScript/JavaScript SDK (`@modular-blockchain/sdk`) for Nebula.
 
 ## Structure
 
 | Path | Description |
 |---|---|
-| `javascript/` | SDK source code and build output |
-| `portal/` | Standalone HTML developer portal |
+| `javascript/` | SDK source, build output, CLI |
+| `javascript/cli/` | `modular` CLI (wallet, deploy, scaffold) |
+| `javascript/contracts/` | ERC20, ERC721, DAO Solidity templates |
+| `javascript/examples/` | Starter kits (DeFi, NFT, DAO) |
 
-## SDK Capabilities
+## Capabilities (v0.3.4)
 
-- **Wallet** — Ed25519 key generation, BIP39 mnemonics, address derivation, transaction signing, message signing/verification
-- **ModularClient** — 30+ RPC methods: blocks, transactions, accounts, gas (EIP-1559), mempool, peers, governance, health
-- **Providers** — `HttpProvider` (REST on port 8545), `WebSocketProvider` (`ws://localhost:8545/ws`)
-- **Events** — `connected`, `disconnected`, `transactionConfirmed`, `transactionPending`
-- **Types** — Full TypeScript definitions for all request/response types including governance
+- **Wallet** — Ed25519, BIP39, signing matched to Rust node
+- **ModularClient** — 40+ methods; all 32 HTTP RPC routes covered
+- **Providers** — `HttpProvider`, `WebSocketProvider`
+- **Events** — `connected`, `transactionConfirmed`, `transactionPending`
 
 ## Dependencies
 
-`@noble/curves` (Ed25519), `@noble/hashes` (SHA-256), `axios`, `bip39`, `eventemitter3`, `ws`
+`@noble/curves`, `@noble/hashes`, `axios`, `bip39`, `eventemitter3`, `ws`
+
+## Publish
+
+```bash
+cd sdk/javascript
+npm run build && npm test
+npm publish --access public  # requires NPM_TOKEN in CI
+```
+
+See `javascript/README.md` for API reference.

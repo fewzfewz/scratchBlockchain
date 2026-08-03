@@ -12,7 +12,6 @@ export class HttpProvider implements Provider {
   private isConnected: boolean = false;
 
   constructor(url: string, options: ProviderOptions = {}) {
-    // Ensure URL has no trailing slash
     this.url = url.replace(/\/+$/, "");
     this.client = axios.create({
       baseURL: this.url,
@@ -31,7 +30,7 @@ export class HttpProvider implements Provider {
 
       let response;
       if (ep.method === "GET") {
-        const url = this.buildGetUrl(ep.path, params);
+        const url = this.buildGetUrl(ep.path, params, method);
         response = await this.client.get(url);
       } else {
         response = await this.client.post(ep.path, params[0] || {});
@@ -39,7 +38,6 @@ export class HttpProvider implements Provider {
 
       this.isConnected = true;
 
-      // Rust RPC returns data directly (not wrapped in JSON-RPC envelope)
       if (response.data && typeof response.data === "object") {
         if (response.data.error) {
           throw new Error(response.data.error);
@@ -62,11 +60,12 @@ export class HttpProvider implements Provider {
       block_number: "/status",
       get_block: "/block/",
       get_block_by_hash: "/block/hash/",
+      get_latest_block: "/block/latest",
       get_balance: "/balance/",
       get_account: "/balance/",
       get_transaction: "/tx/",
       get_transaction_receipt: "/tx/",
-      estimate_gas: "/estimate_gas",
+      get_tx_history: "/txs/",
       gas_price: "/gas_price",
       get_mempool: "/mempool",
       get_peers: "/peers",
@@ -74,14 +73,16 @@ export class HttpProvider implements Provider {
       status: "/status",
       health: "/health",
       fee_history: "/fee_history/",
-      // Governance GET endpoints
-      get_proposals: "/governance/proposals",
-      get_proposal: "/governance/proposals/",
-      get_treasury: "/governance/treasury",
-      get_gov_params: "/governance/params",
-      get_delegations: "/governance/delegations/",
-      get_validators: "/governance/validators",
-      get_votes: "/governance/votes/",
+      get_governance: "/governance",
+      get_proposals: "/governance",
+      get_proposal: "/proposal/",
+      get_treasury: "/governance",
+      get_gov_params: "/governance",
+      get_delegations: "/delegations/",
+      get_validators: "/validators",
+      get_slashing_events: "/slashing/events",
+      list_wasm_contracts: "/wasm/contracts",
+      pending_user_ops: "/user_operations/pending",
     };
 
     const post: Record<string, string> = {
@@ -89,13 +90,17 @@ export class HttpProvider implements Provider {
       submit_tx: "/submit_tx",
       send_raw_transaction: "/submit_tx",
       connect_peer: "/connect_peer",
-      estimate_gas_post: "/estimate_gas",
-      // Governance POST endpoints
-      create_proposal: "/governance/proposals",
-      cast_vote: "/governance/vote",
-      delegate_stake: "/governance/delegate",
-      undelegate_stake: "/governance/undelegate",
-      execute_proposal: "/governance/proposals/execute/",
+      estimate_gas: "/estimate_gas",
+      delegate_stake: "/delegate",
+      register_validator: "/validators/register",
+      faucet_request: "/faucet/request",
+      deploy_wasm: "/deploy_wasm",
+      call_wasm: "/call_wasm",
+      submit_user_operation: "/submit_user_operation",
+      mev_commit: "/mev/commit",
+      mev_reveal: "/mev/reveal",
+      mev_encrypted: "/mev/encrypted",
+      mev_decryption_share: "/mev/decryption_share",
     };
 
     if (post[method]) {
@@ -104,12 +109,16 @@ export class HttpProvider implements Provider {
     return { method: "GET", path: get[method] || "/" };
   }
 
-  private buildGetUrl(basePath: string, params: any[]): string {
+  private buildGetUrl(basePath: string, params: any[], method: string): string {
     if (params.length === 0) return basePath;
     const param = params[0];
     if (param === undefined || param === null) return basePath;
     const encoded = typeof param === "string" ? encodeURIComponent(param) : String(param);
-    return basePath + encoded;
+    let url = basePath + encoded;
+    if (method === "get_tx_history" && params[1] !== undefined) {
+      url += `?limit=${encodeURIComponent(String(params[1]))}`;
+    }
+    return url;
   }
 
   getUrl(): string {

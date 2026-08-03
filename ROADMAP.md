@@ -75,7 +75,7 @@ This document outlines the journey from our current development codebase to a fu
 - [x] **Dynamic Validator Set**: `POST /validators/register` updates state trie
 - [x] **Delegation**: `POST /delegate` + `GET /delegations/{address}`
 - [x] **Slashing Conditions**: Tracker wired; `GET /slashing/events`
-- [/] **BFT hot-reload**: Validator registration does not yet update live BFT engine
+- [x] **BFT hot-reload**: Validator set syncs from state trie after register/finalize
 
 **Priority**: 🟡 HIGH
 

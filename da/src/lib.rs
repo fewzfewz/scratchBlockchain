@@ -14,23 +14,84 @@ pub struct KzgCommitment {
 }
 
 impl KzgCommitment {
-    /// Create a commitment from data (simplified - uses hash for MVP)
+    /// Create a Merkle-root commitment over fixed-size chunks (production path to full KZG).
     pub fn commit(data: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(data);
-        let commitment = hasher.finalize().to_vec();
-
+        let chunk_size = 4096usize;
+        let mut leaves: Vec<[u8; 32]> = Vec::new();
+        for chunk in data.chunks(chunk_size) {
+            let mut hasher = Sha256::new();
+            hasher.update(chunk);
+            leaves.push(hasher.finalize().into());
+        }
+        if leaves.is_empty() {
+            leaves.push([0u8; 32]);
+        }
+        let root = merkle_root(&leaves);
         Self {
-            commitment,
-            degree: data.len(),
+            commitment: root.to_vec(),
+            degree: leaves.len(),
         }
     }
 
-    /// Verify a commitment (simplified for MVP)
+    /// Verify data against the Merkle-root commitment.
     pub fn verify(&self, data: &[u8]) -> bool {
-        let expected = Self::commit(data);
-        self.commitment == expected.commitment
+        Self::commit(data).commitment == self.commitment
     }
+
+    /// Merkle opening proof for chunk at `index`.
+    pub fn opening_proof(data: &[u8], index: usize) -> Vec<[u8; 32]> {
+        let chunk_size = 4096usize;
+        let leaves: Vec<[u8; 32]> = data
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let mut hasher = Sha256::new();
+                hasher.update(chunk);
+                hasher.finalize().into()
+            })
+            .collect();
+        merkle_proof(&leaves, index)
+    }
+}
+
+fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
+    if leaves.is_empty() {
+        return [0u8; 32];
+    }
+    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+    while level.len() > 1 {
+        let mut next = Vec::new();
+        for pair in level.chunks(2) {
+            let mut hasher = Sha256::new();
+            hasher.update(&pair[0]);
+            hasher.update(pair.get(1).unwrap_or(&pair[0]));
+            next.push(hasher.finalize().into());
+        }
+        level = next;
+    }
+    level[0]
+}
+
+fn merkle_proof(leaves: &[[u8; 32]], mut index: usize) -> Vec<[u8; 32]> {
+    let mut proof = Vec::new();
+    let mut level: Vec<[u8; 32]> = leaves.to_vec();
+    while level.len() > 1 {
+        let sibling = if index % 2 == 0 {
+            *level.get(index + 1).unwrap_or(&level[index])
+        } else {
+            level[index - 1]
+        };
+        proof.push(sibling);
+        index /= 2;
+        let mut next = Vec::new();
+        for pair in level.chunks(2) {
+            let mut hasher = Sha256::new();
+            hasher.update(&pair[0]);
+            hasher.update(pair.get(1).unwrap_or(&pair[0]));
+            next.push(hasher.finalize().into());
+        }
+        level = next;
+    }
+    proof
 }
 
 /// Data blob with KZG commitment
@@ -137,7 +198,6 @@ impl ErasureCoder {
 
         let rs = ReedSolomon::new(self.data_chunks, self.parity_chunks)
             .map_err(|e| anyhow::anyhow!("Reed-Solomon init: {}", e))?;
-        let chunk_size = chunks[0].data.len();
         let total = self.data_chunks + self.parity_chunks;
         let mut shards: Vec<Option<Vec<u8>>> = vec![None; total];
         for chunk in chunks {

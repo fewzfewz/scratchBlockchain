@@ -642,81 +642,37 @@ impl ThresholdEncryption {
         }
     }
 
-    /// Split a secret into shares using Shamir's Secret Sharing (over GF(2^8))
+    /// Split a secret into shares using Shamir's Secret Sharing (GF(2^8) via `sharks`)
     fn split_secret(&self, secret: &[u8; 32], total: usize, threshold: usize) -> Vec<Vec<u8>> {
-        use rand::Rng;
-        let mut rng = rand::thread_rng();
-        
-        // For each byte of the secret, generate a polynomial of degree (threshold - 1)
-        // where f(0) = secret_byte, and f(i) = share for participant i
-        let mut shares: Vec<Vec<u8>> = vec![Vec::with_capacity(secret.len()); total];
-        
-        for byte_idx in 0..secret.len() {
-            let secret_byte = secret[byte_idx];
-            
-            // Generate random coefficients for polynomial of degree (threshold - 1)
-            // f(x) = secret + a1*x + a2*x^2 + ... + a_{t-1}*x^{t-1}
-            let mut coeffs = vec![0i16; threshold - 1];
-            for c in &mut coeffs {
-                *c = rng.gen_range(1..=255);
-            }
-            
-            // Evaluate polynomial at x = 1..total
-            for i in 0..total {
-                let x = (i + 1) as i16;
-                let mut y = secret_byte as i16;
-                let mut x_pow = x;
-                for &c in &coeffs {
-                    y += c * x_pow;
-                    x_pow *= x;
-                }
-                shares[i].push((y & 0xFF) as u8);
-            }
-        }
-        
-        shares
+        use sharks::{Share, Sharks};
+        let t = threshold.min(255).max(1) as u8;
+        let sharks = Sharks(t);
+        sharks
+            .dealer(secret)
+            .take(total)
+            .map(|s: Share| Vec::from(&s))
+            .collect()
     }
 
-    /// Reconstruct the secret from shares using Lagrange interpolation (GF(2^8))
+    /// Reconstruct the secret from shares using Shamir (`sharks`)
     fn reconstruct_secret(&self, shares: &HashMap<Vec<u8>, Vec<u8>>, threshold: usize) -> Vec<u8> {
-        let num_bytes = shares.values().next().map(|s| s.len()).unwrap_or(0);
-        let mut secret = vec![0u8; num_bytes];
-        
-        // Get the x values (validator indices) for the available shares
-        let x_vals: Vec<i16> = self.validator_pubkeys.iter()
-            .enumerate()
-            .filter(|(_, pk)| shares.contains_key(*pk))
-            .map(|(i, _)| (i + 1) as i16)
+        use core::convert::TryFrom;
+        use sharks::{Share, Sharks};
+        if shares.len() < threshold {
+            return vec![0u8; 32];
+        }
+        let t = threshold.min(255).max(1) as u8;
+        let shark_shares: Vec<Share> = shares
+            .values()
+            .take(threshold)
+            .filter_map(|bytes| Share::try_from(bytes.as_slice()).ok())
             .collect();
-        
-        if x_vals.len() < threshold {
-            return secret;
+        if shark_shares.len() < threshold {
+            return vec![0u8; 32];
         }
-        
-        // For each byte, use Lagrange interpolation at x=0
-        for byte_idx in 0..num_bytes {
-            let y_vals: Vec<i16> = self.validator_pubkeys.iter()
-                .filter_map(|pk| shares.get(pk))
-                .map(|s| s[byte_idx] as i16)
-                .collect();
-            
-            let mut result = 0i16;
-            for i in 0..threshold {
-                let mut num = 1i16;
-                let mut den = 1i16;
-                for j in 0..threshold {
-                    if i != j {
-                        num *= -x_vals[j];
-                        den *= x_vals[i] - x_vals[j];
-                    }
-                }
-                let li = num / den;
-                result += y_vals[i] * li;
-            }
-            secret[byte_idx] = (result & 0xFF) as u8;
-        }
-        
-        secret
+        Sharks(t)
+            .recover(&shark_shares)
+            .unwrap_or_else(|_| vec![0u8; 32])
     }
 
     /// Submit an encrypted transaction to the mempool

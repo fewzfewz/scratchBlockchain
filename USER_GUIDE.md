@@ -101,6 +101,8 @@ The node enforces a **60-second cooldown** per address.
 4. Monitor via Grafana **Validator Onboarding** dashboard.
 5. Alerts fire via Alertmanager when validators go down or consensus stalls.
 
+After registration, the node **hot-reloads** the BFT validator set from on-chain state — no restart required.
+
 ## 10. Integration Tests (developers)
 
 With Docker testnet running:
@@ -109,9 +111,19 @@ With Docker testnet running:
 cd tests/localhost && npm install
 cd scripts
 node 11-create-proposal.js
+node 12-vote-proposal.js
+node 13-execute-proposal.js
 node 16-stake-tokens.js
+node 17-unstake-tokens.js
+node 18-register-validator.js
 node 40-load-test.js
 node 41-chaos-smoke.js
+```
+
+Or run the full suite:
+
+```bash
+cd tests/localhost && bash run-all-tests.sh
 ```
 
 ## 11. Common Questions

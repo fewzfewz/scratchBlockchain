@@ -371,7 +371,7 @@ impl PatriciaTrie {
             let mut hash = [0u8; 32];
             hash.copy_from_slice(&key);
             if !reachable.contains(&hash) {
-                batch.delete(ColumnFamily::State, &key);
+                batch.delete(ColumnFamily::State, key);
                 deleted += 1;
             }
         }

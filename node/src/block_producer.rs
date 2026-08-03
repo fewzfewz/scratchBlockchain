@@ -66,6 +66,78 @@ impl BlockExecutor {
         Self { evm, chain_store }
     }
 
+    fn execute_wasm_tx(payload: &[u8], chain_store: &Arc<ChainStore>) -> TransactionReceipt {
+        let rest = match std::str::from_utf8(&payload[execution::WASM_TX_PREFIX.len()..]) {
+            Ok(s) => s,
+            Err(_) => {
+                return TransactionReceipt {
+                    success: false,
+                    gas_used: 21_000,
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: Some("Invalid WASM payload encoding".into()),
+                    logs: vec![],
+                };
+            }
+        };
+        let parts: Vec<&str> = rest.splitn(3, ':').collect();
+        if parts.len() < 2 {
+            return TransactionReceipt {
+                success: false,
+                gas_used: 21_000,
+                output: vec![],
+                created_address: None,
+                revert_reason: Some("Invalid WASM payload".into()),
+                logs: vec![],
+            };
+        }
+        let name = parts[0];
+        let func = parts[1];
+        let arg: i32 = parts.get(2).and_then(|s| s.parse().ok()).unwrap_or(0);
+        let registry = crate::wasm_registry::WasmRegistry::new(chain_store.clone());
+        let wasm = match registry.get(name) {
+            Ok(Some(b)) => b,
+            _ => {
+                return TransactionReceipt {
+                    success: false,
+                    gas_used: 21_000,
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: Some(format!("WASM contract '{}' not found", name)),
+                    logs: vec![],
+                };
+            }
+        };
+        match execution::WasmExecutor::new() {
+            Ok(exec) => match exec.execute_i32(&wasm, func, arg) {
+                Ok((_result, gas)) => TransactionReceipt {
+                    success: true,
+                    gas_used: gas.max(21_000),
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: None,
+                    logs: vec![],
+                },
+                Err(e) => TransactionReceipt {
+                    success: false,
+                    gas_used: 21_000,
+                    output: vec![],
+                    created_address: None,
+                    revert_reason: Some(e.to_string()),
+                    logs: vec![],
+                },
+            },
+            Err(e) => TransactionReceipt {
+                success: false,
+                gas_used: 21_000,
+                output: vec![],
+                created_address: None,
+                revert_reason: Some(e.to_string()),
+                logs: vec![],
+            },
+        }
+    }
+
     /// Execute all transactions in a block and commit everything atomically.
     /// Called by BlockProducer after BFT finalizes a block.
     ///
@@ -94,6 +166,13 @@ impl BlockExecutor {
                     revert_reason: None,
                     logs: vec![],
                 });
+                continue;
+            }
+
+            // WASM contract call: payload `WASM:<name>:<func>:<arg>`
+            if tx.payload.starts_with(execution::WASM_TX_PREFIX) {
+                let receipt = Self::execute_wasm_tx(&tx.payload, &self.chain_store);
+                receipts.push(receipt);
                 continue;
             }
 

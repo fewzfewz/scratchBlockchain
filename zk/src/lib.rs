@@ -85,7 +85,13 @@ impl BatchVerifier {
         use rayon::prelude::*;
         self.proofs
             .par_iter()
-            .map(|proof| proof.len() == 32)
+            .map(|proof| {
+                if proof.len() != 32 {
+                    return false;
+                }
+                // Proofs are 32-byte commitments; verify non-zero
+                proof.iter().any(|&b| b != 0)
+            })
             .collect()
     }
 

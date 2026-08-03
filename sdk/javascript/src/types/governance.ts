@@ -17,6 +17,8 @@ export interface GovProposal {
   executed?: boolean;
   executionData?: string;
   actions?: GovAction[];
+  /** Voter address → choice (from node GET /proposal/{id}) */
+  voters?: Record<string, string>;
 }
 
 export interface GovAction {

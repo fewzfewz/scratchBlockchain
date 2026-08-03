@@ -97,6 +97,7 @@ export interface NodeStatus {
   finalized_height: number | null;
   mempool_size: number;
   peer_count: number;
+  chain_id?: number;
 }
 
 // ============================================================================

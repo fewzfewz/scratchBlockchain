@@ -58,8 +58,8 @@ export class ModularClient extends EventEmitter {
 
   // Chain info
   async getChainId(): Promise<number> {
-    // /status doesn't return chain_id; default to 1 as placeholder
-    return 1;
+    const status = await this.provider.request("status");
+    return status.chain_id ?? 1;
   }
 
   async getBlockNumber(): Promise<number> {
@@ -79,8 +79,14 @@ export class ModularClient extends EventEmitter {
   }
 
   async getLatestBlock(): Promise<Block> {
-    const blockNumber = await this.getBlockNumber();
-    return await this.getBlock(blockNumber);
+    const data = await this.provider.request("get_latest_block");
+    if (data.error) throw new Error(data.error);
+    return data.block;
+  }
+
+  async getTxHistory(address: string, limit: number = 50): Promise<any[]> {
+    const response = await this.provider.request("get_tx_history", [address, limit]);
+    return response.transactions || [];
   }
 
   // Account
@@ -226,37 +232,46 @@ export class ModularClient extends EventEmitter {
     }
   }
 
-  // Governance
+  // Governance (read from on-chain state)
   async getProposals(): Promise<GovProposal[]> {
-    const response = await this.provider.request("get_proposals");
+    const response = await this.provider.request("get_governance");
     return response.proposals || [];
   }
 
   async getProposal(id: number): Promise<GovProposal | null> {
     try {
       const response = await this.provider.request("get_proposal", [id]);
-      return response.proposal || response;
+      return response.proposal || null;
     } catch {
       return null;
     }
   }
 
-  async createProposal(req: CreateProposalRequest): Promise<any> {
-    return await this.provider.request("create_proposal", [req]);
+  /** Governance writes use signed POST /submit_tx — use Wallet.signTransaction with governance payload. */
+  async createProposal(_req: CreateProposalRequest): Promise<any> {
+    throw new Error("Use Wallet.signTransaction with governance payload and client.sendTransaction()");
   }
 
-  async vote(req: VoteRequest): Promise<any> {
-    return await this.provider.request("cast_vote", [req]);
+  async vote(_req: VoteRequest): Promise<any> {
+    throw new Error("Use Wallet.signTransaction with governance vote payload and client.sendTransaction()");
   }
 
-  async getVotes(proposalId: number): Promise<GovVote[]> {
-    const response = await this.provider.request("get_votes", [proposalId]);
-    return response.votes || [];
+  async getVotes(_proposalId: number): Promise<GovVote[]> {
+    const proposal = await this.getProposal(_proposalId);
+    if (!proposal || !proposal.voters) return [];
+    return Object.entries(proposal.voters).map(([voter, choice]) => ({
+      proposalId: _proposalId,
+      voter,
+      support: (String(choice) as GovVote["support"]) || "Abstain",
+      weight: "0",
+      timestamp: 0,
+    }));
   }
 
   async getTreasury(): Promise<TreasuryInfo | null> {
     try {
-      return await this.provider.request("get_treasury");
+      const response = await this.provider.request("get_governance");
+      return response.treasury || null;
     } catch {
       return null;
     }
@@ -264,7 +279,8 @@ export class ModularClient extends EventEmitter {
 
   async getGovParams(): Promise<GovParams | null> {
     try {
-      return await this.provider.request("get_gov_params");
+      const response = await this.provider.request("get_governance");
+      return response.params || null;
     } catch {
       return null;
     }
@@ -279,17 +295,59 @@ export class ModularClient extends EventEmitter {
     return await this.provider.request("delegate_stake", [{ delegator, validator, amount }]);
   }
 
-  async undelegate(delegator: string, validator: string, amount: string): Promise<any> {
-    return await this.provider.request("undelegate_stake", [{ delegator, validator, amount }]);
+  async undelegate(_delegator: string, _validator: string, _amount: string): Promise<any> {
+    throw new Error("Undelegate via signed governance/staking transaction (POST /submit_tx)");
   }
 
   async getValidators(): Promise<ValidatorInfo[]> {
     const response = await this.provider.request("get_validators");
-    return response.validators || [];
+    return response.validators || response || [];
   }
 
-  async executeProposal(proposalId: number): Promise<any> {
-    return await this.provider.request("execute_proposal", [proposalId]);
+  async registerValidator(req: {
+    address: string;
+    public_key: string;
+    stake: string;
+    commission_rate?: number;
+  }): Promise<any> {
+    return await this.provider.request("register_validator", [req]);
+  }
+
+  async executeProposal(_proposalId: number): Promise<any> {
+    throw new Error("Execute via signed governance transaction (POST /submit_tx)");
+  }
+
+  async requestFaucet(address: string, amount?: string): Promise<any> {
+    return await this.provider.request("faucet_request", [{ address, amount }]);
+  }
+
+  async getSlashingEvents(): Promise<any[]> {
+    const response = await this.provider.request("get_slashing_events");
+    return response.events || [];
+  }
+
+  // WASM contracts
+  async deployWasm(name: string, wasmBase64: string): Promise<any> {
+    return await this.provider.request("deploy_wasm", [{ name, wasm: wasmBase64 }]);
+  }
+
+  async callWasm(name: string, func: string, arg: number = 0): Promise<any> {
+    return await this.provider.request("call_wasm", [{ name, func, arg }]);
+  }
+
+  async listWasmContracts(): Promise<string[]> {
+    const response = await this.provider.request("list_wasm_contracts");
+    return response.contracts || [];
+  }
+
+  // Account abstraction & MEV
+  async submitUserOperation(op: Record<string, unknown>): Promise<any> {
+    return await this.provider.request("submit_user_operation", [op]);
+  }
+
+  async getPendingUserOperations(): Promise<number> {
+    const response = await this.provider.request("pending_user_ops");
+    return response.pending ?? response.count ?? 0;
   }
 
   async getGovStats(): Promise<GovStats | null> {
