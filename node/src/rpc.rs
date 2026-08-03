@@ -15,24 +15,24 @@
 //! ## CORS
 //! CORS headers are enabled to allow web wallets and explorers to connect.
 
+use crate::governance_store;
+use crate::tx_pool::TxPool;
 use common::types::{Block, Transaction};
 use consensus::slashing::SlashingTracker;
 use execution::account_abstraction::UserOperation;
+use execution::gas::calculate_next_base_fee;
 use governance::{ChainGovernance, Proposal, ProposalStatus};
-use crate::governance_store;
-use crate::tx_pool::TxPool;
+pub use network::NetworkCommand;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use storage::ChainStore;
 use storage::trie::PatriciaTrie;
-use tokio::sync::Mutex;
-use warp::{Filter, http::HeaderValue};
-pub use network::NetworkCommand;
+use storage::ChainStore;
 use tokio::sync::mpsc;
-use execution::gas::calculate_next_base_fee;
+use tokio::sync::Mutex;
+use warp::{http::HeaderValue, Filter};
 
 /// Minimum time (seconds) between faucet drips to the same address.
 const FAUCET_COOLDOWN_SECS: u64 = 60;
@@ -276,11 +276,11 @@ impl RpcServer {
     }
 
     pub async fn run(&self, port: u16, enable_cors: bool) {
-        use governor::{Quota, RateLimiter};
         use governor::clock::DefaultClock;
         use governor::state::keyed::DefaultKeyedStateStore;
-        use std::num::NonZeroU32;
+        use governor::{Quota, RateLimiter};
         use std::net::IpAddr;
+        use std::num::NonZeroU32;
 
         let tx_pool = self.tx_pool.clone();
         let chain_store = self.chain_store.clone();
@@ -291,22 +291,25 @@ impl RpcServer {
         let chain_id = self.chain_id;
 
         // Per-address faucet cooldown tracking (server-side, not client-enforced)
-        let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
+        let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> =
+            Arc::new(Mutex::new(HashMap::new()));
         let bridge_minted: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
         // Rate limiter: requests/second per IP (configurable via node config)
         let rl = NonZeroU32::new(self.rate_limit).unwrap_or(NonZeroU32::new(200).unwrap());
-        let rate_limiter = Arc::new(
-            RateLimiter::<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>::keyed(
-                Quota::per_second(rl),
-            ),
-        );
+        let rate_limiter = Arc::new(RateLimiter::<
+            IpAddr,
+            DefaultKeyedStateStore<IpAddr>,
+            DefaultClock,
+        >::keyed(Quota::per_second(rl)));
 
         let with_rate_limit = warp::any()
             .map(move || rate_limiter.clone())
             .and(warp::addr::remote())
             .and_then(
-                |limiter: Arc<RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>>,
+                |limiter: Arc<
+                    RateLimiter<IpAddr, DefaultKeyedStateStore<IpAddr>, DefaultClock>,
+                >,
                  addr: Option<std::net::SocketAddr>| async move {
                     if let Some(addr) = addr {
                         if limiter.check_key(&addr.ip()).is_err() {
@@ -333,7 +336,9 @@ impl RpcServer {
             .and(with_arc(chain_store.clone()))
             .and(with_arc(tx_pool.clone()))
             .and(warp::any().map(move || chain_id_rpc))
-            .and_then(|_, chain_store, tx_pool, chain_id| handle_status(chain_store, tx_pool, chain_id));
+            .and_then(|_, chain_store, tx_pool, chain_id| {
+                handle_status(chain_store, tx_pool, chain_id)
+            });
 
         // GET /mempool - List pending transactions
         let mempool_route = warp::path("mempool")
@@ -351,7 +356,10 @@ impl RpcServer {
             .and(with_arc(tx_pool.clone()))
             .and(with_arc(network_cmd_sender.clone()))
             .and_then(
-                |_, tx: Transaction, tx_pool: Arc<TxPool>, network_cmd_sender: mpsc::Sender<NetworkCommand>| async move {
+                |_,
+                 tx: Transaction,
+                 tx_pool: Arc<TxPool>,
+                 network_cmd_sender: mpsc::Sender<NetworkCommand>| async move {
                     handle_submit_tx(tx, tx_pool, network_cmd_sender).await
                 },
             );
@@ -375,28 +383,40 @@ impl RpcServer {
             .and_then(|_, tx_pool| handle_pending_user_operations(tx_pool));
 
         // POST /mev/commit - Commit-reveal: submit commitment
-        let mev_commit = warp::path!("mev" / "commit")
-            .and(with_rate_limit.clone())
-            .and(warp::post())
-            .and(body_limit)
-            .and(warp::body::json())
-            .and(with_arc(tx_pool.clone()))
-            .and(with_arc(chain_store.clone()))
-            .and_then(|_, req: MevCommitRequest, tx_pool: Arc<TxPool>, chain_store: Arc<ChainStore>| async move {
-                handle_mev_commit(req, tx_pool, chain_store).await
-            });
+        let mev_commit =
+            warp::path!("mev" / "commit")
+                .and(with_rate_limit.clone())
+                .and(warp::post())
+                .and(body_limit)
+                .and(warp::body::json())
+                .and(with_arc(tx_pool.clone()))
+                .and(with_arc(chain_store.clone()))
+                .and_then(
+                    |_,
+                     req: MevCommitRequest,
+                     tx_pool: Arc<TxPool>,
+                     chain_store: Arc<ChainStore>| async move {
+                        handle_mev_commit(req, tx_pool, chain_store).await
+                    },
+                );
 
         // POST /mev/reveal - Commit-reveal: reveal transaction
-        let mev_reveal = warp::path!("mev" / "reveal")
-            .and(with_rate_limit.clone())
-            .and(warp::post())
-            .and(body_limit)
-            .and(warp::body::json())
-            .and(with_arc(tx_pool.clone()))
-            .and(with_arc(chain_store.clone()))
-            .and_then(|_, req: MevRevealRequest, tx_pool: Arc<TxPool>, chain_store: Arc<ChainStore>| async move {
-                handle_mev_reveal(req, tx_pool, chain_store).await
-            });
+        let mev_reveal =
+            warp::path!("mev" / "reveal")
+                .and(with_rate_limit.clone())
+                .and(warp::post())
+                .and(body_limit)
+                .and(warp::body::json())
+                .and(with_arc(tx_pool.clone()))
+                .and(with_arc(chain_store.clone()))
+                .and_then(
+                    |_,
+                     req: MevRevealRequest,
+                     tx_pool: Arc<TxPool>,
+                     chain_store: Arc<ChainStore>| async move {
+                        handle_mev_reveal(req, tx_pool, chain_store).await
+                    },
+                );
 
         // POST /mev/encrypted - Submit threshold-encrypted transaction
         let mev_encrypted = warp::path!("mev" / "encrypted")
@@ -405,9 +425,11 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(tx_pool.clone()))
-            .and_then(|_, enc: mev::EncryptedTransaction, tx_pool: Arc<TxPool>| async move {
-                handle_mev_encrypted(enc, tx_pool).await
-            });
+            .and_then(
+                |_, enc: mev::EncryptedTransaction, tx_pool: Arc<TxPool>| async move {
+                    handle_mev_encrypted(enc, tx_pool).await
+                },
+            );
 
         // POST /mev/decryption_share - Submit validator decryption share
         let mev_share = warp::path!("mev" / "decryption_share")
@@ -416,9 +438,11 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(tx_pool.clone()))
-            .and_then(|_, share: mev::DecryptionShare, tx_pool: Arc<TxPool>| async move {
-                handle_mev_decryption_share(share, tx_pool).await
-            });
+            .and_then(
+                |_, share: mev::DecryptionShare, tx_pool: Arc<TxPool>| async move {
+                    handle_mev_decryption_share(share, tx_pool).await
+                },
+            );
 
         // GET /slashing/events - Slashed validators
         let slashing_events = warp::path!("slashing" / "events")
@@ -435,9 +459,11 @@ impl RpcServer {
             .and(warp::body::json())
             .and(with_arc(state_trie.clone()))
             .and(with_arc(chain_store.clone()))
-            .and_then(|_, req: DelegateRequest, state_trie, chain_store| async move {
-                handle_delegate(req, state_trie, chain_store).await
-            });
+            .and_then(
+                |_, req: DelegateRequest, state_trie, chain_store| async move {
+                    handle_delegate(req, state_trie, chain_store).await
+                },
+            );
 
         // POST /validators/register - Register a new validator (dynamic set)
         let register_validator = warp::path!("validators" / "register")
@@ -587,7 +613,9 @@ impl RpcServer {
             .and(warp::get())
             .and(with_arc(state_trie.clone()))
             .and(with_arc(chain_store.clone()))
-            .and_then(|id, _, state_trie, chain_store| handle_proposal(id, state_trie, chain_store));
+            .and_then(|id, _, state_trie, chain_store| {
+                handle_proposal(id, state_trie, chain_store)
+            });
 
         // POST /faucet/request - Request test tokens (directly credits the account)
         let faucet_request = warp::path!("faucet" / "request")
@@ -597,9 +625,14 @@ impl RpcServer {
             .and(warp::body::json())
             .and(with_arc(chain_store.clone()))
             .and(with_arc(faucet_cooldowns.clone()))
-            .and_then(|_, req: serde_json::Value, chain_store: Arc<ChainStore>, faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>>| async move {
-                handle_faucet_request(req, chain_store, faucet_cooldowns).await
-            });
+            .and_then(
+                |_,
+                 req: serde_json::Value,
+                 chain_store: Arc<ChainStore>,
+                 faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>>| async move {
+                    handle_faucet_request(req, chain_store, faucet_cooldowns).await
+                },
+            );
 
         // POST /deploy_wasm — deploy a WASM contract module
         let deploy_wasm = warp::path("deploy_wasm")
@@ -608,9 +641,11 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(chain_store.clone()))
-            .and_then(|_, req: DeployWasmRequest, chain_store: Arc<ChainStore>| async move {
-                handle_deploy_wasm(req, chain_store).await
-            });
+            .and_then(
+                |_, req: DeployWasmRequest, chain_store: Arc<ChainStore>| async move {
+                    handle_deploy_wasm(req, chain_store).await
+                },
+            );
 
         // POST /call_wasm — call a deployed WASM contract
         let call_wasm = warp::path("call_wasm")
@@ -619,9 +654,11 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(chain_store.clone()))
-            .and_then(|_, req: CallWasmRequest, chain_store: Arc<ChainStore>| async move {
-                handle_call_wasm(req, chain_store).await
-            });
+            .and_then(
+                |_, req: CallWasmRequest, chain_store: Arc<ChainStore>| async move {
+                    handle_call_wasm(req, chain_store).await
+                },
+            );
 
         // POST /call_contract — read-only EVM call (eth_call equivalent)
         let call_contract = warp::path("call_contract")
@@ -645,7 +682,10 @@ impl RpcServer {
             .and(with_arc(bridge_minted.clone()))
             .and(warp::any().map(move || chain_id))
             .and_then(
-                |_, state_trie: Arc<Mutex<PatriciaTrie>>, bridge_minted: Arc<Mutex<HashSet<String>>>, chain_id: u64| async move {
+                |_,
+                 state_trie: Arc<Mutex<PatriciaTrie>>,
+                 bridge_minted: Arc<Mutex<HashSet<String>>>,
+                 chain_id: u64| async move {
                     handle_bridge_status(state_trie, bridge_minted, chain_id).await
                 },
             );
@@ -659,7 +699,10 @@ impl RpcServer {
             .and(with_arc(chain_store.clone()))
             .and(with_arc(bridge_minted.clone()))
             .and_then(
-                |_, req: BridgeMintRequest, chain_store: Arc<ChainStore>, bridge_minted: Arc<Mutex<HashSet<String>>>| async move {
+                |_,
+                 req: BridgeMintRequest,
+                 chain_store: Arc<ChainStore>,
+                 bridge_minted: Arc<Mutex<HashSet<String>>>| async move {
                     handle_bridge_mint(req, chain_store, bridge_minted).await
                 },
             );
@@ -724,7 +767,9 @@ impl RpcServer {
         let routes_with_cors = routes.with(cors);
 
         tracing::info!("🚀 RPC server listening on 0.0.0.0:{}", port);
-        warp::serve(routes_with_cors).run(([0, 0, 0, 0], port)).await;
+        warp::serve(routes_with_cors)
+            .run(([0, 0, 0, 0], port))
+            .await;
     }
 }
 
@@ -815,7 +860,10 @@ async fn handle_get_block_by_height(
                 Ok(Some(encoded)) => {
                     let val: serde_json::Value =
                         serde_json::from_slice(&encoded).unwrap_or(serde_json::Value::Null);
-                    Ok(warp::reply::json(&BlockResponse { block: Some(val), error: None }))
+                    Ok(warp::reply::json(&BlockResponse {
+                        block: Some(val),
+                        error: None,
+                    }))
                 }
                 Ok(None) => Ok(warp::reply::json(&BlockResponse {
                     block: None,
@@ -860,7 +908,10 @@ async fn handle_get_block_by_hash(
         Ok(Some(encoded)) => {
             let val: serde_json::Value =
                 serde_json::from_slice(&encoded).unwrap_or(serde_json::Value::Null);
-            Ok(warp::reply::json(&BlockResponse { block: Some(val), error: None }))
+            Ok(warp::reply::json(&BlockResponse {
+                block: Some(val),
+                error: None,
+            }))
         }
         Ok(None) => Ok(warp::reply::json(&BlockResponse {
             block: None,
@@ -891,7 +942,10 @@ async fn handle_get_balance(
     match chain_store.get_state(&address_bytes) {
         Ok(Some(encoded)) => {
             #[derive(serde::Deserialize)]
-            struct AccountEncoded { balance: String, nonce: u64 }
+            struct AccountEncoded {
+                balance: String,
+                nonce: u64,
+            }
             if let Ok(acc) = serde_json::from_slice::<AccountEncoded>(&encoded) {
                 Ok(warp::reply::json(&BalanceResponse {
                     address: address_str,
@@ -932,7 +986,10 @@ async fn handle_get_receipt(
         Ok(Some(encoded)) => {
             let val: serde_json::Value =
                 serde_json::from_slice(&encoded).unwrap_or(serde_json::Value::Null);
-            Ok(warp::reply::json(&ReceiptResponse { receipt: Some(val), error: None }))
+            Ok(warp::reply::json(&ReceiptResponse {
+                receipt: Some(val),
+                error: None,
+            }))
         }
         Ok(None) => Ok(warp::reply::json(&ReceiptResponse {
             receipt: None,
@@ -1043,41 +1100,60 @@ async fn handle_txs_for_address(
 // Economic Handlers (Phase 9)
 // ============================================================================
 
-async fn handle_gas_price(
-    chain_store: Arc<ChainStore>,
-) -> Result<impl warp::Reply, Infallible> {
+async fn handle_gas_price(chain_store: Arc<ChainStore>) -> Result<impl warp::Reply, Infallible> {
     let latest_height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
-    
+
     // Get the latest block to read actual base fee
-    let (base_fee, low_priority, medium_priority, high_priority) = 
+    let (base_fee, low_priority, medium_priority, high_priority) =
         if let Ok(Some(hash_bytes)) = chain_store.get_block_hash_by_height(latest_height) {
             if hash_bytes.len() == 32 {
                 let mut hash = [0u8; 32];
                 hash.copy_from_slice(&hash_bytes);
                 if let Ok(Some(encoded)) = chain_store.get_block(&hash) {
                     if let Ok(block_val) = serde_json::from_slice::<serde_json::Value>(&encoded) {
-                        let base_fee_val = block_val.get("header")
+                        let base_fee_val = block_val
+                            .get("header")
                             .and_then(|h| h.get("base_fee"))
                             .and_then(|b| b.as_u64())
                             .unwrap_or(1_000_000_000);
-                        
+
                         // Priority fees based on recent blocks (simplified)
                         let low = base_fee_val;
                         let medium = base_fee_val * 2;
                         let high = base_fee_val * 5;
-                        
+
                         (base_fee_val, low, medium, high)
                     } else {
-                        (1_000_000_000u64, 1_000_000_000, 2_000_000_000, 5_000_000_000)
+                        (
+                            1_000_000_000u64,
+                            1_000_000_000,
+                            2_000_000_000,
+                            5_000_000_000,
+                        )
                     }
                 } else {
-                    (1_000_000_000u64, 1_000_000_000, 2_000_000_000, 5_000_000_000)
+                    (
+                        1_000_000_000u64,
+                        1_000_000_000,
+                        2_000_000_000,
+                        5_000_000_000,
+                    )
                 }
             } else {
-                (1_000_000_000u64, 1_000_000_000, 2_000_000_000, 5_000_000_000)
+                (
+                    1_000_000_000u64,
+                    1_000_000_000,
+                    2_000_000_000,
+                    5_000_000_000,
+                )
             }
         } else {
-            (1_000_000_000u64, 1_000_000_000, 2_000_000_000, 5_000_000_000)
+            (
+                1_000_000_000u64,
+                1_000_000_000,
+                2_000_000_000,
+                5_000_000_000,
+            )
         };
 
     let response = GasPriceResponse {
@@ -1087,7 +1163,7 @@ async fn handle_gas_price(
         suggested_priority_fee_high: high_priority.to_string(),
         block_height: latest_height,
     };
-    
+
     Ok(warp::reply::json(&response))
 }
 
@@ -1097,33 +1173,37 @@ async fn handle_estimate_gas(
 ) -> Result<impl warp::Reply, Infallible> {
     // Base transaction cost (21,000 gas)
     let base_cost = 21_000u64;
-    
+
     // Calculate data cost (EIP-2028: 16 gas per non-zero byte, 4 gas per zero byte)
     let data_bytes = hex::decode(request.data.trim_start_matches("0x")).unwrap_or_default();
-    let data_cost: u64 = data_bytes.iter()
+    let data_cost: u64 = data_bytes
+        .iter()
         .map(|&byte| if byte == 0 { 4 } else { 16 })
         .sum();
-    
+
     // Contract creation cost (if 'to' is empty or zero)
-    let is_contract_creation = request.to == "0x" || request.to == "0x0000000000000000000000000000000000000000";
+    let is_contract_creation =
+        request.to == "0x" || request.to == "0x0000000000000000000000000000000000000000";
     let contract_cost = if is_contract_creation {
         32_000 // Contract creation base cost
     } else {
         0
     };
-    
+
     // Estimated gas = base + data + contract cost + buffer (10% for safety)
     let estimated_gas = (base_cost + data_cost + contract_cost) * 110 / 100;
-    
+
     // Get current base fee from latest block
     let latest_height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
-    let base_fee = if let Ok(Some(hash_bytes)) = chain_store.get_block_hash_by_height(latest_height) {
+    let base_fee = if let Ok(Some(hash_bytes)) = chain_store.get_block_hash_by_height(latest_height)
+    {
         if hash_bytes.len() == 32 {
             let mut hash = [0u8; 32];
             hash.copy_from_slice(&hash_bytes);
             if let Ok(Some(encoded)) = chain_store.get_block(&hash) {
                 if let Ok(block_val) = serde_json::from_slice::<serde_json::Value>(&encoded) {
-                    block_val.get("header")
+                    block_val
+                        .get("header")
                         .and_then(|h| h.get("base_fee"))
                         .and_then(|b| b.as_u64())
                         .unwrap_or(1_000_000_000)
@@ -1139,23 +1219,24 @@ async fn handle_estimate_gas(
     } else {
         1_000_000_000
     };
-    
+
     // Parse max fee from request or use default
-    let max_fee = request.max_fee_per_gas
+    let max_fee = request
+        .max_fee_per_gas
         .as_ref()
         .and_then(|f| f.parse::<u128>().ok())
         .unwrap_or(1_000_000_000);
-    
+
     let total_cost = estimated_gas as u128 * max_fee;
     let estimated_priority = (max_fee / 10) as u64; // 10% of max fee as priority
-    
+
     let response = EstimateGasResponse {
         estimated_gas,
         base_fee: base_fee.to_string(),
         total_cost_estimate: total_cost.to_string(),
         estimated_priority_fee: estimated_priority.to_string(),
     };
-    
+
     Ok(warp::reply::json(&response))
 }
 
@@ -1297,7 +1378,10 @@ async fn verify_eth_lock_tx(
             .and_then(|t| t.as_str())
             .unwrap_or("")
             .to_lowercase();
-        if !to.is_empty() && to != bridge.trim_start_matches("0x").to_lowercase() && to != bridge.to_lowercase() {
+        if !to.is_empty()
+            && to != bridge.trim_start_matches("0x").to_lowercase()
+            && to != bridge.to_lowercase()
+        {
             // also accept logs from bridge contract
             let logs = receipt.get("logs").and_then(|l| l.as_array());
             if logs.map(|l| l.is_empty()).unwrap_or(true) {
@@ -1345,7 +1429,10 @@ async fn handle_bridge_mint(
     bridge_minted: Arc<Mutex<HashSet<String>>>,
 ) -> Result<impl warp::Reply, Infallible> {
     let recipient = req.recipient.trim().to_lowercase();
-    if hex::decode(recipient.trim_start_matches("0x")).map(|b| b.len() != 20).unwrap_or(true) {
+    if hex::decode(recipient.trim_start_matches("0x"))
+        .map(|b| b.len() != 20)
+        .unwrap_or(true)
+    {
         return Ok(warp::reply::json(&serde_json::json!({
             "error": "Invalid recipient address",
         })));
@@ -1378,12 +1465,8 @@ async fn handle_bridge_mint(
             })));
         }
 
-        if let Err(e) = verify_eth_lock_tx(
-            &eth_rpc,
-            &eth_hash_lower,
-            req.eth_bridge_address.as_deref(),
-        )
-        .await
+        if let Err(e) =
+            verify_eth_lock_tx(&eth_rpc, &eth_hash_lower, req.eth_bridge_address.as_deref()).await
         {
             return Ok(warp::reply::json(&serde_json::json!({ "error": e })));
         }
@@ -1409,10 +1492,10 @@ async fn handle_fee_history(
 ) -> Result<impl warp::Reply, Infallible> {
     let latest_height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
     let oldest_block = latest_height.saturating_sub(block_count);
-    
+
     let mut base_fees = Vec::new();
     let mut gas_used_ratio = Vec::new();
-    
+
     for height in oldest_block..=latest_height {
         if let Ok(Some(hash_bytes)) = chain_store.get_block_hash_by_height(height) {
             if hash_bytes.len() == 32 {
@@ -1420,13 +1503,15 @@ async fn handle_fee_history(
                 hash.copy_from_slice(&hash_bytes);
                 if let Ok(Some(encoded)) = chain_store.get_block(&hash) {
                     if let Ok(block_val) = serde_json::from_slice::<serde_json::Value>(&encoded) {
-                        let base_fee = block_val.get("header")
+                        let base_fee = block_val
+                            .get("header")
                             .and_then(|h| h.get("base_fee"))
                             .and_then(|b| b.as_u64())
                             .unwrap_or(1_000_000_000);
                         base_fees.push(base_fee.to_string());
-                        
-                        let gas_used = block_val.get("header")
+
+                        let gas_used = block_val
+                            .get("header")
                             .and_then(|h| h.get("gas_used"))
                             .and_then(|g| g.as_u64())
                             .unwrap_or(0);
@@ -1437,13 +1522,13 @@ async fn handle_fee_history(
             }
         }
     }
-    
+
     let response = FeeHistoryResponse {
         base_fee_per_gas: base_fees,
         gas_used_ratio,
         oldest_block,
     };
-    
+
     Ok(warp::reply::json(&response))
 }
 
@@ -1463,11 +1548,11 @@ async fn handle_metrics(
 
 async fn handle_health() -> Result<impl warp::Reply, Infallible> {
     #[derive(Serialize)]
-    struct HealthResponse { 
+    struct HealthResponse {
         status: String,
         version: &'static str,
     }
-    Ok(warp::reply::json(&HealthResponse { 
+    Ok(warp::reply::json(&HealthResponse {
         status: "healthy".into(),
         version: env!("CARGO_PKG_VERSION"),
     }))
@@ -1479,11 +1564,9 @@ async fn handle_connect_peer(
 ) -> Result<impl warp::Reply, Infallible> {
     match request.multiaddr.parse::<libp2p::Multiaddr>() {
         Ok(addr) => {
-            let _ = network_cmd_sender
-                .send(NetworkCommand::Dial(addr))
-                .await;
-            Ok(warp::reply::json(&ConnectPeerResponse { 
-                status: "success".into() 
+            let _ = network_cmd_sender.send(NetworkCommand::Dial(addr)).await;
+            Ok(warp::reply::json(&ConnectPeerResponse {
+                status: "success".into(),
             }))
         }
         Err(e) => Ok(warp::reply::json(&ConnectPeerResponse {
@@ -1516,18 +1599,22 @@ async fn handle_validators(
         Ok(Some(encoded)) => {
             let vals = serde_json::from_slice::<Vec<ValidatorInfo>>(&encoded).unwrap_or_default();
             let count = vals.len();
-            Ok(warp::reply::json(&ValidatorsResponse { validators: vals, count }))
+            Ok(warp::reply::json(&ValidatorsResponse {
+                validators: vals,
+                count,
+            }))
         }
         _ => {
             // No validators in trie yet
-            Ok(warp::reply::json(&ValidatorsResponse { validators: vec![], count: 0 }))
+            Ok(warp::reply::json(&ValidatorsResponse {
+                validators: vec![],
+                count: 0,
+            }))
         }
     }
 }
 
-async fn handle_block_latest(
-    chain_store: Arc<ChainStore>,
-) -> Result<impl warp::Reply, Infallible> {
+async fn handle_block_latest(chain_store: Arc<ChainStore>) -> Result<impl warp::Reply, Infallible> {
     let latest = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
     if latest == 0 {
         return Ok(warp::reply::json(&BlockResponse {
@@ -1543,7 +1630,10 @@ async fn handle_block_latest(
                 Ok(Some(encoded)) => {
                     let val: serde_json::Value =
                         serde_json::from_slice(&encoded).unwrap_or(serde_json::Value::Null);
-                    Ok(warp::reply::json(&BlockResponse { block: Some(val), error: None }))
+                    Ok(warp::reply::json(&BlockResponse {
+                        block: Some(val),
+                        error: None,
+                    }))
                 }
                 Ok(None) => Ok(warp::reply::json(&BlockResponse {
                     block: None,
@@ -1574,14 +1664,21 @@ async fn handle_delegations(
     match chain_store.get_state(&delegations_key) {
         Ok(Some(encoded)) => {
             if let Ok(dels) = serde_json::from_slice::<Vec<DelegationInfo>>(&encoded) {
-                Ok(warp::reply::json(&DelegationsResponse { delegations: dels, address: address_str }))
+                Ok(warp::reply::json(&DelegationsResponse {
+                    delegations: dels,
+                    address: address_str,
+                }))
             } else {
-                Ok(warp::reply::json(&DelegationsResponse { delegations: vec![], address: address_str }))
+                Ok(warp::reply::json(&DelegationsResponse {
+                    delegations: vec![],
+                    address: address_str,
+                }))
             }
         }
-        _ => {
-            Ok(warp::reply::json(&DelegationsResponse { delegations: vec![], address: address_str }))
-        }
+        _ => Ok(warp::reply::json(&DelegationsResponse {
+            delegations: vec![],
+            address: address_str,
+        })),
     }
 }
 
@@ -1723,12 +1820,20 @@ async fn handle_faucet_request(
 ) -> Result<impl warp::Reply, Infallible> {
     let address = match req.get("address").and_then(|v| v.as_str()) {
         Some(addr) => addr.trim_start_matches("0x").to_lowercase(),
-        None => return Ok(warp::reply::json(&serde_json::json!({"error": "Missing address"}))),
+        None => {
+            return Ok(warp::reply::json(
+                &serde_json::json!({"error": "Missing address"}),
+            ))
+        }
     };
 
     let addr_bytes = match hex::decode(&address) {
         Ok(b) if b.len() == 20 => b,
-        _ => return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid address"}))),
+        _ => {
+            return Ok(warp::reply::json(
+                &serde_json::json!({"error": "Invalid address"}),
+            ))
+        }
     };
 
     // Server-side cooldown: enforce a minimum wait between drips to the same address
@@ -1749,7 +1854,8 @@ async fn handle_faucet_request(
     cooldowns.insert(address, now);
     drop(cooldowns);
 
-    let drip_amount: u128 = req.get("amount")
+    let drip_amount: u128 = req
+        .get("amount")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000_000_000_000_000_000u128); // default 100 tokens
@@ -1772,7 +1878,9 @@ async fn handle_faucet_request(
     });
 
     if let Err(e) = chain_store.put_state(&addr_bytes, &serde_json::to_vec(&account).unwrap()) {
-        return Ok(warp::reply::json(&serde_json::json!({"error": e.to_string()})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": e.to_string()}),
+        ));
     }
 
     Ok(warp::reply::json(&serde_json::json!({
@@ -1986,13 +2094,19 @@ async fn handle_mev_commit(
     chain_store: Arc<ChainStore>,
 ) -> Result<impl warp::Reply, Infallible> {
     let Some(tx_hash) = parse_hex32(&req.tx_hash) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid tx_hash"})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid tx_hash"}),
+        ));
     };
     let Some(secret) = parse_hex32(&req.secret) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid secret"})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid secret"}),
+        ));
     };
     let Some(sender) = parse_address(&req.sender) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid sender"})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid sender"}),
+        ));
     };
     let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
     let commitment = tx_pool.submit_committed(tx_hash, secret, sender, req.nonce, height);
@@ -2008,10 +2122,14 @@ async fn handle_mev_reveal(
     chain_store: Arc<ChainStore>,
 ) -> Result<impl warp::Reply, Infallible> {
     let Some(secret) = parse_hex32(&req.secret) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid secret"})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid secret"}),
+        ));
     };
     let Some(commitment) = parse_hex32(&req.commitment) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid commitment"})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid commitment"}),
+        ));
     };
     let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
     match tx_pool.reveal_transaction(req.transaction, secret, commitment, height) {
@@ -2068,10 +2186,111 @@ async fn handle_delegate(
     chain_store: Arc<ChainStore>,
 ) -> Result<impl warp::Reply, Infallible> {
     let Some(delegator) = parse_address(&req.delegator) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid delegator"})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid delegator"}),
+        ));
     };
     let Some(validator) = parse_address(&req.validator) else {
-        return Ok(warp::reply::json(&serde_json::json!({"error": "Invalid validator"})));
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid validator"}),
+        ));
     };
     let amount: u128 = req.amount.parse().unwrap_or(0);
-    match governance_store::ap
+    match governance_store::apply_delegate(&state_trie, &chain_store, delegator, validator, amount)
+        .await
+    {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
+    }
+}
+
+async fn handle_register_validator(
+    req: RegisterValidatorRequest,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let Some(address) = parse_address(&req.address) else {
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Invalid address"}),
+        ));
+    };
+    let public_key = hex::decode(req.public_key.trim_start_matches("0x")).unwrap_or_default();
+    let stake: u128 = req.stake.parse().unwrap_or(0);
+    let commission = req.commission_rate.unwrap_or(10);
+    match governance_store::register_validator(&state_trie, address, public_key, stake, commission)
+        .await
+    {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
+    }
+}
+
+async fn handle_websocket(ws: warp::ws::WebSocket, chain_store: Arc<ChainStore>) {
+    use futures_util::{SinkExt, StreamExt};
+    use std::time::Duration;
+
+    let (mut tx, mut rx) = ws.split();
+
+    loop {
+        let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
+        let msg = warp::ws::Message::text(format!(r#"{{"event":"newHead","height":{}}}"#, height));
+        if tx.send(msg).await.is_err() {
+            break;
+        }
+        tokio::select! {
+            _ = tokio::time::sleep(Duration::from_secs(2)) => {}
+            incoming = rx.next() => {
+                if incoming.is_none() { break; }
+            }
+        }
+    }
+}
+
+// ============================================================================
+// Error Handling
+// ============================================================================
+
+/// Custom rejection type for rate limiting (so we can distinguish from other errors)
+#[derive(Debug)]
+struct RateLimited;
+impl warp::reject::Reject for RateLimited {}
+
+async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infallible> {
+    let (status, message) = if err.is_not_found() {
+        (
+            warp::http::StatusCode::NOT_FOUND,
+            "Endpoint not found".to_string(),
+        )
+    } else if err.find::<warp::reject::MethodNotAllowed>().is_some() {
+        (
+            warp::http::StatusCode::METHOD_NOT_ALLOWED,
+            "Method not allowed".to_string(),
+        )
+    } else if err.find::<warp::reject::PayloadTooLarge>().is_some() {
+        (
+            warp::http::StatusCode::PAYLOAD_TOO_LARGE,
+            "Request body too large (max 1MB)".to_string(),
+        )
+    } else if err.find::<warp::reject::InvalidQuery>().is_some() {
+        (
+            warp::http::StatusCode::BAD_REQUEST,
+            "Invalid query parameters".to_string(),
+        )
+    } else if err.find::<RateLimited>().is_some() {
+        (
+            warp::http::StatusCode::TOO_MANY_REQUESTS,
+            "Rate limit exceeded".to_string(),
+        )
+    } else {
+        #[cfg(debug_assertions)]
+        tracing::warn!("Unhandled rejection: {:?}", err);
+        (
+            warp::http::StatusCode::BAD_REQUEST,
+            "Bad request".to_string(),
+        )
+    };
+
+    Ok(warp::reply::with_status(
+        warp::reply::json(&ErrorResponse { error: message }),
+        status,
+    ))
+}

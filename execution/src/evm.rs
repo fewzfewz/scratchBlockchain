@@ -2,8 +2,8 @@ use anyhow::Result;
 use revm::{
     db::{CacheDB, DatabaseRef},
     primitives::{
-        AccountInfo, Address, Bytecode, Bytes, CreateScheme, ExecutionResult, Output,
-        TransactTo, U256, B256,
+        AccountInfo, Address, Bytecode, Bytes, CreateScheme, ExecutionResult, Output, TransactTo,
+        B256, U256,
     },
     Database, DatabaseCommit, EVM,
 };

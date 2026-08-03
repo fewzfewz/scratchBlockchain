@@ -221,16 +221,13 @@ impl RateLimiter {
         self.banned_peers.retain(|_, ban| now < ban.until);
 
         // Remove stale token buckets (no activity for 5 minutes)
-        self.buckets
-            .retain(|_, bucket| !bucket.is_stale(max_idle));
+        self.buckets.retain(|_, bucket| !bucket.is_stale(max_idle));
 
         // Clean up violation counts for peers that are no longer active
-        let active_peers: std::collections::HashSet<PeerId> = self
-            .buckets
-            .keys()
-            .map(|(peer, _)| *peer)
-            .collect();
-        self.violation_counts.retain(|peer, _| active_peers.contains(peer));
+        let active_peers: std::collections::HashSet<PeerId> =
+            self.buckets.keys().map(|(peer, _)| *peer).collect();
+        self.violation_counts
+            .retain(|peer, _| active_peers.contains(peer));
     }
 
     /// Get statistics
@@ -428,7 +425,7 @@ mod tests {
         let peer = PeerId::random();
 
         let _ = limiter.check_and_consume(&peer, MessageType::Transaction);
-        
+
         let metrics = limiter.export_metrics();
         assert!(metrics["active_buckets"].as_u64().unwrap() >= 1);
     }

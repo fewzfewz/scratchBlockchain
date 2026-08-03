@@ -191,7 +191,9 @@ mod tests {
         assert!(registry.validate_amount("USDC", 100_000).is_err());
 
         // Above maximum
-        assert!(registry.validate_amount("USDC", 10_000_000_000_000).is_err());
+        assert!(registry
+            .validate_amount("USDC", 10_000_000_000_000)
+            .is_err());
     }
 
     #[test]

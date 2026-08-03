@@ -148,14 +148,21 @@ impl ChainStore {
                 stats.blocks_pruned, stats.receipts_pruned, already, cutoff_height
             );
         } else {
-            debug!("Prune cycle complete — nothing to delete below height {}", cutoff_height);
+            debug!(
+                "Prune cycle complete — nothing to delete below height {}",
+                cutoff_height
+            );
         }
 
         Ok(stats)
     }
 
     /// Run pruning if the config says we should at this finalized height.
-    pub fn maybe_prune(&self, config: &PruneConfig, finalized_height: u64) -> Result<PruneStats, Box<dyn Error>> {
+    pub fn maybe_prune(
+        &self,
+        config: &PruneConfig,
+        finalized_height: u64,
+    ) -> Result<PruneStats, Box<dyn Error>> {
         if !config.should_run_at(finalized_height) {
             return Ok(PruneStats::default());
         }
@@ -168,7 +175,7 @@ impl ChainStore {
 mod tests {
     use super::*;
     use crate::MemDb;
-    use common::types::{Header, Block};
+    use common::types::{Block, Header};
     use std::sync::Arc;
 
     fn seed_blocks(store: &ChainStore, count: u64) {

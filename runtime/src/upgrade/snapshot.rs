@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 /// State snapshot for rollback
@@ -76,13 +76,14 @@ impl SnapshotManager {
 
     /// Get the latest snapshot
     pub fn get_latest(&self) -> Option<&StateSnapshot> {
-        self.snapshots.values()
-            .max_by_key(|s| s.id)
+        self.snapshots.values().max_by_key(|s| s.id)
     }
 
     /// Restore state from a snapshot
     pub fn restore_snapshot(&self, id: u64) -> Result<Vec<u8>, SnapshotError> {
-        let snapshot = self.snapshots.get(&id)
+        let snapshot = self
+            .snapshots
+            .get(&id)
             .ok_or(SnapshotError::SnapshotNotFound)?;
 
         // Decompress state
@@ -102,10 +103,7 @@ impl SnapshotManager {
 
     /// Prune the oldest snapshot
     fn prune_oldest(&mut self) {
-        if let Some(oldest_id) = self.snapshots.keys()
-            .min()
-            .copied()
-        {
+        if let Some(oldest_id) = self.snapshots.keys().min().copied() {
             self.snapshots.remove(&oldest_id);
         }
     }
@@ -131,7 +129,8 @@ impl SnapshotManager {
 
     /// Delete a snapshot
     pub fn delete_snapshot(&mut self, id: u64) -> Result<(), SnapshotError> {
-        self.snapshots.remove(&id)
+        self.snapshots
+            .remove(&id)
             .ok_or(SnapshotError::SnapshotNotFound)?;
         Ok(())
     }
@@ -141,13 +140,13 @@ impl SnapshotManager {
 pub enum SnapshotError {
     #[error("Snapshot not found")]
     SnapshotNotFound,
-    
+
     #[error("State root mismatch")]
     StateRootMismatch,
-    
+
     #[error("Compression failed")]
     CompressionFailed,
-    
+
     #[error("Decompression failed")]
     DecompressionFailed,
 }
@@ -189,7 +188,9 @@ mod tests {
 
         // Create 5 snapshots (max is 3)
         for i in 0..5 {
-            manager.create_snapshot(version.clone(), i, b"data").unwrap();
+            manager
+                .create_snapshot(version.clone(), i, b"data")
+                .unwrap();
         }
 
         // Should only have 3 snapshots

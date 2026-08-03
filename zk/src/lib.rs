@@ -6,8 +6,8 @@
 
 use anyhow::Result;
 use sha2::{Digest, Sha256};
-use tracing::{info, debug};
 use std::collections::HashMap;
+use tracing::{debug, info};
 
 // ============================================================================
 // Core types (used regardless of Halo2 feature)
@@ -253,7 +253,8 @@ mod tests {
         let proof = prover.prove_state_transition(prev_root, new_root, tx_hash, block_hash);
         assert!(proof.is_ok());
 
-        let verification = prover.verify_state_transition(&proof.unwrap(), prev_root, new_root, tx_hash);
+        let verification =
+            prover.verify_state_transition(&proof.unwrap(), prev_root, new_root, tx_hash);
         assert!(verification.is_ok());
         assert!(verification.unwrap());
     }
@@ -282,7 +283,12 @@ mod tests {
         let mut batch = BatchVerifier::new(10);
 
         for i in 0..5 {
-            let proof = prover.prove_state_transition([i as u8; 32], [(i + 1) as u8; 32], [i as u8; 32], [0; 32]);
+            let proof = prover.prove_state_transition(
+                [i as u8; 32],
+                [(i + 1) as u8; 32],
+                [i as u8; 32],
+                [0; 32],
+            );
             batch.add_proof(proof.unwrap());
         }
 

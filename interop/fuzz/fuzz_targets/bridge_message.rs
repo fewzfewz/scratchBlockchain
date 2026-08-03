@@ -1,6 +1,6 @@
-use interop::ethereum_bridge::{EthereumBridge, BridgeMessage};
-use proptest::prelude::*;
 use common::types::Address;
+use interop::ethereum_bridge::{BridgeMessage, EthereumBridge};
+use proptest::prelude::*;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]

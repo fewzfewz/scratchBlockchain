@@ -17,7 +17,7 @@ proptest! {
             ValidatorInfo { public_key: vec![2u8; 20], stake: 100, slashed: false },
             ValidatorInfo { public_key: vec![3u8; 20], stake: 100, slashed: false },
         ];
-        
+
         let mut gadget = FinalityGadget::new(validators.clone());
         let voter_idx = validator_idx as usize % validators.len();
         let voter_key = validators[voter_idx].public_key.clone();

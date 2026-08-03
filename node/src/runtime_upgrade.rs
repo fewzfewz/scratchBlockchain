@@ -72,17 +72,23 @@ impl RuntimeUpgradeManager {
 
     /// Approve an upgrade proposal (via governance)
     pub fn approve_upgrade(&mut self, proposal_id: u64) -> Result<(), String> {
-        let proposal = self.pending_upgrades
+        let proposal = self
+            .pending_upgrades
             .get_mut(&proposal_id)
             .ok_or("Proposal not found")?;
-        
+
         proposal.approved = true;
         Ok(())
     }
 
     /// Execute an approved upgrade at the specified height
-    pub fn execute_upgrade(&mut self, proposal_id: u64, current_height: u64) -> Result<RuntimeVersion, String> {
-        let proposal = self.pending_upgrades
+    pub fn execute_upgrade(
+        &mut self,
+        proposal_id: u64,
+        current_height: u64,
+    ) -> Result<RuntimeVersion, String> {
+        let proposal = self
+            .pending_upgrades
             .get(&proposal_id)
             .ok_or("Proposal not found")?;
 
@@ -97,7 +103,7 @@ impl RuntimeUpgradeManager {
         // Execute upgrade
         self.current_version = proposal.new_version.clone();
         self.upgrade_history.push(proposal.new_version.clone());
-        
+
         // Remove from pending
         self.pending_upgrades.remove(&proposal_id);
 
@@ -122,7 +128,7 @@ impl RuntimeUpgradeManager {
 
         // Remove current version
         self.upgrade_history.pop();
-        
+
         // Revert to previous
         self.current_version = self.upgrade_history.last().unwrap().clone();
 
@@ -147,13 +153,10 @@ mod tests {
     #[test]
     fn test_propose_upgrade() {
         let mut manager = RuntimeUpgradeManager::new(create_test_version(1));
-        
-        let proposal_id = manager.propose_upgrade(
-            create_test_version(2),
-            [1u8; 32],
-            100,
-            [1u8; 20],
-        ).unwrap();
+
+        let proposal_id = manager
+            .propose_upgrade(create_test_version(2), [1u8; 32], 100, [1u8; 20])
+            .unwrap();
 
         assert_eq!(proposal_id, 1);
         assert_eq!(manager.pending_upgrades.len(), 1);
@@ -162,16 +165,13 @@ mod tests {
     #[test]
     fn test_approve_and_execute_upgrade() {
         let mut manager = RuntimeUpgradeManager::new(create_test_version(1));
-        
-        let proposal_id = manager.propose_upgrade(
-            create_test_version(2),
-            [1u8; 32],
-            100,
-            [1u8; 20],
-        ).unwrap();
+
+        let proposal_id = manager
+            .propose_upgrade(create_test_version(2), [1u8; 32], 100, [1u8; 20])
+            .unwrap();
 
         manager.approve_upgrade(proposal_id).unwrap();
-        
+
         let new_version = manager.execute_upgrade(proposal_id, 100).unwrap();
         assert_eq!(new_version.spec_version, 2);
         assert_eq!(manager.current_version().spec_version, 2);
@@ -180,13 +180,10 @@ mod tests {
     #[test]
     fn test_rollback() {
         let mut manager = RuntimeUpgradeManager::new(create_test_version(1));
-        
-        let proposal_id = manager.propose_upgrade(
-            create_test_version(2),
-            [1u8; 32],
-            100,
-            [1u8; 20],
-        ).unwrap();
+
+        let proposal_id = manager
+            .propose_upgrade(create_test_version(2), [1u8; 32], 100, [1u8; 20])
+            .unwrap();
 
         manager.approve_upgrade(proposal_id).unwrap();
         manager.execute_upgrade(proposal_id, 100).unwrap();
@@ -200,14 +197,9 @@ mod tests {
     #[test]
     fn test_version_validation() {
         let mut manager = RuntimeUpgradeManager::new(create_test_version(2));
-        
+
         // Try to propose older version
-        let result = manager.propose_upgrade(
-            create_test_version(1),
-            [1u8; 32],
-            100,
-            [1u8; 20],
-        );
+        let result = manager.propose_upgrade(create_test_version(1), [1u8; 32], 100, [1u8; 20]);
 
         assert!(result.is_err());
     }

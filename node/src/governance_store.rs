@@ -8,9 +8,9 @@
 
 use common::types::Address;
 use governance::{ChainGovernance, GovernanceParams, ProposalType, VoteChoice};
+use std::sync::Arc;
 use storage::trie::PatriciaTrie;
 use storage::ChainStore;
-use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
@@ -155,10 +155,7 @@ pub async fn apply_extrinsics(
 /// from the consensus-state `b"validators"` trie entry. The validator set is
 /// identical on every node, so vote weights agree across the network — unlike
 /// raw account balances, some of which are only credited on a single node.
-pub async fn voter_power(
-    trie: &Arc<Mutex<PatriciaTrie>>,
-    address: &Address,
-) -> u128 {
+pub async fn voter_power(trie: &Arc<Mutex<PatriciaTrie>>, address: &Address) -> u128 {
     validator_stakes(trie)
         .await
         .iter()
@@ -179,9 +176,7 @@ async fn total_stake(trie: &Arc<Mutex<PatriciaTrie>>) -> u128 {
 }
 
 /// Addresses and staked (self-stake + delegated) balances of the validator set.
-async fn validator_stakes(
-    trie: &Arc<Mutex<PatriciaTrie>>,
-) -> Vec<(Address, u128)> {
+async fn validator_stakes(trie: &Arc<Mutex<PatriciaTrie>>) -> Vec<(Address, u128)> {
     let guard = trie.lock().await;
     let Ok(Some(data)) = guard.get(b"validators") else {
         return vec![];
@@ -221,7 +216,10 @@ pub async fn collect_treasury_fee(
     }
     let mut state = load_or_init(trie).await?;
     state.treasury.balance = state.treasury.balance.saturating_add(amount as u128);
-    state.treasury.total_collected = state.treasury.total_collected.saturating_add(amount as u128);
+    state.treasury.total_collected = state
+        .treasury
+        .total_collected
+        .saturating_add(amount as u128);
     let data = serde_json::to_vec(&state)?;
     trie.lock().await.insert(GOVERNANCE_KEY, &data)?;
     Ok(())
@@ -282,7 +280,10 @@ pub async fn register_validator(
     }
     let mut validators = load_validators(trie).await?;
     let addr_hex = format!("0x{}", hex::encode(address));
-    if validators.iter().any(|v| v.address.eq_ignore_ascii_case(&addr_hex)) {
+    if validators
+        .iter()
+        .any(|v| v.address.eq_ignore_ascii_case(&addr_hex))
+    {
         return Err("Validator already registered".into());
     }
     validators.push(ValidatorEntry {

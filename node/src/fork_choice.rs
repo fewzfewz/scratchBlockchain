@@ -35,7 +35,7 @@ impl ForkChoice {
 
         // Get current finalized height from storage
         let _current_finalized = block_store.get_latest_finalized_height()?.unwrap_or(0);
-        
+
         // Get our current tip
         let our_height = block_store.get_latest_height()?.unwrap_or(0);
 
@@ -49,8 +49,11 @@ impl ForkChoice {
         // Check if this block is on a competing fork
         if block_height > our_height {
             // Potential fork with higher height
-            warn!("Detected fork: incoming height {} > our height {}", block_height, our_height);
-            
+            warn!(
+                "Detected fork: incoming height {} > our height {}",
+                block_height, our_height
+            );
+
             // Check if the fork has higher finalized height
             // For now, we'll accept any higher chain
             // In production, verify the finality proofs
@@ -62,7 +65,10 @@ impl ForkChoice {
 
         // Block is old or duplicate
         if block_height <= our_height {
-            info!("Block {} is old or duplicate (our height: {})", block_height, our_height);
+            info!(
+                "Block {} is old or duplicate (our height: {})",
+                block_height, our_height
+            );
             return Ok(ForkDecision::Ignore);
         }
 
@@ -96,12 +102,7 @@ impl ForkChoice {
     }
 
     /// Register a new chain tip
-    pub fn register_tip(
-        &mut self,
-        block_hash: [u8; 32],
-        height: u64,
-        finalized_height: u64,
-    ) {
+    pub fn register_tip(&mut self, block_hash: [u8; 32], height: u64, finalized_height: u64) {
         self.chain_tips.insert(
             block_hash,
             ChainTip {
@@ -119,10 +120,7 @@ pub enum ForkDecision {
     /// Accept the block as extending our current chain
     Accept,
     /// Reorganize to a new chain
-    Reorg {
-        new_tip: [u8; 32],
-        new_height: u64,
-    },
+    Reorg { new_tip: [u8; 32], new_height: u64 },
     /// Ignore the block (old or duplicate)
     Ignore,
 }
@@ -148,7 +146,9 @@ mod tests {
         let header = Header::new(genesis.hash(), 1);
         let block1 = Block::new(header, vec![]);
 
-        let decision = fork_choice.handle_incoming_block(&block1, &block_store).unwrap();
+        let decision = fork_choice
+            .handle_incoming_block(&block1, &block_store)
+            .unwrap();
         assert_eq!(decision, ForkDecision::Accept);
     }
 
@@ -166,7 +166,9 @@ mod tests {
         let header = Header::new([0u8; 32], 10);
         let block10 = Block::new(header, vec![]);
 
-        let decision = fork_choice.handle_incoming_block(&block10, &block_store).unwrap();
+        let decision = fork_choice
+            .handle_incoming_block(&block10, &block_store)
+            .unwrap();
         match decision {
             ForkDecision::Reorg { new_height, .. } => {
                 assert_eq!(new_height, 10);
@@ -189,7 +191,9 @@ mod tests {
         let header = Header::new([0u8; 32], 5);
         let block5 = Block::new(header, vec![]);
 
-        let decision = fork_choice.handle_incoming_block(&block5, &block_store).unwrap();
+        let decision = fork_choice
+            .handle_incoming_block(&block5, &block_store)
+            .unwrap();
         assert_eq!(decision, ForkDecision::Ignore);
     }
 }

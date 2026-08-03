@@ -352,9 +352,8 @@ export class ModularClient extends EventEmitter {
 
   async getGovStats(): Promise<GovStats | null> {
     try {
-      const [proposals, treasury, validators, params] = await Promise.all([
+      const [proposals, validators, params] = await Promise.all([
         this.getProposals(),
-        this.getTreasury(),
         this.getValidators(),
         this.getGovParams(),
       ]);

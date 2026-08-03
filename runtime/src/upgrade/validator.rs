@@ -17,13 +17,13 @@ impl UpgradeValidator {
     ) -> Result<(), ValidationError> {
         // 1. Version compatibility
         self.check_version_compatibility(current, new)?;
-        
+
         // 2. Code hash verification
         self.verify_code_hash(code)?;
-        
+
         // 3. Resource requirements
         self.check_resource_requirements(code)?;
-        
+
         Ok(())
     }
 
@@ -33,11 +33,12 @@ impl UpgradeValidator {
         new: &RuntimeVersion,
     ) -> Result<(), ValidationError> {
         if !current.can_upgrade_to(new) {
-            return Err(ValidationError::IncompatibleVersion(
-                format!("Cannot upgrade from {} to {}", current, new)
-            ));
+            return Err(ValidationError::IncompatibleVersion(format!(
+                "Cannot upgrade from {} to {}",
+                current, new
+            )));
         }
-        
+
         Ok(())
     }
 
@@ -45,7 +46,7 @@ impl UpgradeValidator {
         if code.is_empty() {
             return Err(ValidationError::InvalidCode("Code is empty".to_string()));
         }
-        
+
         // In production: verify code hash against approved hash
         Ok(())
     }
@@ -56,7 +57,7 @@ impl UpgradeValidator {
         if code.len() > MAX_CODE_SIZE {
             return Err(ValidationError::CodeTooLarge);
         }
-        
+
         Ok(())
     }
 
@@ -71,7 +72,7 @@ impl UpgradeValidator {
         if has_migrations && old_state_root == new_state_root {
             return Err(ValidationError::StateNotMigrated);
         }
-        
+
         // In production: verify invariants (total supply, etc.)
         Ok(())
     }
@@ -87,16 +88,16 @@ impl Default for UpgradeValidator {
 pub enum ValidationError {
     #[error("Incompatible version: {0}")]
     IncompatibleVersion(String),
-    
+
     #[error("Invalid code: {0}")]
     InvalidCode(String),
-    
+
     #[error("Code too large")]
     CodeTooLarge,
-    
+
     #[error("State not migrated")]
     StateNotMigrated,
-    
+
     #[error("Invariant violated: {0}")]
     InvariantViolated(String),
 }
@@ -114,7 +115,7 @@ mod tests {
 
         // Valid upgrade
         assert!(validator.check_version_compatibility(&v1, &v2).is_ok());
-        
+
         // Invalid upgrade (skipping major version)
         assert!(validator.check_version_compatibility(&v1, &v3).is_err());
     }
@@ -122,10 +123,10 @@ mod tests {
     #[test]
     fn test_code_validation() {
         let validator = UpgradeValidator::new();
-        
+
         // Empty code
         assert!(validator.verify_code_hash(&[]).is_err());
-        
+
         // Valid code
         assert!(validator.verify_code_hash(b"valid code").is_ok());
     }

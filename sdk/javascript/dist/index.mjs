@@ -28,7 +28,8 @@ var ModularClient = class extends EventEmitter {
   }
   // Chain info
   async getChainId() {
-    return 1;
+    const status = await this.provider.request("status");
+    return status.chain_id ?? 1;
   }
   async getBlockNumber() {
     const status = await this.provider.request("block_number");
@@ -44,8 +45,14 @@ var ModularClient = class extends EventEmitter {
     return data.block;
   }
   async getLatestBlock() {
-    const blockNumber = await this.getBlockNumber();
-    return await this.getBlock(blockNumber);
+    const data = await this.provider.request("get_latest_block");
+    if (data.error)
+      throw new Error(data.error);
+    return data.block;
+  }
+  async getTxHistory(address, limit = 50) {
+    const response = await this.provider.request("get_tx_history", [address, limit]);
+    return response.transactions || [];
   }
   // Account
   async getBalance(address) {
@@ -159,39 +166,50 @@ var ModularClient = class extends EventEmitter {
       return false;
     }
   }
-  // Governance
+  // Governance (read from on-chain state)
   async getProposals() {
-    const response = await this.provider.request("get_proposals");
+    const response = await this.provider.request("get_governance");
     return response.proposals || [];
   }
   async getProposal(id) {
     try {
       const response = await this.provider.request("get_proposal", [id]);
-      return response.proposal || response;
+      return response.proposal || null;
     } catch {
       return null;
     }
   }
-  async createProposal(req) {
-    return await this.provider.request("create_proposal", [req]);
+  /** Governance writes use signed POST /submit_tx — use Wallet.signTransaction with governance payload. */
+  async createProposal(_req) {
+    throw new Error("Use Wallet.signTransaction with governance payload and client.sendTransaction()");
   }
-  async vote(req) {
-    return await this.provider.request("cast_vote", [req]);
+  async vote(_req) {
+    throw new Error("Use Wallet.signTransaction with governance vote payload and client.sendTransaction()");
   }
-  async getVotes(proposalId) {
-    const response = await this.provider.request("get_votes", [proposalId]);
-    return response.votes || [];
+  async getVotes(_proposalId) {
+    const proposal = await this.getProposal(_proposalId);
+    if (!proposal || !proposal.voters)
+      return [];
+    return Object.entries(proposal.voters).map(([voter, choice]) => ({
+      proposalId: _proposalId,
+      voter,
+      support: String(choice) || "Abstain",
+      weight: "0",
+      timestamp: 0
+    }));
   }
   async getTreasury() {
     try {
-      return await this.provider.request("get_treasury");
+      const response = await this.provider.request("get_governance");
+      return response.treasury || null;
     } catch {
       return null;
     }
   }
   async getGovParams() {
     try {
-      return await this.provider.request("get_gov_params");
+      const response = await this.provider.request("get_governance");
+      return response.params || null;
     } catch {
       return null;
     }
@@ -203,21 +221,49 @@ var ModularClient = class extends EventEmitter {
   async delegate(delegator, validator, amount) {
     return await this.provider.request("delegate_stake", [{ delegator, validator, amount }]);
   }
-  async undelegate(delegator, validator, amount) {
-    return await this.provider.request("undelegate_stake", [{ delegator, validator, amount }]);
+  async undelegate(_delegator, _validator, _amount) {
+    throw new Error("Undelegate via signed governance/staking transaction (POST /submit_tx)");
   }
   async getValidators() {
     const response = await this.provider.request("get_validators");
-    return response.validators || [];
+    return response.validators || response || [];
   }
-  async executeProposal(proposalId) {
-    return await this.provider.request("execute_proposal", [proposalId]);
+  async registerValidator(req) {
+    return await this.provider.request("register_validator", [req]);
+  }
+  async executeProposal(_proposalId) {
+    throw new Error("Execute via signed governance transaction (POST /submit_tx)");
+  }
+  async requestFaucet(address, amount) {
+    return await this.provider.request("faucet_request", [{ address, amount }]);
+  }
+  async getSlashingEvents() {
+    const response = await this.provider.request("get_slashing_events");
+    return response.events || [];
+  }
+  // WASM contracts
+  async deployWasm(name, wasmBase64) {
+    return await this.provider.request("deploy_wasm", [{ name, wasm: wasmBase64 }]);
+  }
+  async callWasm(name, func, arg = 0) {
+    return await this.provider.request("call_wasm", [{ name, func, arg }]);
+  }
+  async listWasmContracts() {
+    const response = await this.provider.request("list_wasm_contracts");
+    return response.contracts || [];
+  }
+  // Account abstraction & MEV
+  async submitUserOperation(op) {
+    return await this.provider.request("submit_user_operation", [op]);
+  }
+  async getPendingUserOperations() {
+    const response = await this.provider.request("pending_user_ops");
+    return response.pending ?? response.count ?? 0;
   }
   async getGovStats() {
     try {
-      const [proposals, treasury, validators, params] = await Promise.all([
+      const [proposals, validators, params] = await Promise.all([
         this.getProposals(),
-        this.getTreasury(),
         this.getValidators(),
         this.getGovParams()
       ]);
@@ -408,7 +454,7 @@ var HttpProvider = class {
       const ep = this.mapMethodToEndpoint(method);
       let response;
       if (ep.method === "GET") {
-        const url = this.buildGetUrl(ep.path, params);
+        const url = this.buildGetUrl(ep.path, params, method);
         response = await this.client.get(url);
       } else {
         response = await this.client.post(ep.path, params[0] || {});
@@ -435,11 +481,12 @@ var HttpProvider = class {
       block_number: "/status",
       get_block: "/block/",
       get_block_by_hash: "/block/hash/",
+      get_latest_block: "/block/latest",
       get_balance: "/balance/",
       get_account: "/balance/",
       get_transaction: "/tx/",
       get_transaction_receipt: "/tx/",
-      estimate_gas: "/estimate_gas",
+      get_tx_history: "/txs/",
       gas_price: "/gas_price",
       get_mempool: "/mempool",
       get_peers: "/peers",
@@ -447,41 +494,51 @@ var HttpProvider = class {
       status: "/status",
       health: "/health",
       fee_history: "/fee_history/",
-      // Governance GET endpoints
-      get_proposals: "/governance/proposals",
-      get_proposal: "/governance/proposals/",
-      get_treasury: "/governance/treasury",
-      get_gov_params: "/governance/params",
-      get_delegations: "/governance/delegations/",
-      get_validators: "/governance/validators",
-      get_votes: "/governance/votes/"
+      get_governance: "/governance",
+      get_proposals: "/governance",
+      get_proposal: "/proposal/",
+      get_treasury: "/governance",
+      get_gov_params: "/governance",
+      get_delegations: "/delegations/",
+      get_validators: "/validators",
+      get_slashing_events: "/slashing/events",
+      list_wasm_contracts: "/wasm/contracts",
+      pending_user_ops: "/user_operations/pending"
     };
     const post = {
       send_transaction: "/submit_tx",
       submit_tx: "/submit_tx",
       send_raw_transaction: "/submit_tx",
       connect_peer: "/connect_peer",
-      estimate_gas_post: "/estimate_gas",
-      // Governance POST endpoints
-      create_proposal: "/governance/proposals",
-      cast_vote: "/governance/vote",
-      delegate_stake: "/governance/delegate",
-      undelegate_stake: "/governance/undelegate",
-      execute_proposal: "/governance/proposals/execute/"
+      estimate_gas: "/estimate_gas",
+      delegate_stake: "/delegate",
+      register_validator: "/validators/register",
+      faucet_request: "/faucet/request",
+      deploy_wasm: "/deploy_wasm",
+      call_wasm: "/call_wasm",
+      submit_user_operation: "/submit_user_operation",
+      mev_commit: "/mev/commit",
+      mev_reveal: "/mev/reveal",
+      mev_encrypted: "/mev/encrypted",
+      mev_decryption_share: "/mev/decryption_share"
     };
     if (post[method]) {
       return { method: "POST", path: post[method] };
     }
     return { method: "GET", path: get[method] || "/" };
   }
-  buildGetUrl(basePath, params) {
+  buildGetUrl(basePath, params, method) {
     if (params.length === 0)
       return basePath;
     const param = params[0];
     if (param === void 0 || param === null)
       return basePath;
     const encoded = typeof param === "string" ? encodeURIComponent(param) : String(param);
-    return basePath + encoded;
+    let url = basePath + encoded;
+    if (method === "get_tx_history" && params[1] !== void 0) {
+      url += `?limit=${encodeURIComponent(String(params[1]))}`;
+    }
+    return url;
   }
   getUrl() {
     return this.url;

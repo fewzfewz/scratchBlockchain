@@ -45,8 +45,8 @@ impl ReputationScore {
 /// Serializable reputation data for persistence
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ReputationData {
-    scores: HashMap<String, i32>,  // PeerId string -> score
-    banned_until: HashMap<String, u64>,  // PeerId string -> ban expiration timestamp
+    scores: HashMap<String, i32>,       // PeerId string -> score
+    banned_until: HashMap<String, u64>, // PeerId string -> ban expiration timestamp
 }
 
 pub struct PeerReputation {
@@ -99,7 +99,12 @@ impl PeerReputation {
             let ban_duration = Duration::from_secs(3600);
             self.banned_peers
                 .insert(peer, Instant::now() + ban_duration);
-            info!("🚫 Peer {} banned for {:?} (score: {})", peer, ban_duration, score.value());
+            info!(
+                "🚫 Peer {} banned for {:?} (score: {})",
+                peer,
+                ban_duration,
+                score.value()
+            );
         }
     }
 
@@ -121,16 +126,16 @@ impl PeerReputation {
             }
         }
     }
-    
+
     /// Export reputation data for persistence
     pub fn export(&self) -> Result<serde_json::Value, Box<dyn std::error::Error>> {
         let mut scores = HashMap::new();
         let mut banned_until = HashMap::new();
-        
+
         for (peer, score) in &self.scores {
             scores.insert(peer.to_string(), score.value());
         }
-        
+
         for (peer, expiration) in &self.banned_peers {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -139,25 +144,28 @@ impl PeerReputation {
                 + expiration.duration_since(Instant::now()).as_secs();
             banned_until.insert(peer.to_string(), timestamp);
         }
-        
-        Ok(serde_json::to_value(ReputationData { scores, banned_until })?)
+
+        Ok(serde_json::to_value(ReputationData {
+            scores,
+            banned_until,
+        })?)
     }
-    
+
     /// Import reputation data from persistence
     pub fn import(&mut self, data: serde_json::Value) -> Result<(), Box<dyn std::error::Error>> {
         let data: ReputationData = serde_json::from_value(data)?;
-        
+
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         for (peer_str, score_value) in data.scores {
             if let Ok(peer) = peer_str.parse::<PeerId>() {
                 self.scores.insert(peer, ReputationScore(score_value));
             }
         }
-        
+
         for (peer_str, until_secs) in data.banned_until {
             if until_secs > now_secs {
                 if let Ok(peer) = peer_str.parse::<PeerId>() {
@@ -166,16 +174,17 @@ impl PeerReputation {
                 }
             }
         }
-        
+
         Ok(())
     }
-    
+
     /// Export metrics for monitoring
     pub fn get_metrics(&self) -> serde_json::Value {
         let total_peers = self.scores.len();
         let banned_count = self.banned_peers.len();
-        let avg_score: f64 = self.scores.values().map(|s| s.value() as f64).sum::<f64>() / total_peers.max(1) as f64;
-        
+        let avg_score: f64 =
+            self.scores.values().map(|s| s.value() as f64).sum::<f64>() / total_peers.max(1) as f64;
+
         serde_json::json!({
             "total_peers": total_peers,
             "banned_peers": banned_count,
@@ -192,10 +201,10 @@ mod tests {
     fn test_reputation_score() {
         let mut score = ReputationScore::new();
         assert_eq!(score.value(), 0);
-        
+
         score.update(10);
         assert_eq!(score.value(), 10);
-        
+
         score.update(-60);
         assert_eq!(score.value(), -50); // Clamped to -50
         assert!(score.is_banned());
@@ -205,7 +214,7 @@ mod tests {
     fn test_good_behavior() {
         let mut rep = PeerReputation::new();
         let peer = PeerId::random();
-        
+
         rep.report_good_behavior(peer);
         assert_eq!(rep.get_score(&peer), 1);
         assert!(!rep.is_banned(&peer));
@@ -215,12 +224,12 @@ mod tests {
     fn test_bad_behavior_ban() {
         let mut rep = PeerReputation::new();
         let peer = PeerId::random();
-        
+
         // Report enough bad behavior to get banned
         for _ in 0..60 {
             rep.report_bad_behavior(peer, 1);
         }
-        
+
         assert!(rep.get_score(&peer) <= -50);
         assert!(rep.is_banned(&peer));
     }
@@ -229,15 +238,15 @@ mod tests {
     fn test_export_import() {
         let mut rep = PeerReputation::new();
         let peer = PeerId::random();
-        
+
         rep.report_good_behavior(peer);
         rep.report_bad_behavior(peer, 5);
-        
+
         let exported = rep.export().unwrap();
-        
+
         let mut rep2 = PeerReputation::new();
         rep2.import(exported).unwrap();
-        
+
         assert_eq!(rep2.get_score(&peer), rep.get_score(&peer));
     }
 }

@@ -1,4 +1,3 @@
-
 use common::types::{Block, Transaction};
 use consensus::bft::BftEngine;
 use consensus::FinalityGadget;
@@ -6,9 +5,9 @@ use libp2p::{Multiaddr, PeerId};
 use mempool::Mempool;
 use network::{NetworkCommand, NetworkEvent, NetworkService};
 use std::sync::Arc;
-use storage::{BlockStore, StateStore, receipt_store::ReceiptStore};
-use tokio::sync::{mpsc, Mutex};
+use storage::{receipt_store::ReceiptStore, BlockStore, StateStore};
 use tempfile::TempDir;
+use tokio::sync::{mpsc, Mutex};
 
 pub struct TestNode {
     pub peer_id: PeerId,
@@ -36,7 +35,7 @@ impl TestNode {
     }
 
     pub async fn disconnect_peer(&self, peer_id: PeerId) {
-        // Note: NetworkService doesn't expose disconnect directly yet, 
+        // Note: NetworkService doesn't expose disconnect directly yet,
         // but we can simulate it or add it. For now, we'll just implement a placeholder
         // or rely on the network partition test logic which might need a way to stop traffic.
         // For the partition test, we might need to add a "Ban" or "Disconnect" command to NetworkCommand.
@@ -63,7 +62,10 @@ impl TestNode {
     }
 }
 
-pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::Receiver<NetworkEvent>) {
+pub async fn create_test_node(
+    rpc_port: u16,
+    p2p_port: u16,
+) -> (TestNode, mpsc::Receiver<NetworkEvent>) {
     // Create temp dirs
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("db");
@@ -75,7 +77,7 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     let receipt_kv: std::sync::Arc<storage::MemDb> = std::sync::Arc::new(storage::MemDb::new());
     let receipt_store = Arc::new(ReceiptStore::new(receipt_kv));
     let mempool = Arc::new(Mempool::new(mempool::MempoolConfig::default()));
-    
+
     // Create test validators
     use common::crypto::SigningKey;
     use consensus::ValidatorInfo;
@@ -85,17 +87,21 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
         stake: 100,
         slashed: false,
     }];
-    
+
     let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators)));
     let metrics = Arc::new(crate::metrics::Metrics::new());
 
     // Initialize network
-    let (mut network_service, network_cmd_sender, network_event_receiver) = NetworkService::new(vec![], "").unwrap();
+    let (mut network_service, network_cmd_sender, network_event_receiver) =
+        NetworkService::new(vec![], "").unwrap();
     let peer_id = network_service.local_peer_id().clone();
-    
+
     // Listen on localhost
     let listen_addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}", p2p_port).parse().unwrap();
-    network_cmd_sender.send(NetworkCommand::StartListening(listen_addr.clone())).await.unwrap();
+    network_cmd_sender
+        .send(NetworkCommand::StartListening(listen_addr.clone()))
+        .await
+        .unwrap();
 
     // Spawn network service
     tokio::spawn(async move {
@@ -113,17 +119,16 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
         metrics.clone(),
         network_cmd_sender.clone(),
     );
-    
+
     tokio::spawn(async move {
         rpc_server.run(rpc_port, None).await;
     });
     */
 
-
     // Start block producer (simplified for test)
+    use crate::block_producer::{BlockExecutor, BlockProducerConfig};
     use consensus::bft::BftEngine;
     use execution::evm::EvmExecutor;
-    use crate::block_producer::{BlockExecutor, BlockProducerConfig};
     let signing_key = common::crypto::SigningKey::generate();
     let validators = vec![consensus::ValidatorInfo {
         public_key: signing_key.public_key(),
@@ -139,9 +144,13 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
     let evm = EvmExecutor::new();
     let chain_store = Arc::new(storage::ChainStore::new(Arc::new(storage::MemDb::new())));
     let executor = BlockExecutor::new(evm, chain_store);
-    let validator_addr: [u8; 20] = <[u8; 20]>::try_from(&signing_key.public_key()[..20]).unwrap_or([0u8; 20]);
-    
-    let tx_pool = Arc::new(crate::tx_pool::TxPool::new(mempool::MempoolConfig::default(), vec![]));
+    let validator_addr: [u8; 20] =
+        <[u8; 20]>::try_from(&signing_key.public_key()[..20]).unwrap_or([0u8; 20]);
+
+    let tx_pool = Arc::new(crate::tx_pool::TxPool::new(
+        mempool::MempoolConfig::default(),
+        vec![],
+    ));
 
     let block_producer = crate::block_producer::BlockProducer::new(
         tx_pool.clone(),
@@ -151,8 +160,8 @@ pub async fn create_test_node(rpc_port: u16, p2p_port: u16) -> (TestNode, mpsc::
         validator_addr,
         BlockProducerConfig::default(),
     );
-    
-    // Note: BlockProducer doesn't have a start() method, 
+
+    // Note: BlockProducer doesn't have a start() method,
     // it's meant to be called via produce_block() when needed
 
     (
@@ -194,13 +203,13 @@ pub fn create_mock_components() -> (
 ) {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path();
-    
+
     let block_store = Arc::new(BlockStore::new(db_path.join("blocks").to_str().unwrap()).unwrap());
     let state_store = Arc::new(StateStore::open(db_path.join("state").to_str().unwrap()).unwrap());
     let receipt_kv: std::sync::Arc<storage::MemDb> = std::sync::Arc::new(storage::MemDb::new());
     let receipt_store = Arc::new(ReceiptStore::new(receipt_kv));
     let mempool = Arc::new(Mempool::new(mempool::MempoolConfig::default()));
-    
+
     // Create test validators
     use common::crypto::SigningKey;
     use consensus::ValidatorInfo;
@@ -210,10 +219,18 @@ pub fn create_mock_components() -> (
         stake: 100,
         slashed: false,
     }];
-    
+
     let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators)));
     let metrics = Arc::new(crate::metrics::Metrics::new());
     let (tx, _) = mpsc::channel(100);
 
-    (mempool, block_store, state_store, receipt_store, finality_gadget, metrics, tx)
+    (
+        mempool,
+        block_store,
+        state_store,
+        receipt_store,
+        finality_gadget,
+        metrics,
+        tx,
+    )
 }

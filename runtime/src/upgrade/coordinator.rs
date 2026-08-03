@@ -1,10 +1,10 @@
-use serde::{Deserialize, Serialize};
 use crate::upgrade::{
-    version::{RuntimeVersion, RuntimeMetadata},
-    snapshot::{SnapshotManager, SnapshotError},
-    migration::{StateMigrator, MigrationPlan, MigrationError},
+    migration::{MigrationError, MigrationPlan, StateMigrator},
+    snapshot::{SnapshotError, SnapshotManager},
     validator::{UpgradeValidator, ValidationError},
+    version::{RuntimeMetadata, RuntimeVersion},
 };
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Upgrade state
@@ -71,10 +71,11 @@ impl UpgradeCoordinator {
         }
 
         // Validate upgrade
-        self.validator.validate_upgrade(&self.current_version, &new_version, &code)?;
+        self.validator
+            .validate_upgrade(&self.current_version, &new_version, &code)?;
 
         // Compute code hash
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut hasher = Sha256::new();
         hasher.update(&code);
         let code_hash: [u8; 32] = hasher.finalize().into();
@@ -105,7 +106,9 @@ impl UpgradeCoordinator {
         current_block: u64,
         state_data: &[u8],
     ) -> Result<Vec<u8>, UpgradeError> {
-        let upgrade = self.pending_upgrade.as_mut()
+        let upgrade = self
+            .pending_upgrade
+            .as_mut()
             .ok_or(UpgradeError::NoUpgradePending)?;
 
         // Check if it's time to execute
@@ -134,7 +137,7 @@ impl UpgradeCoordinator {
         };
 
         // Validate post-upgrade state
-        use sha2::{Sha256, Digest};
+        use sha2::{Digest, Sha256};
         let mut old_hasher = Sha256::new();
         old_hasher.update(state_data);
         let old_state_root: [u8; 32] = old_hasher.finalize().into();
@@ -143,7 +146,8 @@ impl UpgradeCoordinator {
         new_hasher.update(&new_state);
         let new_state_root: [u8; 32] = new_hasher.finalize().into();
 
-        self.validator.validate_post_upgrade(&old_state_root, &new_state_root, has_migrations)?;
+        self.validator
+            .validate_post_upgrade(&old_state_root, &new_state_root, has_migrations)?;
 
         // Update current version
         self.current_version = upgrade.to_version.clone();
@@ -155,10 +159,13 @@ impl UpgradeCoordinator {
             code_hash: upgrade.code_hash,
             activated_at: current_block,
             state_version: self.current_version.spec_version,
-            description: format!("Upgrade from {} to {}", 
-                upgrade.from_version, upgrade.to_version),
+            description: format!(
+                "Upgrade from {} to {}",
+                upgrade.from_version, upgrade.to_version
+            ),
         };
-        self.version_history.insert(self.current_version.spec_version, metadata);
+        self.version_history
+            .insert(self.current_version.spec_version, metadata);
 
         // Clear pending upgrade
         self.pending_upgrade = None;
@@ -169,7 +176,9 @@ impl UpgradeCoordinator {
     /// Rollback to previous version
     pub fn rollback_upgrade(&mut self) -> Result<Vec<u8>, UpgradeError> {
         // Get latest snapshot
-        let snapshot = self.snapshot_manager.get_latest()
+        let snapshot = self
+            .snapshot_manager
+            .get_latest()
             .ok_or(UpgradeError::NoSnapshotAvailable)?;
 
         // Restore state
@@ -191,7 +200,9 @@ impl UpgradeCoordinator {
 
     /// Cancel pending upgrade
     pub fn cancel_upgrade(&mut self) -> Result<(), UpgradeError> {
-        let upgrade = self.pending_upgrade.as_mut()
+        let upgrade = self
+            .pending_upgrade
+            .as_mut()
             .ok_or(UpgradeError::NoUpgradePending)?;
 
         if upgrade.state == UpgradeState::InProgress {
@@ -219,25 +230,25 @@ impl UpgradeCoordinator {
 pub enum UpgradeError {
     #[error("Upgrade already pending")]
     UpgradeAlreadyPending,
-    
+
     #[error("No upgrade pending")]
     NoUpgradePending,
-    
+
     #[error("Upgrade not ready for execution")]
     UpgradeNotReady,
-    
+
     #[error("Upgrade in progress")]
     UpgradeInProgress,
-    
+
     #[error("No snapshot available for rollback")]
     NoSnapshotAvailable,
-    
+
     #[error("Validation error: {0}")]
     Validation(#[from] ValidationError),
-    
+
     #[error("Migration error: {0}")]
     Migration(#[from] MigrationError),
-    
+
     #[error("Snapshot error: {0}")]
     Snapshot(#[from] SnapshotError),
 }
@@ -249,14 +260,14 @@ mod tests {
     #[test]
     fn test_schedule_upgrade() {
         let mut coordinator = UpgradeCoordinator::new(RuntimeVersion::new(1, 0, 0));
-        
+
         let result = coordinator.schedule_upgrade(
             RuntimeVersion::new(1, 1, 0),
             b"new code".to_vec(),
             1000,
             None,
         );
-        
+
         assert!(result.is_ok());
         assert!(coordinator.get_pending_upgrade().is_some());
     }
@@ -264,17 +275,19 @@ mod tests {
     #[test]
     fn test_execute_upgrade() {
         let mut coordinator = UpgradeCoordinator::new(RuntimeVersion::new(1, 0, 0));
-        
-        coordinator.schedule_upgrade(
-            RuntimeVersion::new(1, 1, 0),
-            b"new code".to_vec(),
-            100,
-            None,
-        ).unwrap();
+
+        coordinator
+            .schedule_upgrade(
+                RuntimeVersion::new(1, 1, 0),
+                b"new code".to_vec(),
+                100,
+                None,
+            )
+            .unwrap();
 
         let state = b"test state";
         let result = coordinator.execute_upgrade(100, state);
-        
+
         assert!(result.is_ok());
         assert_eq!(coordinator.current_version().minor, 1);
     }
@@ -282,14 +295,16 @@ mod tests {
     #[test]
     fn test_rollback() {
         let mut coordinator = UpgradeCoordinator::new(RuntimeVersion::new(1, 0, 0));
-        
+
         // Execute upgrade
-        coordinator.schedule_upgrade(
-            RuntimeVersion::new(1, 1, 0),
-            b"new code".to_vec(),
-            100,
-            None,
-        ).unwrap();
+        coordinator
+            .schedule_upgrade(
+                RuntimeVersion::new(1, 1, 0),
+                b"new code".to_vec(),
+                100,
+                None,
+            )
+            .unwrap();
 
         let state = b"test state";
         coordinator.execute_upgrade(100, state).unwrap();

@@ -1,4 +1,4 @@
-use common::types::{Address, Account};
+use common::types::{Account, Address};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -58,7 +58,10 @@ impl Faucet {
             let elapsed = now - last_time;
             if elapsed < self.config.cooldown_seconds {
                 let remaining = self.config.cooldown_seconds - elapsed;
-                return Err(format!("Cooldown active. Try again in {} seconds", remaining));
+                return Err(format!(
+                    "Cooldown active. Try again in {} seconds",
+                    remaining
+                ));
             }
         }
 
@@ -175,7 +178,7 @@ mod tests {
         let address = [1u8; 20];
 
         assert_eq!(faucet.remaining_requests(&address), 10);
-        
+
         faucet.request_tokens(address).unwrap();
         assert_eq!(faucet.remaining_requests(&address), 9);
     }

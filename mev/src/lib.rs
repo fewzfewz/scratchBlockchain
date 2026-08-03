@@ -7,15 +7,15 @@
 //! - MEV auction with builder competition
 //! - Block building optimization
 
-use common::types::{Block, Transaction};
 use common::crypto::SigningKey;
+use common::types::{Block, Transaction};
+use ed25519_dalek::Verifier;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
-use sha2::{Digest, Sha256};
-use rand::Rng;
-use ed25519_dalek::Verifier;
-use tracing::{info, debug};
+use tracing::{debug, info};
 
 // ============================================================================
 // Commit-Reveal Scheme for Frontrunning Protection
@@ -78,71 +78,94 @@ impl CommitRevealScheme {
     }
 
     /// Create a commitment for a transaction
-    pub fn commit(&mut self, tx_hash: [u8; 32], secret: [u8; 32], sender: [u8; 20], nonce: u64, current_height: u64) -> [u8; 32] {
+    pub fn commit(
+        &mut self,
+        tx_hash: [u8; 32],
+        secret: [u8; 32],
+        sender: [u8; 20],
+        nonce: u64,
+        current_height: u64,
+    ) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(&tx_hash);
         hasher.update(&secret);
         let commitment = hasher.finalize().into();
-        
-        self.pending_commitments.insert(commitment, CommitmentMetadata {
-            commit_height: current_height,
-            sender,
-            nonce,
-            timestamp: Instant::now(),
-        });
-        
+
+        self.pending_commitments.insert(
+            commitment,
+            CommitmentMetadata {
+                commit_height: current_height,
+                sender,
+                nonce,
+                timestamp: Instant::now(),
+            },
+        );
+
         debug!("Commitment created at height {}", current_height);
         commitment
     }
 
     /// Reveal a transaction after the delay period
-    pub fn reveal(&mut self, tx: Transaction, secret: [u8; 32], commitment: [u8; 32], current_height: u64) -> Result<RevealedTransaction, String> {
+    pub fn reveal(
+        &mut self,
+        tx: Transaction,
+        secret: [u8; 32],
+        commitment: [u8; 32],
+        current_height: u64,
+    ) -> Result<RevealedTransaction, String> {
         // Verify commitment exists and get metadata
-        let metadata = self.pending_commitments.get(&commitment)
+        let metadata = self
+            .pending_commitments
+            .get(&commitment)
             .ok_or("Commitment not found")?
             .clone();
-        
+
         // Check delay period
         if current_height - metadata.commit_height < self.min_reveal_delay {
-            return Err(format!("Too early to reveal. Wait {} more blocks", 
-                self.min_reveal_delay - (current_height - metadata.commit_height)));
+            return Err(format!(
+                "Too early to reveal. Wait {} more blocks",
+                self.min_reveal_delay - (current_height - metadata.commit_height)
+            ));
         }
-        
+
         // Verify the secret matches the commitment
         let tx_hash = tx.hash();
         let mut hasher = Sha256::new();
         hasher.update(&tx_hash);
         hasher.update(&secret);
         let computed_commitment: [u8; 32] = hasher.finalize().into();
-        
+
         if computed_commitment != commitment {
             return Err("Invalid secret for commitment".into());
         }
-        
+
         // Verify sender matches
         if tx.sender != metadata.sender {
             return Err("Sender mismatch".into());
         }
-        
+
         // Remove commitment and add revealed transaction
         self.pending_commitments.remove(&commitment);
-        
+
         let revealed = RevealedTransaction {
             transaction: tx,
             secret,
             commitment,
         };
-        
+
         self.revealed_transactions.push_back(revealed.clone());
-        info!("Transaction revealed after {} blocks", current_height - metadata.commit_height);
-        
+        info!(
+            "Transaction revealed after {} blocks",
+            current_height - metadata.commit_height
+        );
+
         Ok(revealed)
     }
 
     /// Get ready-to-include revealed transactions
     pub fn get_ready_transactions(&mut self, max_count: usize) -> Vec<Transaction> {
         let mut ready = Vec::new();
-        
+
         for _ in 0..max_count {
             if let Some(revealed) = self.revealed_transactions.pop_front() {
                 ready.push(revealed.transaction);
@@ -150,18 +173,19 @@ impl CommitRevealScheme {
                 break;
             }
         }
-        
+
         ready
     }
 
     /// Clean up expired commitments
     pub fn cleanup_expired(&mut self, current_height: u64) {
-        let expired: Vec<[u8; 32]> = self.pending_commitments
+        let expired: Vec<[u8; 32]> = self
+            .pending_commitments
             .iter()
             .filter(|(_, meta)| current_height - meta.commit_height > self.max_commit_age)
             .map(|(commit, _)| *commit)
             .collect();
-        
+
         for commit in expired {
             self.pending_commitments.remove(&commit);
             debug!("Expired commitment cleaned up");
@@ -240,23 +264,27 @@ impl BlockBuilder {
     }
 
     /// Build the optimal block based on strategy
-    pub fn build_block(&mut self, parent_block: &Block, available_txs: Vec<Transaction>) -> Result<BuilderBid, String> {
+    pub fn build_block(
+        &mut self,
+        parent_block: &Block,
+        available_txs: Vec<Transaction>,
+    ) -> Result<BuilderBid, String> {
         let start_time = Instant::now();
-        
+
         // Sort and select transactions based on strategy
         let (selected_txs, mev_value) = self.select_transactions(available_txs)?;
-        
+
         // Build block with selected transactions
         let block = self.construct_block(parent_block, selected_txs)?;
-        
+
         // Calculate bid amount (percentage of extracted value)
         let bid_amount = match self.strategies.first().unwrap_or(&BuildStrategy::Balanced) {
             BuildStrategy::GasMaximization => mev_value * 80 / 100, // Bid 80% of value
             BuildStrategy::MevExtraction => mev_value * 90 / 100,   // Bid 90% of value
-            BuildStrategy::Balanced => mev_value * 70 / 100,         // Bid 70% of value
-            BuildStrategy::UserPriority => mev_value * 50 / 100,     // Bid 50% of value
+            BuildStrategy::Balanced => mev_value * 70 / 100,        // Bid 70% of value
+            BuildStrategy::UserPriority => mev_value * 50 / 100,    // Bid 50% of value
         };
-        
+
         // Create and sign bid (compute extrinsics root)
         let tx_root = {
             let mut hasher = Sha256::new();
@@ -277,48 +305,64 @@ impl BlockBuilder {
                 .as_secs(),
             mev_value,
         };
-        
+
         // Sign bid
         let message = self.serialize_bid(&bid);
         bid.signature = self.signing_key.sign(&message);
-        
+
         self.performance.blocks_built += 1;
         self.performance.total_bids_submitted += 1;
         let total = self.performance.total_bids_submitted as u128;
-        self.performance.avg_bid_amount = (self.performance.avg_bid_amount * (total - 1) + bid_amount) / total;
+        self.performance.avg_bid_amount =
+            (self.performance.avg_bid_amount * (total - 1) + bid_amount) / total;
         self.performance.total_mev_extracted += mev_value;
-        
+
         let build_time = start_time.elapsed();
-        info!("Block built in {}ms with {} txs, MEV: {}, Bid: {}", 
-              build_time.as_millis(), block.extrinsics.len(), mev_value, bid_amount);
-        
+        info!(
+            "Block built in {}ms with {} txs, MEV: {}, Bid: {}",
+            build_time.as_millis(),
+            block.extrinsics.len(),
+            mev_value,
+            bid_amount
+        );
+
         Ok(bid)
     }
 
     /// Select optimal transactions based on strategy
-    fn select_transactions(&self, txs: Vec<Transaction>) -> Result<(Vec<Transaction>, u128), String> {
+    fn select_transactions(
+        &self,
+        txs: Vec<Transaction>,
+    ) -> Result<(Vec<Transaction>, u128), String> {
         let mut selected = Vec::new();
         let mut total_mev = 0u128;
         let mut total_gas = 0u64;
         let max_gas_per_block = 30_000_000;
-        
+
         // Score each transaction based on strategy
-        let mut scored_txs: Vec<(Transaction, u128, u128)> = txs.into_iter()
+        let mut scored_txs: Vec<(Transaction, u128, u128)> = txs
+            .into_iter()
             .map(|tx| {
                 let mev = self.calculate_mev(&tx);
                 let score = match self.strategies.first().unwrap_or(&BuildStrategy::Balanced) {
-                    BuildStrategy::GasMaximization => mev + (tx.gas_limit as u128 * tx.max_fee_per_gas as u128),
+                    BuildStrategy::GasMaximization => {
+                        mev + (tx.gas_limit as u128 * tx.max_fee_per_gas as u128)
+                    }
                     BuildStrategy::MevExtraction => mev * 10,
-                    BuildStrategy::Balanced => mev + (tx.gas_limit as u128 * tx.max_fee_per_gas as u128 / 2),
-                    BuildStrategy::UserPriority => (tx.gas_limit as u128 * tx.max_fee_per_gas as u128) * 2,
+                    BuildStrategy::Balanced => {
+                        mev + (tx.gas_limit as u128 * tx.max_fee_per_gas as u128 / 2)
+                    }
+                    BuildStrategy::UserPriority => {
+                        (tx.gas_limit as u128 * tx.max_fee_per_gas as u128) * 2
+                    }
                 };
                 (tx, score, mev)
             })
             .collect();
-        
+
         // Sort by score descending
         scored_txs.sort_by(|a, b| b.1.cmp(&a.1));
-        
+
         // Select transactions within gas limit
         for (tx, _score, mev) in scored_txs {
             if total_gas + tx.gas_limit <= max_gas_per_block {
@@ -327,7 +371,7 @@ impl BlockBuilder {
                 selected.push(tx);
             }
         }
-        
+
         Ok((selected, total_mev))
     }
 
@@ -335,17 +379,17 @@ impl BlockBuilder {
     fn calculate_mev(&self, tx: &Transaction) -> u128 {
         // Simplified MEV calculation
         // In production, this would analyze DEX arbitrage, liquidations, etc.
-        
+
         // Basic MEV from gas price
         let gas_mev = (tx.gas_limit as u128) * (tx.max_priority_fee_per_gas as u128);
-        
+
         // Check for DEX interactions (simplified)
         let dex_mev = if tx.payload.len() > 4 && &tx.payload[0..4] == &[0x7f, 0x00, 0x00, 0x00] {
             10_000_000_000 // 10 tokens if DEX swap
         } else {
             0
         };
-        
+
         gas_mev + dex_mev
     }
 
@@ -426,27 +470,33 @@ impl MEVAuction {
             self.current_bids.clear();
             self.deadline = Instant::now() + Duration::from_secs(12); // One block time
         }
-        
+
         // Check if auction is still open
         if Instant::now() > self.deadline {
             return Err("Auction closed".into());
         }
-        
+
         // Verify bid meets minimum increment
         if let Some(highest_bid) = self.current_bids.iter().map(|b| b.bid_amount).max() {
             if bid.bid_amount < highest_bid + self.min_bid_increment {
-                return Err(format!("Bid must be at least {} higher", self.min_bid_increment));
+                return Err(format!(
+                    "Bid must be at least {} higher",
+                    self.min_bid_increment
+                ));
             }
         }
-        
+
         // Verify signature
         if !self.verify_bid_signature(&bid) {
             return Err("Invalid bid signature".into());
         }
-        
+
         self.current_bids.push(bid);
-        debug!("Bid submitted: {} tokens", self.current_bids.last().unwrap().bid_amount);
-        
+        debug!(
+            "Bid submitted: {} tokens",
+            self.current_bids.last().unwrap().bid_amount
+        );
+
         Ok(())
     }
 
@@ -455,12 +505,13 @@ impl MEVAuction {
         if Instant::now() < self.deadline {
             return None;
         }
-        
-        let winner = self.current_bids
+
+        let winner = self
+            .current_bids
             .iter()
             .max_by_key(|bid| bid.bid_amount)
             .cloned();
-        
+
         if let Some(winner) = &winner {
             // Record auction result
             self.bid_history.push_back(AuctionResult {
@@ -473,42 +524,50 @@ impl MEVAuction {
                     .unwrap_or_default()
                     .as_secs(),
             });
-            
+
             // Keep history manageable
             while self.bid_history.len() > 1000 {
                 self.bid_history.pop_front();
             }
-            
-            info!("Auction winner: bid of {} tokens from {} bidders", 
-                  winner.bid_amount, self.current_bids.len());
+
+            info!(
+                "Auction winner: bid of {} tokens from {} bidders",
+                winner.bid_amount,
+                self.current_bids.len()
+            );
         }
-        
+
         winner
     }
 
     /// Verify bid signature
     fn verify_bid_signature(&self, bid: &BuilderBid) -> bool {
         use ed25519_dalek::{Signature, VerifyingKey};
-        
+
         if bid.signature.len() != 64 {
             return false;
         }
-        
+
         let signature = match Signature::from_slice(&bid.signature) {
             Ok(sig) => sig,
             Err(_) => return false,
         };
-        
-        let verifying_key = match VerifyingKey::from_bytes(bid.builder_pubkey.as_slice().try_into().unwrap_or(&[0u8; 32])) {
+
+        let verifying_key = match VerifyingKey::from_bytes(
+            bid.builder_pubkey
+                .as_slice()
+                .try_into()
+                .unwrap_or(&[0u8; 32]),
+        ) {
             Ok(key) => key,
             Err(_) => return false,
         };
-        
+
         let mut message = Vec::new();
         message.extend_from_slice(&bid.bid_amount.to_le_bytes());
         message.extend_from_slice(&bid.tx_root);
         message.extend_from_slice(&bid.timestamp.to_le_bytes());
-        
+
         verifying_key.verify(&message, &signature).is_ok()
     }
 
@@ -525,7 +584,7 @@ impl MEVAuction {
         } else {
             0
         };
-        
+
         AuctionStats {
             total_auctions: self.bid_history.len(),
             avg_winning_bid: avg_bid,
@@ -597,7 +656,12 @@ impl ThresholdEncryption {
     }
 
     /// Encrypt a transaction using threshold encryption (Shamir's Secret Sharing + AES-256-GCM)
-    pub fn encrypt_transaction(&mut self, tx: &Transaction, nonce: u64, threshold: usize) -> EncryptedTransaction {
+    pub fn encrypt_transaction(
+        &mut self,
+        tx: &Transaction,
+        nonce: u64,
+        threshold: usize,
+    ) -> EncryptedTransaction {
         use aes_gcm::aead::{Aead, KeyInit};
         use aes_gcm::{Aes256Gcm, Nonce};
 
@@ -614,11 +678,11 @@ impl ThresholdEncryption {
 
         let mut encrypted_data = nonce_bytes.to_vec();
         encrypted_data.extend(ciphertext);
-        
+
         // Split the master secret into n shares using polynomial-based
         // Shamir's Secret Sharing over GF(2^8)
         let shares = self.split_secret(&master_secret, self.total_validators, threshold);
-        
+
         // Store shares keyed by validator index
         for (i, share) in shares.iter().enumerate() {
             if i < self.validator_pubkeys.len() {
@@ -630,10 +694,13 @@ impl ThresholdEncryption {
                 };
                 // Pre-populate with expected shares (validators will submit with sigs)
                 let shares_map = self.decryption_shares.entry(nonce).or_default();
-                shares_map.insert(self.validator_pubkeys[i].clone(), decryption_share.share.clone());
+                shares_map.insert(
+                    self.validator_pubkeys[i].clone(),
+                    decryption_share.share.clone(),
+                );
             }
         }
-        
+
         EncryptedTransaction {
             encrypted_data,
             nonce,
@@ -681,10 +748,10 @@ impl ThresholdEncryption {
         if self.encrypted_txs.contains_key(&nonce) {
             return Err("Transaction with same nonce already exists".into());
         }
-        
+
         self.encrypted_txs.insert(nonce, encrypted);
         debug!("Encrypted transaction submitted with nonce {}", nonce);
-        
+
         Ok(())
     }
 
@@ -694,29 +761,30 @@ impl ThresholdEncryption {
         if !self.validator_pubkeys.contains(&share.validator) {
             return Err("Unauthorized validator".into());
         }
-        
+
         // Verify signature
         if !self.verify_decryption_share(&share) {
             return Err("Invalid share signature".into());
         }
-        
+
         // Get the encrypted transaction
         let encrypted = match self.encrypted_txs.get(&share.nonce) {
             Some(tx) => tx,
             None => return Err("Transaction not found".into()),
         };
-        
+
         // Store the share
-        let shares = self.decryption_shares
+        let shares = self
+            .decryption_shares
             .entry(share.nonce)
             .or_insert_with(HashMap::new);
         shares.insert(share.validator, share.share);
-        
+
         // Check if threshold is met
         if shares.len() >= encrypted.threshold {
             self.try_decrypt_transaction(share.nonce)?;
         }
-        
+
         Ok(())
     }
 
@@ -726,9 +794,9 @@ impl ThresholdEncryption {
             Some(tx) => tx,
             None => return Err("Transaction not found".into()),
         };
-        
+
         let shares = self.decryption_shares.get(&nonce).unwrap();
-        
+
         // Reconstruct the master secret using Lagrange interpolation
         let master_secret = self.reconstruct_secret(shares, encrypted.threshold);
         let mut key_arr = [0u8; 32];
@@ -749,7 +817,7 @@ impl ThresholdEncryption {
         let decrypted_bytes = cipher
             .decrypt(aes_nonce, ciphertext)
             .map_err(|e| format!("AES decrypt failed: {}", e))?;
-        
+
         match bincode::deserialize::<Transaction>(&decrypted_bytes) {
             Ok(tx) => {
                 self.decrypted_txs.push_back(tx);
@@ -765,7 +833,7 @@ impl ThresholdEncryption {
     /// Get decrypted transactions ready for inclusion
     pub fn get_decrypted_transactions(&mut self, max_count: usize) -> Vec<Transaction> {
         let mut ready = Vec::new();
-        
+
         for _ in 0..max_count {
             if let Some(tx) = self.decrypted_txs.pop_front() {
                 ready.push(tx);
@@ -773,32 +841,34 @@ impl ThresholdEncryption {
                 break;
             }
         }
-        
+
         ready
     }
 
     /// Verify decryption share signature
     fn verify_decryption_share(&self, share: &DecryptionShare) -> bool {
         use ed25519_dalek::{Signature, VerifyingKey};
-        
+
         if share.signature.len() != 64 {
             return false;
         }
-        
+
         let signature = match Signature::from_slice(&share.signature) {
             Ok(sig) => sig,
             Err(_) => return false,
         };
-        
-        let verifying_key = match VerifyingKey::from_bytes(share.validator.as_slice().try_into().unwrap_or(&[0u8; 32])) {
+
+        let verifying_key = match VerifyingKey::from_bytes(
+            share.validator.as_slice().try_into().unwrap_or(&[0u8; 32]),
+        ) {
             Ok(key) => key,
             Err(_) => return false,
         };
-        
+
         let mut message = Vec::new();
         message.extend_from_slice(&share.nonce.to_le_bytes());
         message.extend_from_slice(&share.share);
-        
+
         verifying_key.verify(&message, &signature).is_ok()
     }
 
@@ -838,7 +908,12 @@ impl MevManager {
     }
 
     /// Register a block builder
-    pub fn register_builder(&mut self, pubkey: Vec<u8>, signing_key: SigningKey, strategy: BuildStrategy) {
+    pub fn register_builder(
+        &mut self,
+        pubkey: Vec<u8>,
+        signing_key: SigningKey,
+        strategy: BuildStrategy,
+    ) {
         let builder = BlockBuilder::new(pubkey.clone(), signing_key, strategy);
         self.builders.insert(pubkey, builder);
     }
@@ -850,31 +925,35 @@ impl MevManager {
     }
 
     /// Process MEV for new block
-    pub fn process_block_production(&mut self, parent_block: &Block, available_txs: Vec<Transaction>) -> Option<BuilderBid> {
+    pub fn process_block_production(
+        &mut self,
+        parent_block: &Block,
+        available_txs: Vec<Transaction>,
+    ) -> Option<BuilderBid> {
         // Let builders create bids
         for (_, builder) in self.builders.iter_mut() {
             if let Ok(bid) = builder.build_block(parent_block, available_txs.clone()) {
                 let _ = self.auction.submit_bid(bid, self.current_height);
             }
         }
-        
+
         // Select winner
         let winner = self.auction.select_winner();
-        
+
         if let Some(ref bid) = winner {
             // Record win for builder
             if let Some(builder) = self.builders.get_mut(&bid.builder_pubkey) {
                 builder.record_win();
             }
         }
-        
+
         winner
     }
 
     /// Get MEV statistics
     pub fn get_stats(&self) -> MevStats {
         let auction_stats = self.auction.get_stats();
-        
+
         MevStats {
             total_auctions: auction_stats.total_auctions,
             avg_winning_bid: auction_stats.avg_winning_bid,
@@ -899,7 +978,7 @@ pub struct MevStats {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_commit_reveal() {
         let mut scheme = CommitRevealScheme::new(2, 10);
@@ -907,31 +986,31 @@ mod tests {
         let tx_hash = tx.hash();
         let secret = [42u8; 32];
         let sender = [1; 20];
-        
+
         let commitment = scheme.commit(tx_hash, secret, sender, 0, 1);
         assert_eq!(scheme.pending_count(), 1);
-        
+
         // Try to reveal too early
         assert!(scheme.reveal(tx.clone(), secret, commitment, 2).is_err());
-        
+
         // Reveal after delay
         let result = scheme.reveal(tx.clone(), secret, commitment, 3);
         assert!(result.is_ok());
-        
+
         let ready = scheme.get_ready_transactions(1);
         assert_eq!(ready.len(), 1);
     }
-    
+
     #[test]
     fn test_auction() {
         let mut auction = MEVAuction::new(100, 12);
         let signing_key = SigningKey::generate();
         let pubkey = signing_key.public_key();
-        
+
         let block = Block::genesis();
         let mut builder = BlockBuilder::new(pubkey, signing_key, BuildStrategy::Balanced);
         let bid = builder.build_block(&block, vec![]).unwrap();
-        
+
         assert!(auction.submit_bid(bid, 1).is_ok());
         assert_eq!(auction.highest_bid(), Some(0));
     }

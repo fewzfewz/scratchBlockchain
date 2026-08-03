@@ -13,26 +13,26 @@
 //! 3. BFT broadcasts proposal and collects votes
 //! 4. When finalized, `execute_and_commit()` runs
 
+use crate::tx_pool::TxPool;
 use common::crypto::SigningKey;
 use common::types::{Block, Header, Transaction};
 use consensus::{BftEngine, BftEvent, ValidatorInfo};
-use execution::evm::{SignedTransaction, EvmExecutor, TransactionReceipt};
+use execution::evm::{EvmExecutor, SignedTransaction, TransactionReceipt};
 use governance::ChainGovernance;
-use crate::tx_pool::TxPool;
-use storage::{ChainStore, ColumnFamily, WriteBatch};
 use std::sync::Arc;
+use storage::{ChainStore, ColumnFamily, WriteBatch};
 use tokio::sync::Mutex;
-use tracing::{info, warn, debug, error};
+use tracing::{debug, error, info, warn};
 
 /// Configuration for block production
 #[derive(Debug, Clone)]
 pub struct BlockProducerConfig {
     /// Maximum number of transactions per block
     pub max_transactions_per_block: usize,
-    
+
     /// Maximum gas per block (block gas limit)
     pub max_gas_per_block: u64,
-    
+
     /// Target block utilization (for gas price calculation)
     pub target_gas_utilization: f64,
 }
@@ -41,21 +41,21 @@ impl Default for BlockProducerConfig {
     fn default() -> Self {
         Self {
             max_transactions_per_block: 5000,
-            max_gas_per_block: 30_000_000,  // 30M gas limit
-            target_gas_utilization: 0.5,    // Target 50% full
+            max_gas_per_block: 30_000_000, // 30M gas limit
+            target_gas_utilization: 0.5,   // Target 50% full
         }
     }
 }
 
 /// Block executor - wires BFT finalization → EVM execution → atomic storage
-/// 
+///
 /// This is the critical link that was missing in the initial code review.
 /// It ensures that when BFT finalizes a block, it's properly executed and
 /// atomically persisted to storage.
 pub struct BlockExecutor {
     /// EVM executor with persistent state backend
     evm: EvmExecutor,
-    
+
     /// Chain storage with atomic commit support
     chain_store: Arc<ChainStore>,
 }
@@ -150,7 +150,7 @@ impl BlockExecutor {
     /// # Returns
     /// * `Vec<TransactionReceipt>` - Execution receipts for each transaction
     pub fn execute_and_commit(
-        &mut self, 
+        &mut self,
         block: &Block,
     ) -> Result<Vec<TransactionReceipt>, Box<dyn std::error::Error>> {
         use revm::primitives::{Address, Bytes, U256};
@@ -212,16 +212,15 @@ impl BlockExecutor {
             .iter()
             .zip(receipts.iter())
             .map(|(tx, receipt)| {
-                let encoded = serde_json::to_vec(receipt)
-                    .unwrap_or_else(|_| b"{}".to_vec());
+                let encoded = serde_json::to_vec(receipt).unwrap_or_else(|_| b"{}".to_vec());
                 (tx.hash().to_vec(), encoded)
             })
             .collect();
 
         let block_hash = block.hash();
         let block_height = block.header.slot;
-        let block_encoded = serde_json::to_vec(block)
-            .map_err(|e| format!("Failed to encode block: {}", e))?;
+        let block_encoded =
+            serde_json::to_vec(block).map_err(|e| format!("Failed to encode block: {}", e))?;
 
         // Atomic commit: block + height index + receipts + latest_height
         self.chain_store.commit_block(
@@ -249,7 +248,8 @@ impl BlockExecutor {
     pub fn latest_block(&self) -> Result<Block, Box<dyn std::error::Error>> {
         match self.chain_store.get_latest_height()? {
             Some(height) => {
-                let data = self.chain_store
+                let data = self
+                    .chain_store
                     .get_block_by_height(height)?
                     .ok_or_else(|| format!("Block not found at height {}", height))?;
                 Ok(serde_json::from_slice(&data)?)
@@ -263,22 +263,22 @@ impl BlockExecutor {
 pub struct BlockProducer {
     /// Transaction pool (mempool + MEV + account abstraction)
     tx_pool: Arc<TxPool>,
-    
+
     /// BFT engine for consensus
     bft_engine: Arc<Mutex<BftEngine>>,
-    
+
     /// Block executor for finalization
     block_executor: BlockExecutor,
-    
+
     /// Validator's signing key
     signing_key: SigningKey,
-    
+
     /// Current slot (block height) being produced
     current_slot: u64,
-    
+
     /// Validator's address (for block signing)
     validator_address: [u8; 20],
-    
+
     /// Block production configuration
     config: BlockProducerConfig,
 }
@@ -343,13 +343,16 @@ impl BlockProducer {
         // Step 2: Calculate gas limits and filter transactions
         let mut total_gas_used = 0u64;
         let mut valid_transactions = Vec::new();
-        
+
         for tx in transactions {
             if total_gas_used + tx.gas_limit <= self.config.max_gas_per_block {
                 total_gas_used += tx.gas_limit;
                 valid_transactions.push(tx);
             } else {
-                debug!("Transaction {} exceeds remaining block gas limit", hex::encode(tx.hash()));
+                debug!(
+                    "Transaction {} exceeds remaining block gas limit",
+                    hex::encode(tx.hash())
+                );
                 break;
             }
         }
@@ -398,15 +401,15 @@ impl BlockProducer {
             block.header.slot,
             block.extrinsics.len()
         );
-        
+
         let receipts = self.block_executor.execute_and_commit(block)?;
         self.tx_pool.remove_transactions(&block.extrinsics);
-        
+
         Ok(receipts)
     }
 
     /// Pre-validate transactions before EVM execution
-    /// 
+    ///
     /// Checks:
     /// - Non-zero gas limit
     /// - Non-empty signature
@@ -416,22 +419,28 @@ impl BlockProducer {
             .filter(|tx| {
                 // Check gas limit
                 if tx.gas_limit == 0 {
-                    warn!("Dropping tx with zero gas limit: {:?}", hex::encode(tx.hash()));
+                    warn!(
+                        "Dropping tx with zero gas limit: {:?}",
+                        hex::encode(tx.hash())
+                    );
                     return false;
                 }
-                
+
                 // Check signature presence
                 if tx.signature.is_empty() {
                     warn!("Dropping unsigned tx: {:?}", hex::encode(tx.hash()));
                     return false;
                 }
-                
+
                 // Check signature length (ed25519 = 64 bytes)
                 if tx.signature.len() != 64 {
-                    warn!("Dropping tx with invalid signature length: {}", tx.signature.len());
+                    warn!(
+                        "Dropping tx with invalid signature length: {}",
+                        tx.signature.len()
+                    );
                     return false;
                 }
-                
+
                 true
             })
             .collect()
@@ -440,18 +449,15 @@ impl BlockProducer {
     /// Compute Merkle root of transaction hashes
     fn compute_extrinsics_root(&self, transactions: &[Transaction]) -> [u8; 32] {
         use sha2::{Digest, Sha256};
-        
+
         if transactions.is_empty() {
             // Empty root
             return [0u8; 32];
         }
-        
+
         // Simple Merkle tree construction
-        let mut hashes: Vec<[u8; 32]> = transactions
-            .iter()
-            .map(|tx| tx.hash())
-            .collect();
-        
+        let mut hashes: Vec<[u8; 32]> = transactions.iter().map(|tx| tx.hash()).collect();
+
         // Build Merkle tree
         while hashes.len() > 1 {
             let mut next_level = Vec::new();
@@ -467,7 +473,7 @@ impl BlockProducer {
             }
             hashes = next_level;
         }
-        
+
         hashes[0]
     }
 
@@ -487,8 +493,8 @@ mod tests {
     use consensus::ValidatorInfo;
     use execution::evm::{EvmExecutor, InMemoryStore};
     use mempool::MempoolConfig;
-    use storage::{ChainStore, MemDb};
     use std::sync::Arc;
+    use storage::{ChainStore, MemDb};
 
     fn make_test_setup() -> (BlockProducer, Arc<TxPool>) {
         let signing_key = SigningKey::from_bytes(&[1u8; 32]);
@@ -532,7 +538,11 @@ mod tests {
     async fn test_empty_block_production() {
         let (mut producer, _mempool) = make_test_setup();
         let result = producer.produce_block().await;
-        assert!(result.is_ok(), "Empty block should be produced: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Empty block should be produced: {:?}",
+            result.err()
+        );
         let block = result.unwrap();
         assert_eq!(block.extrinsics.len(), 0);
         // BFT starts at height 1, so the produced block lives at slot 0.

@@ -85,6 +85,7 @@ interface NodeStatus {
     finalized_height: number | null;
     mempool_size: number;
     peer_count: number;
+    chain_id?: number;
 }
 interface GasPriceResponse {
     base_fee: string;
@@ -211,6 +212,8 @@ interface GovProposal {
     executed?: boolean;
     executionData?: string;
     actions?: GovAction[];
+    /** Voter address → choice (from node GET /proposal/{id}) */
+    voters?: Record<string, string>;
 }
 interface GovAction {
     target: Address;
@@ -309,6 +312,7 @@ declare class ModularClient extends EventEmitter {
     getBlock(blockNumber: number): Promise<Block>;
     getBlockByHash(hash: string): Promise<Block>;
     getLatestBlock(): Promise<Block>;
+    getTxHistory(address: string, limit?: number): Promise<any[]>;
     getBalance(address: string): Promise<string>;
     getAccount(address: string): Promise<Account>;
     getNonce(address: string): Promise<number>;
@@ -329,16 +333,30 @@ declare class ModularClient extends EventEmitter {
     healthCheck(): Promise<boolean>;
     getProposals(): Promise<GovProposal[]>;
     getProposal(id: number): Promise<GovProposal | null>;
-    createProposal(req: CreateProposalRequest): Promise<any>;
-    vote(req: VoteRequest): Promise<any>;
-    getVotes(proposalId: number): Promise<GovVote[]>;
+    /** Governance writes use signed POST /submit_tx — use Wallet.signTransaction with governance payload. */
+    createProposal(_req: CreateProposalRequest): Promise<any>;
+    vote(_req: VoteRequest): Promise<any>;
+    getVotes(_proposalId: number): Promise<GovVote[]>;
     getTreasury(): Promise<TreasuryInfo | null>;
     getGovParams(): Promise<GovParams | null>;
     getDelegations(address: string): Promise<DelegationInfo[]>;
     delegate(delegator: string, validator: string, amount: string): Promise<any>;
-    undelegate(delegator: string, validator: string, amount: string): Promise<any>;
+    undelegate(_delegator: string, _validator: string, _amount: string): Promise<any>;
     getValidators(): Promise<ValidatorInfo[]>;
-    executeProposal(proposalId: number): Promise<any>;
+    registerValidator(req: {
+        address: string;
+        public_key: string;
+        stake: string;
+        commission_rate?: number;
+    }): Promise<any>;
+    executeProposal(_proposalId: number): Promise<any>;
+    requestFaucet(address: string, amount?: string): Promise<any>;
+    getSlashingEvents(): Promise<any[]>;
+    deployWasm(name: string, wasmBase64: string): Promise<any>;
+    callWasm(name: string, func: string, arg?: number): Promise<any>;
+    listWasmContracts(): Promise<string[]>;
+    submitUserOperation(op: Record<string, unknown>): Promise<any>;
+    getPendingUserOperations(): Promise<number>;
     getGovStats(): Promise<GovStats | null>;
     getProvider(): Provider;
 }
