@@ -1,4 +1,4 @@
-import { Address, BigNumberish } from "./client";
+import { Address } from "./client";
 
 export type ProposalStatus = "Active" | "Pending" | "Passed" | "Rejected" | "Executed" | "Failed";
 

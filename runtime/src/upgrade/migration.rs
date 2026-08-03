@@ -1,14 +1,14 @@
-use serde::{Deserialize, Serialize};
 use crate::upgrade::version::RuntimeVersion;
+use serde::{Deserialize, Serialize};
 
 /// State migration trait
 pub trait StateMigration: Send + Sync {
     /// Get migration name
     fn name(&self) -> &str;
-    
+
     /// Migrate state from old version to new version
     fn migrate(&self, old_state: &[u8]) -> Result<Vec<u8>, MigrationError>;
-    
+
     /// Validate migrated state
     fn validate(&self, old_state: &[u8], new_state: &[u8]) -> Result<(), MigrationError>;
 }
@@ -46,10 +46,10 @@ impl StateMigrator {
 
         for migration in &self.migrations {
             println!("Executing migration: {}", migration.name());
-            
+
             let new_state = migration.migrate(&current_state)?;
             migration.validate(&current_state, &new_state)?;
-            
+
             current_state = new_state;
         }
 
@@ -72,13 +72,13 @@ impl Default for StateMigrator {
 pub enum MigrationError {
     #[error("Migration failed: {0}")]
     MigrationFailed(String),
-    
+
     #[error("Validation failed: {0}")]
     ValidationFailed(String),
-    
+
     #[error("Incompatible state format")]
     IncompatibleState,
-    
+
     #[error("Data corruption detected")]
     DataCorruption,
 }
@@ -101,7 +101,7 @@ impl StateMigration for AddVersionFieldMigration {
     fn validate(&self, _old_state: &[u8], new_state: &[u8]) -> Result<(), MigrationError> {
         if !new_state.ends_with(b"_v2") {
             return Err(MigrationError::ValidationFailed(
-                "Version field not added".to_string()
+                "Version field not added".to_string(),
             ));
         }
         Ok(())

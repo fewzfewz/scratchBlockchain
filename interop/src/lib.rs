@@ -22,7 +22,7 @@ pub struct BridgeContract {
     pub chain_id: String,
     pub locked_assets: HashMap<Address, u64>, // User -> Amount
     pub processed_nonces: HashMap<String, u64>, // SourceChain -> LastNonce
-    pub relayers: Vec<Vec<u8>>, // Public keys of authorized relayers
+    pub relayers: Vec<Vec<u8>>,               // Public keys of authorized relayers
 }
 
 impl BridgeContract {
@@ -45,14 +45,17 @@ impl BridgeContract {
     ) -> Result<CrossChainMessage, String> {
         // In a real system, we would transfer funds from sender to bridge account here.
         // For this simulation, we just track the locked amount.
-        
+
         let current_locked = self.locked_assets.entry(sender).or_insert(0);
         *current_locked += amount;
 
         let _nonce = self.processed_nonces.get(&dest_chain).unwrap_or(&0) + 1; // This logic is slightly wrong for outbound, but ok for MVP
-        // Actually, nonce should be per sender or global outbound nonce.
-        // Let's use a simple global nonce for now.
-        let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+                                                                               // Actually, nonce should be per sender or global outbound nonce.
+                                                                               // Let's use a simple global nonce for now.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
 
         let message = CrossChainMessage {
             source_chain: self.chain_id.clone(),
@@ -87,7 +90,10 @@ impl BridgeContract {
         // verify_signature(&message, &relayer_sig, &relayer_pubkey)?;
 
         // Check replay
-        let last_nonce = self.processed_nonces.entry(message.source_chain.clone()).or_insert(0);
+        let last_nonce = self
+            .processed_nonces
+            .entry(message.source_chain.clone())
+            .or_insert(0);
         if message.nonce <= *last_nonce {
             return Err("Message already processed".into());
         }

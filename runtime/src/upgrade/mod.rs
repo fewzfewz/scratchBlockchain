@@ -1,11 +1,11 @@
-pub mod version;
-pub mod snapshot;
-pub mod migration;
-pub mod validator;
 pub mod coordinator;
+pub mod migration;
+pub mod snapshot;
+pub mod validator;
+pub mod version;
 
-pub use version::{RuntimeVersion, RuntimeMetadata};
-pub use snapshot::{StateSnapshot, SnapshotManager, SnapshotError};
-pub use migration::{StateMigration, MigrationPlan, StateMigrator, MigrationError};
+pub use coordinator::{PendingUpgrade, UpgradeCoordinator, UpgradeError, UpgradeState};
+pub use migration::{MigrationError, MigrationPlan, StateMigration, StateMigrator};
+pub use snapshot::{SnapshotError, SnapshotManager, StateSnapshot};
 pub use validator::{UpgradeValidator, ValidationError};
-pub use coordinator::{UpgradeCoordinator, PendingUpgrade, UpgradeState, UpgradeError};
+pub use version::{RuntimeMetadata, RuntimeVersion};

@@ -94,7 +94,8 @@ impl Metrics {
 
     pub fn update_validator_set(&self, count: usize, stake_total: u64) {
         self.validator_count.store(count, Ordering::Relaxed);
-        self.validator_stake_total.store(stake_total, Ordering::Relaxed);
+        self.validator_stake_total
+            .store(stake_total, Ordering::Relaxed);
     }
 
     pub fn record_mev_protected_tx(&self) {
@@ -109,7 +110,7 @@ impl Metrics {
     pub fn get_tps(&self) -> f64 {
         let total_txs = self.total_transactions.load(Ordering::Relaxed);
         let last_block = self.last_block_time.load(Ordering::Relaxed);
-        
+
         if last_block == 0 {
             return 0.0;
         }
@@ -118,7 +119,7 @@ impl Metrics {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
-        
+
         let elapsed = now.saturating_sub(last_block).max(1);
         total_txs as f64 / elapsed as f64
     }
@@ -126,74 +127,104 @@ impl Metrics {
     /// Export metrics in Prometheus format
     pub fn export_prometheus(&self) -> String {
         let mut output = String::new();
-        
-        output.push_str("# HELP blockchain_transactions_total Total number of transactions processed\n");
+
+        output.push_str(
+            "# HELP blockchain_transactions_total Total number of transactions processed\n",
+        );
         output.push_str("# TYPE blockchain_transactions_total counter\n");
-        output.push_str(&format!("blockchain_transactions_total {}\n", 
-            self.total_transactions.load(Ordering::Relaxed)));
-        
+        output.push_str(&format!(
+            "blockchain_transactions_total {}\n",
+            self.total_transactions.load(Ordering::Relaxed)
+        ));
+
         output.push_str("# HELP blockchain_blocks_total Total number of blocks produced\n");
         output.push_str("# TYPE blockchain_blocks_total counter\n");
-        output.push_str(&format!("blockchain_blocks_total {}\n", 
-            self.total_blocks.load(Ordering::Relaxed)));
-        
+        output.push_str(&format!(
+            "blockchain_blocks_total {}\n",
+            self.total_blocks.load(Ordering::Relaxed)
+        ));
+
         output.push_str("# HELP blockchain_mempool_size Current mempool size\n");
         output.push_str("# TYPE blockchain_mempool_size gauge\n");
-        output.push_str(&format!("blockchain_mempool_size {}\n", 
-            self.mempool_size.load(Ordering::Relaxed)));
-        
+        output.push_str(&format!(
+            "blockchain_mempool_size {}\n",
+            self.mempool_size.load(Ordering::Relaxed)
+        ));
+
         output.push_str("# HELP blockchain_peer_count Current peer count\n");
         output.push_str("# TYPE blockchain_peer_count gauge\n");
-        output.push_str(&format!("blockchain_peer_count {}\n", 
-            self.peer_count.load(Ordering::Relaxed)));
-        
+        output.push_str(&format!(
+            "blockchain_peer_count {}\n",
+            self.peer_count.load(Ordering::Relaxed)
+        ));
+
         output.push_str("# HELP blockchain_finalized_height Finalized block height\n");
         output.push_str("# TYPE blockchain_finalized_height gauge\n");
-        output.push_str(&format!("blockchain_finalized_height {}\n", 
-            self.finalized_height.load(Ordering::Relaxed)));
-        
+        output.push_str(&format!(
+            "blockchain_finalized_height {}\n",
+            self.finalized_height.load(Ordering::Relaxed)
+        ));
+
         output.push_str("# HELP blockchain_tps Transactions per second\n");
         output.push_str("# TYPE blockchain_tps gauge\n");
         output.push_str(&format!("blockchain_tps {:.2}\n", self.get_tps()));
-        
+
         output.push_str("# HELP blockchain_mev_protected_txs_total MEV protected transactions\n");
         output.push_str("# TYPE blockchain_mev_protected_txs_total counter\n");
-        output.push_str(&format!("blockchain_mev_protected_txs_total {}\n", 
-            self.mev_protected_txs.load(Ordering::Relaxed)));
-        
+        output.push_str(&format!(
+            "blockchain_mev_protected_txs_total {}\n",
+            self.mev_protected_txs.load(Ordering::Relaxed)
+        ));
+
         output.push_str("# HELP blockchain_aa_operations_total Account abstraction operations\n");
-        output.push_str(&format!("blockchain_aa_operations_total {}\n", 
-            self.aa_operations.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "blockchain_aa_operations_total {}\n",
+            self.aa_operations.load(Ordering::Relaxed)
+        ));
 
         output.push_str("# HELP blockchain_consensus_round Current consensus round\n");
         output.push_str("# TYPE blockchain_consensus_round gauge\n");
-        output.push_str(&format!("blockchain_consensus_round {}\n", 
-            self.consensus_round.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "blockchain_consensus_round {}\n",
+            self.consensus_round.load(Ordering::Relaxed)
+        ));
 
         output.push_str("# HELP blockchain_network_bytes_rx_total Total network bytes received\n");
         output.push_str("# TYPE blockchain_network_bytes_rx_total counter\n");
-        output.push_str(&format!("blockchain_network_bytes_rx_total {}\n", 
-            self.network_bytes_rx.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "blockchain_network_bytes_rx_total {}\n",
+            self.network_bytes_rx.load(Ordering::Relaxed)
+        ));
 
-        output.push_str("# HELP blockchain_network_bytes_tx_total Total network bytes transmitted\n");
+        output
+            .push_str("# HELP blockchain_network_bytes_tx_total Total network bytes transmitted\n");
         output.push_str("# TYPE blockchain_network_bytes_tx_total counter\n");
-        output.push_str(&format!("blockchain_network_bytes_tx_total {}\n", 
-            self.network_bytes_tx.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "blockchain_network_bytes_tx_total {}\n",
+            self.network_bytes_tx.load(Ordering::Relaxed)
+        ));
 
         output.push_str("# HELP blockchain_block_latency_ms Block propagation latency in ms\n");
         output.push_str("# TYPE blockchain_block_latency_ms gauge\n");
-        output.push_str(&format!("blockchain_block_latency_ms {}\n", 
-            self.block_latency.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "blockchain_block_latency_ms {}\n",
+            self.block_latency.load(Ordering::Relaxed)
+        ));
 
         output.push_str("# HELP blockchain_validator_count Number of active validators\n");
         output.push_str("# TYPE blockchain_validator_count gauge\n");
-        output.push_str(&format!("blockchain_validator_count {}\n", 
-            self.validator_count.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "blockchain_validator_count {}\n",
+            self.validator_count.load(Ordering::Relaxed)
+        ));
 
-        output.push_str("# HELP blockchain_validator_stake_total Total stake of active validators\n");
+        output
+            .push_str("# HELP blockchain_validator_stake_total Total stake of active validators\n");
         output.push_str("# TYPE blockchain_validator_stake_total gauge\n");
-        output.push_str(&format!("blockchain_validator_stake_total {}\n", 
-            self.validator_stake_total.load(Ordering::Relaxed)));
+        output.push_str(&format!(
+            "blockchain_validator_stake_total {}\n",
+            self.validator_stake_total.load(Ordering::Relaxed)
+        ));
 
         output
     }
@@ -212,11 +243,11 @@ mod tests {
     #[test]
     fn test_metrics_recording() {
         let metrics = Metrics::new();
-        
+
         metrics.record_transaction();
         metrics.record_transaction();
         metrics.record_block();
-        
+
         assert_eq!(metrics.total_transactions.load(Ordering::Relaxed), 2);
         assert_eq!(metrics.total_blocks.load(Ordering::Relaxed), 1);
     }
@@ -226,7 +257,7 @@ mod tests {
         let metrics = Metrics::new();
         metrics.record_transaction();
         metrics.update_mempool_size(5);
-        
+
         let output = metrics.export_prometheus();
         assert!(output.contains("blockchain_transactions_total 1"));
         assert!(output.contains("blockchain_mempool_size 5"));

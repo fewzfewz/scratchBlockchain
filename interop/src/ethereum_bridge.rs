@@ -1,5 +1,5 @@
 use common::types::{Address, PublicKey};
-use ed25519_dalek::{Signature as Ed25519Signature, VerifyingKey, Verifier};
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -46,7 +46,12 @@ pub struct EthereumBridge {
 }
 
 impl EthereumBridge {
-    pub fn new(chain_id: u32, eth_chain_id: u32, relayers: Vec<PublicKey>, required_signatures: usize) -> Self {
+    pub fn new(
+        chain_id: u32,
+        eth_chain_id: u32,
+        relayers: Vec<PublicKey>,
+        required_signatures: usize,
+    ) -> Self {
         Self {
             locked_tokens: HashMap::new(),
             processed_messages: HashMap::new(),
@@ -71,7 +76,8 @@ impl EthereumBridge {
         }
 
         // Record locked tokens
-        let user_balance = self.locked_tokens
+        let user_balance = self
+            .locked_tokens
             .entry(token)
             .or_default()
             .entry(user)
@@ -122,12 +128,13 @@ impl EthereumBridge {
         self.processed_messages.insert(message.id, true);
 
         // Unlock tokens (in real implementation, this would transfer tokens)
-        let user_balance = self.locked_tokens
+        let user_balance = self
+            .locked_tokens
             .entry(message.token)
             .or_default()
             .entry(message.recipient)
             .or_insert(0);
-        
+
         if *user_balance < message.amount {
             // If not enough locked, this is a new deposit from Ethereum
             *user_balance = message.amount;
@@ -228,7 +235,9 @@ mod tests {
         let token = [20u8; 20];
         let eth_recipient = [30u8; 20];
 
-        let message = bridge.lock_tokens(user, token, 1000, eth_recipient).unwrap();
+        let message = bridge
+            .lock_tokens(user, token, 1000, eth_recipient)
+            .unwrap();
 
         assert_eq!(message.amount, 1000);
         assert_eq!(message.sender, user);
@@ -238,13 +247,15 @@ mod tests {
 
     #[test]
     fn test_unlock_tokens() {
-        use ed25519_dalek::{SigningKey as EdSigningKey, Signer};
+        use ed25519_dalek::{Signer, SigningKey as EdSigningKey};
 
         let signer1 = EdSigningKey::generate(&mut rand::thread_rng());
         let signer2 = EdSigningKey::generate(&mut rand::thread_rng());
         let vk1 = signer1.verifying_key().to_bytes();
         let vk2 = signer2.verifying_key().to_bytes();
-        let vk3 = EdSigningKey::generate(&mut rand::thread_rng()).verifying_key().to_bytes();
+        let vk3 = EdSigningKey::generate(&mut rand::thread_rng())
+            .verifying_key()
+            .to_bytes();
 
         let relayers = vec![vk1, vk2, vk3];
         let mut bridge = EthereumBridge::new(1, 2, relayers, 2);

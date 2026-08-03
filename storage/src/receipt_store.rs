@@ -1,5 +1,5 @@
+use crate::db::{ColumnFamily, KeyValueStore};
 use common::types::{Hash, TransactionReceipt};
-use crate::db::{KeyValueStore, ColumnFamily};
 use std::error::Error;
 use std::sync::Arc;
 
@@ -19,7 +19,10 @@ impl ReceiptStore {
         Ok(())
     }
 
-    pub fn get_receipt(&self, tx_hash: &Hash) -> Result<Option<TransactionReceipt>, Box<dyn Error>> {
+    pub fn get_receipt(
+        &self,
+        tx_hash: &Hash,
+    ) -> Result<Option<TransactionReceipt>, Box<dyn Error>> {
         match self.db.get(ColumnFamily::Receipts, tx_hash)? {
             Some(bytes) => {
                 let receipt: TransactionReceipt = bincode::deserialize(&bytes)?;
@@ -37,8 +40,8 @@ impl ReceiptStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use common::types::ExecutionStatus;
     use crate::db::MemDb;
+    use common::types::ExecutionStatus;
 
     #[test]
     fn test_receipt_store() {

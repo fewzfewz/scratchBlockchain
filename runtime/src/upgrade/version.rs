@@ -33,7 +33,7 @@ impl RuntimeVersion {
         if self.major != other.major {
             return false;
         }
-        
+
         // Minor version can be higher (backwards compatible)
         self.minor >= other.minor
     }
@@ -61,9 +61,11 @@ impl RuntimeVersion {
 
 impl fmt::Display for RuntimeVersion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "v{}.{}.{} (spec: {}, impl: {})", 
-            self.major, self.minor, self.patch, 
-            self.spec_version, self.impl_version)
+        write!(
+            f,
+            "v{}.{}.{} (spec: {}, impl: {})",
+            self.major, self.minor, self.patch, self.spec_version, self.impl_version
+        )
     }
 }
 
@@ -89,7 +91,7 @@ mod tests {
 
         // Same major, higher minor is compatible
         assert!(v1_1_0.is_compatible(&v1_0_0));
-        
+
         // Different major is not compatible
         assert!(!v2_0_0.is_compatible(&v1_0_0));
     }
@@ -103,10 +105,10 @@ mod tests {
 
         // Can upgrade to next minor version
         assert!(v1_0_0.can_upgrade_to(&v1_1_0));
-        
+
         // Can upgrade to next major version
         assert!(v1_0_0.can_upgrade_to(&v2_0_0));
-        
+
         // Cannot skip major versions
         assert!(!v1_0_0.can_upgrade_to(&v3_0_0));
     }

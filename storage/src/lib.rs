@@ -1,14 +1,14 @@
 mod db;
 pub mod pruner;
-pub mod trie;
 pub mod receipt_store;
+pub mod trie;
 
 use common::traits::Storage;
 use db::KeyValueStore;
 use std::error::Error;
 use std::sync::Arc;
 
-pub use db::{ChainStore, ColumnFamily, WriteBatch, DbMetrics, DbError, MemDb};
+pub use db::{ChainStore, ColumnFamily, DbError, DbMetrics, MemDb, WriteBatch};
 pub use pruner::{PruneConfig, PruneStats};
 
 pub struct MemStore {
@@ -46,7 +46,10 @@ impl Storage for MemStore {
         self.db.delete(ColumnFamily::State, key)
     }
 
-    fn write_batch(&self, operations: Vec<(Vec<u8>, Option<Vec<u8>>)>) -> Result<(), Box<dyn Error>> {
+    fn write_batch(
+        &self,
+        operations: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+    ) -> Result<(), Box<dyn Error>> {
         use crate::db::WriteBatch;
         let mut batch = WriteBatch::new();
         for (key, value) in operations {
@@ -108,11 +111,18 @@ mod sled_legacy {
             self.db.flush()?;
             Ok(())
         }
-        fn write_batch(&self, operations: Vec<(Vec<u8>, Option<Vec<u8>>)>) -> Result<(), Box<dyn Error>> {
+        fn write_batch(
+            &self,
+            operations: Vec<(Vec<u8>, Option<Vec<u8>>)>,
+        ) -> Result<(), Box<dyn Error>> {
             for (key, value) in operations {
                 match value {
-                    Some(v) => { self.db.insert(key, v)?; }
-                    None => { self.db.remove(key)?; }
+                    Some(v) => {
+                        self.db.insert(key, v)?;
+                    }
+                    None => {
+                        self.db.remove(key)?;
+                    }
                 }
             }
             self.db.flush()?;
@@ -132,14 +142,21 @@ pub struct StateStore {
 impl StateStore {
     pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
         let store = ChainStore::open(path)?;
-        Ok(Self { chain: std::sync::Arc::new(store) })
+        Ok(Self {
+            chain: std::sync::Arc::new(store),
+        })
     }
 
     pub fn new_mem() -> Self {
-        Self { chain: std::sync::Arc::new(ChainStore::new(std::sync::Arc::new(MemDb::new()))) }
+        Self {
+            chain: std::sync::Arc::new(ChainStore::new(std::sync::Arc::new(MemDb::new()))),
+        }
     }
 
-    pub fn get_account(&self, address: &[u8; 20]) -> Result<Option<common::types::Account>, Box<dyn Error>> {
+    pub fn get_account(
+        &self,
+        address: &[u8; 20],
+    ) -> Result<Option<common::types::Account>, Box<dyn Error>> {
         match self.chain.get_state(address)? {
             Some(data) => {
                 let account: common::types::Account = serde_json::from_slice(&data)?;
@@ -149,12 +166,21 @@ impl StateStore {
         }
     }
 
-    pub fn put_account(&self, address: &[u8; 20], account: &common::types::Account) -> Result<(), Box<dyn Error>> {
+    pub fn put_account(
+        &self,
+        address: &[u8; 20],
+        account: &common::types::Account,
+    ) -> Result<(), Box<dyn Error>> {
         let data = serde_json::to_vec(account)?;
         self.chain.put_state(address, &data)
     }
 
-    pub fn get_all_accounts(&self) -> Result<std::collections::HashMap<common::types::Address, common::types::Account>, Box<dyn Error>> {
+    pub fn get_all_accounts(
+        &self,
+    ) -> Result<
+        std::collections::HashMap<common::types::Address, common::types::Account>,
+        Box<dyn Error>,
+    > {
         let mut accounts = std::collections::HashMap::new();
         for (key, value) in self.chain.iter_state()? {
             if key.len() == 20 {
@@ -192,7 +218,9 @@ impl StateStore {
         Ok(tree.root())
     }
 
-    pub fn compute_root(state: &std::collections::HashMap<common::types::Address, common::types::Account>) -> [u8; 32] {
+    pub fn compute_root(
+        state: &std::collections::HashMap<common::types::Address, common::types::Account>,
+    ) -> [u8; 32] {
         use common::merkle::MerkleTree;
         use sha2::{Digest, Sha256};
 
@@ -211,7 +239,10 @@ impl StateStore {
         MerkleTree::new(leaves).root()
     }
 
-    pub fn initialize_genesis(&self, genesis: &common::types::GenesisConfig) -> Result<(), Box<dyn Error>> {
+    pub fn initialize_genesis(
+        &self,
+        genesis: &common::types::GenesisConfig,
+    ) -> Result<(), Box<dyn Error>> {
         for genesis_account in &genesis.accounts {
             let account = common::types::Account {
                 nonce: 0,
@@ -244,7 +275,10 @@ impl Default for TrieStateStore {
 }
 
 impl TrieStateStore {
-    pub fn get_account(&self, address: &[u8; 20]) -> Result<Option<common::types::Account>, Box<dyn Error>> {
+    pub fn get_account(
+        &self,
+        address: &[u8; 20],
+    ) -> Result<Option<common::types::Account>, Box<dyn Error>> {
         let trie = self.trie.lock().unwrap();
         match trie.get(address)? {
             Some(data) => {
@@ -255,7 +289,11 @@ impl TrieStateStore {
         }
     }
 
-    pub fn put_account(&self, address: &[u8; 20], account: &common::types::Account) -> Result<(), Box<dyn Error>> {
+    pub fn put_account(
+        &self,
+        address: &[u8; 20],
+        account: &common::types::Account,
+    ) -> Result<(), Box<dyn Error>> {
         let data = serde_json::to_vec(account)?;
         let mut trie = self.trie.lock().unwrap();
         trie.insert(address, &data)
@@ -277,21 +315,26 @@ impl TrieStateStore {
     }
 
     /// Compute state root from in-memory state
-    pub fn compute_root(state: &std::collections::HashMap<common::types::Address, common::types::Account>) -> Result<[u8; 32], Box<dyn Error>> {
+    pub fn compute_root(
+        state: &std::collections::HashMap<common::types::Address, common::types::Account>,
+    ) -> Result<[u8; 32], Box<dyn Error>> {
         // Create temporary trie
         let mut trie = trie::PatriciaTrie::new(Arc::new(MemDb::new()))?;
-        
+
         // Insert all accounts
         for (address, account) in state {
             let data = serde_json::to_vec(account)?;
             trie.insert(address, &data)?;
         }
-        
+
         Ok(trie.root_hash())
     }
 
     /// Initialize state from genesis configuration
-    pub fn initialize_genesis(&self, genesis: &common::types::GenesisConfig) -> Result<(), Box<dyn Error>> {
+    pub fn initialize_genesis(
+        &self,
+        genesis: &common::types::GenesisConfig,
+    ) -> Result<(), Box<dyn Error>> {
         for genesis_account in &genesis.accounts {
             let account = common::types::Account {
                 nonce: 0,
@@ -305,7 +348,12 @@ impl TrieStateStore {
     /// Get all accounts (expensive operation - iterates entire trie)
     /// Note: This is less efficient than the old implementation
     /// In production, consider maintaining a separate index
-    pub fn get_all_accounts(&self) -> Result<std::collections::HashMap<common::types::Address, common::types::Account>, Box<dyn Error>> {
+    pub fn get_all_accounts(
+        &self,
+    ) -> Result<
+        std::collections::HashMap<common::types::Address, common::types::Account>,
+        Box<dyn Error>,
+    > {
         // This is a simplified implementation
         // In a real system, you'd want to iterate the trie more efficiently
         // For now, we'll return an error suggesting this isn't the best approach
@@ -344,7 +392,10 @@ pub mod block_store {
             Ok(())
         }
 
-        pub fn get_block_by_hash(&self, hash: &[u8; 32]) -> Result<Option<common::types::Block>, Box<dyn Error>> {
+        pub fn get_block_by_hash(
+            &self,
+            hash: &[u8; 32],
+        ) -> Result<Option<common::types::Block>, Box<dyn Error>> {
             match self.store.get(hash)? {
                 Some(data) => {
                     let block: common::types::Block = serde_json::from_slice(&data)?;
@@ -354,7 +405,10 @@ pub mod block_store {
             }
         }
 
-        pub fn get_block_by_height(&self, height: u64) -> Result<Option<common::types::Block>, Box<dyn Error>> {
+        pub fn get_block_by_height(
+            &self,
+            height: u64,
+        ) -> Result<Option<common::types::Block>, Box<dyn Error>> {
             let height_key = format!("height_{}", height);
             match self.store.get(height_key.as_bytes())? {
                 Some(hash_data) if hash_data.len() == 32 => {
@@ -476,52 +530,58 @@ mod tests {
     #[test]
     fn test_trie_state_store() {
         let store = TrieStateStore::new(Arc::new(MemDb::new())).unwrap();
-        
+
         let address = [1u8; 20];
         let account = common::types::Account {
             nonce: 5,
             balance: 1000,
         };
-        
+
         store.put_account(&address, &account).unwrap();
         let retrieved = store.get_account(&address).unwrap();
-        
+
         assert_eq!(retrieved, Some(account));
-        
+
         // Test root hash
         let root = store.root_hash().unwrap();
         assert_ne!(root, [0u8; 32]); // Should not be empty
     }
-    
+
     #[test]
     fn test_trie_state_store_proof() {
         let store = TrieStateStore::new(Arc::new(MemDb::new())).unwrap();
-        
+
         let address = [2u8; 20];
         let account = common::types::Account {
             nonce: 10,
             balance: 5000,
         };
-        
+
         store.put_account(&address, &account).unwrap();
-        
+
         // Get proof
         let proof = store.get_proof(&address).unwrap();
         assert!(!proof.is_empty());
     }
-    
+
     #[test]
     fn test_trie_compute_root() {
         let mut state = std::collections::HashMap::new();
         state.insert(
             [1u8; 20],
-            common::types::Account { nonce: 1, balance: 100 },
+            common::types::Account {
+                nonce: 1,
+                balance: 100,
+            },
         );
         state.insert(
             [2u8; 20],
-            common::types::Account { nonce: 2, balance: 200 },
+            common::types::Account {
+                nonce: 2,
+                balance: 200,
+            },
         );
-        
+
         let root = TrieStateStore::compute_root(&state).unwrap();
         assert_ne!(root, [0u8; 32]);
     }

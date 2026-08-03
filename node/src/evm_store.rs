@@ -83,9 +83,10 @@ impl EvmStore for ChainStoreEvmStore {
     }
 
     fn put_account(&self, address: revm::primitives::Address, account: StoredAccount) {
-        let _ = self
-            .chain
-            .put_state(&Self::key_account(&address), &Self::encode_account(&account));
+        let _ = self.chain.put_state(
+            &Self::key_account(&address),
+            &Self::encode_account(&account),
+        );
     }
 
     fn get_storage(&self, address: &revm::primitives::Address, slot: &U256) -> Option<U256> {
@@ -145,8 +146,8 @@ mod tests {
     use super::*;
     use execution::evm::InMemoryStore;
     use revm::primitives::Address;
-    use storage::{ChainStore, MemDb};
     use std::sync::Arc;
+    use storage::{ChainStore, MemDb};
 
     #[test]
     fn chain_store_evm_roundtrip() {

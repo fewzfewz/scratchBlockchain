@@ -1,5 +1,5 @@
 use anyhow::Result;
-use common::types::{Block, Header, Hash};
+use common::types::{Block, Hash, Header};
 use consensus::ValidatorInfo;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -19,7 +19,7 @@ impl SyncCommittee {
         // In a real implementation, compute aggregate BLS key
         // For MVP, just use first member's key
         let aggregate_pubkey = members.first().cloned().unwrap_or_default();
-        
+
         Self {
             members,
             aggregate_pubkey,
@@ -74,7 +74,7 @@ impl LightClientState {
         // Verify sync committee participation (need 2/3+)
         let participation_count = update.sync_committee_bits.iter().filter(|&&b| b).count();
         let threshold = (self.current_sync_committee.size() * 2) / 3;
-        
+
         if participation_count < threshold {
             return Err(anyhow::anyhow!(
                 "Insufficient sync committee participation: {} < {}",
@@ -180,7 +180,11 @@ pub struct SyncCommitteeManager {
 }
 
 impl SyncCommitteeManager {
-    pub fn new(validators: Vec<ValidatorInfo>, committee_size: usize, rotation_period: u64) -> Self {
+    pub fn new(
+        validators: Vec<ValidatorInfo>,
+        committee_size: usize,
+        rotation_period: u64,
+    ) -> Self {
         // Select initial sync committee from validators
         let members: Vec<Vec<u8>> = validators
             .iter()
@@ -199,14 +203,11 @@ impl SyncCommitteeManager {
     }
 
     /// Generate light client update for a block
-    pub fn generate_update(
-        &self,
-        header: Header,
-        should_rotate: bool,
-    ) -> LightClientUpdate {
+    pub fn generate_update(&self, header: Header, should_rotate: bool) -> LightClientUpdate {
         let next_sync_committee = if should_rotate {
             // Select next committee (simplified - random selection)
-            let members: Vec<Vec<u8>> = self.validators
+            let members: Vec<Vec<u8>> = self
+                .validators
                 .iter()
                 .take(self.committee_size)
                 .map(|v| v.public_key.clone())
@@ -250,7 +251,7 @@ mod tests {
     fn test_sync_committee_creation() {
         let members = vec![vec![1; 32], vec![2; 32], vec![3; 32]];
         let committee = SyncCommittee::new(members.clone());
-        
+
         assert_eq!(committee.size(), 3);
         assert_eq!(committee.members, members);
     }
@@ -259,7 +260,7 @@ mod tests {
     fn test_light_client_state() {
         let genesis = Header::new([0; 32], 0);
         let committee = SyncCommittee::new(vec![vec![1; 32]]);
-        
+
         let state = LightClientState::new(genesis.clone(), committee);
         assert_eq!(state.current_header.slot, 0);
         assert!(state.finalized_header.is_some());
@@ -280,7 +281,7 @@ mod tests {
         };
 
         assert!(client.process_update(update).await.is_ok());
-        
+
         let current = client.current_header().await;
         assert_eq!(current.slot, 1);
     }

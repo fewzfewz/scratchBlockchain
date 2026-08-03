@@ -1,6 +1,6 @@
+use common::types::Address;
 use interop::ethereum_bridge::EthereumBridge;
 use proptest::prelude::*;
-use common::types::Address;
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(1000))]
@@ -25,7 +25,7 @@ proptest! {
             assert_eq!(message.amount, amount);
             assert_eq!(message.sender, user);
             assert_eq!(message.recipient, eth_recipient);
-            
+
             // Verify internal state
             let locked = bridge.get_locked_balance(&token, &user);
             assert_eq!(locked, amount);

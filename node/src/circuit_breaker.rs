@@ -1,6 +1,6 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tracing::{info, warn, error};
+use tracing::{error, info, warn};
 
 /// Circuit breaker states following the standard pattern
 #[derive(Debug, Clone, PartialEq)]
@@ -49,7 +49,10 @@ struct CircuitBreakerState {
 
 impl CircuitBreaker {
     pub fn new(config: CircuitBreakerConfig) -> Self {
-        info!("Initializing circuit breaker with threshold: {}", config.failure_threshold);
+        info!(
+            "Initializing circuit breaker with threshold: {}",
+            config.failure_threshold
+        );
         Self {
             state: Arc::new(Mutex::new(CircuitBreakerState {
                 current_state: CircuitState::Closed,
@@ -64,7 +67,7 @@ impl CircuitBreaker {
     /// Check if request should be allowed through
     pub fn is_request_allowed(&self) -> bool {
         let mut state = self.state.lock().unwrap();
-        
+
         match state.current_state {
             CircuitState::Closed => true,
             CircuitState::Open => {
@@ -89,12 +92,15 @@ impl CircuitBreaker {
     /// Record a successful operation
     pub fn record_success(&self) {
         let mut state = self.state.lock().unwrap();
-        
+
         match state.current_state {
             CircuitState::HalfOpen => {
                 state.success_count += 1;
                 if state.success_count >= self.config.success_threshold {
-                    info!("Circuit breaker closing after {} successes", state.success_count);
+                    info!(
+                        "Circuit breaker closing after {} successes",
+                        state.success_count
+                    );
                     state.current_state = CircuitState::Closed;
                     state.failure_count = 0;
                     state.success_count = 0;
@@ -113,14 +119,17 @@ impl CircuitBreaker {
     /// Record a failed operation
     pub fn record_failure(&self) {
         let mut state = self.state.lock().unwrap();
-        
+
         match state.current_state {
             CircuitState::Closed => {
                 state.failure_count += 1;
                 state.last_failure_time = Some(Instant::now());
-                
+
                 if state.failure_count >= self.config.failure_threshold {
-                    error!("Circuit breaker opening after {} failures", state.failure_count);
+                    error!(
+                        "Circuit breaker opening after {} failures",
+                        state.failure_count
+                    );
                     state.current_state = CircuitState::Open;
                 }
             }
@@ -182,7 +191,7 @@ mod tests {
         cb.record_failure();
         cb.record_failure();
         assert_eq!(cb.get_state(), CircuitState::Closed);
-        
+
         cb.record_failure();
         assert_eq!(cb.get_state(), CircuitState::Open);
         assert!(!cb.is_request_allowed());
@@ -231,7 +240,7 @@ mod tests {
         // Record successes
         cb.record_success();
         assert_eq!(cb.get_state(), CircuitState::HalfOpen);
-        
+
         cb.record_success();
         assert_eq!(cb.get_state(), CircuitState::Closed);
     }

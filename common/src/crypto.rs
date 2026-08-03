@@ -34,39 +34,39 @@
 //     pub fn generate() -> Self {
 //         let mut seed = [0u8; 32];
 //         OsRng.fill_bytes(&mut seed);
-        
+
 //         let signing_key = DalekSigningKey::from_bytes(&seed);
 //         let verifying_key = signing_key.verifying_key();
-        
+
 //         Self { signing_key, verifying_key }
 //     }
-    
+
 //     /// Create signing key from 32-byte seed
 //     pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
 //         if bytes.len() != SECRET_KEY_LENGTH {
 //             return Err(CryptoError::InvalidPrivateKey);
 //         }
-        
+
 //         let mut seed = [0u8; SECRET_KEY_LENGTH];
 //         seed.copy_from_slice(bytes);
-        
+
 //         let signing_key = DalekSigningKey::from_bytes(&seed);
 //         let verifying_key = signing_key.verifying_key();
-        
+
 //         Ok(Self { signing_key, verifying_key })
 //     }
-    
+
 //     /// Sign a message
 //     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
 //         let signature = self.signing_key.sign(message);
 //         signature.to_bytes().to_vec()
 //     }
-    
+
 //     /// Get the public key
 //     pub fn public_key(&self) -> Vec<u8> {
 //         self.verifying_key.to_bytes().to_vec()
 //     }
-    
+
 //     /// Get the private key bytes (for storage)
 //     pub fn to_bytes(&self) -> Vec<u8> {
 //         self.signing_key.to_bytes().to_vec()
@@ -83,23 +83,23 @@
 //     if public_key.len() != 32 {
 //         return Err(CryptoError::InvalidPublicKey);
 //     }
-    
+
 //     let mut pk_bytes = [0u8; 32];
 //     pk_bytes.copy_from_slice(public_key);
-    
+
 //     let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
 //         .map_err(|_| CryptoError::InvalidPublicKey)?;
-    
+
 //     // Parse signature
 //     if signature.len() != 64 {
 //         return Err(CryptoError::InvalidSignature);
 //     }
-    
+
 //     let mut sig_bytes = [0u8; 64];
 //     sig_bytes.copy_from_slice(signature);
-    
+
 //     let sig = Signature::from_bytes(&sig_bytes);
-    
+
 //     // Verify
 //     verifying_key
 //         .verify(message, &sig)
@@ -115,9 +115,9 @@
 //         let key = SigningKey::generate();
 //         let message = b"Hello, world!";
 //         let signature = key.sign(message);
-        
+
 //         assert_eq!(signature.len(), 64);
-        
+
 //         // Verify the signature
 //         let public_key = key.public_key();
 //         assert!(verify_signature(&public_key, message, &signature).is_ok());
@@ -128,11 +128,11 @@
 //         let key = SigningKey::generate();
 //         let message = b"Hello, world!";
 //         let signature = key.sign(message);
-        
+
 //         // Tamper with message
 //         let wrong_message = b"Hello, World!";
 //         let public_key = key.public_key();
-        
+
 //         assert!(verify_signature(&public_key, wrong_message, &signature).is_err());
 //     }
 
@@ -140,10 +140,10 @@
 //     fn test_wrong_public_key() {
 //         let key1 = SigningKey::generate();
 //         let key2 = SigningKey::generate();
-        
+
 //         let message = b"Hello, world!";
 //         let signature = key1.sign(message);
-        
+
 //         // Try to verify with wrong public key
 //         let wrong_public_key = key2.public_key();
 //         assert!(verify_signature(&wrong_public_key, message, &signature).is_err());
@@ -153,14 +153,14 @@
 //     fn test_from_bytes() {
 //         let key1 = SigningKey::generate();
 //         let bytes = key1.to_bytes();
-        
+
 //         let key2 = SigningKey::from_bytes(&bytes).unwrap();
-        
+
 //         // Both keys should produce same signature
 //         let message = b"Test message";
 //         let sig1 = key1.sign(message);
 //         let sig2 = key2.sign(message);
-        
+
 //         assert_eq!(sig1, sig2);
 //     }
 
@@ -168,17 +168,18 @@
 //     fn test_deterministic_signatures() {
 //         let key = SigningKey::generate();
 //         let message = b"Test message";
-        
+
 //         let sig1 = key.sign(message);
 //         let sig2 = key.sign(message);
-        
+
 //         // Ed25519 signatures are deterministic
 //         assert_eq!(sig1, sig2);
 //     }
 // }
 
-
-use ed25519_dalek::{Signature, Signer, SigningKey as DalekSigningKey, Verifier, VerifyingKey, SECRET_KEY_LENGTH};
+use ed25519_dalek::{
+    Signature, Signer, SigningKey as DalekSigningKey, Verifier, VerifyingKey, SECRET_KEY_LENGTH,
+};
 use rand::{rngs::OsRng, RngCore};
 use sha2::{Digest, Sha256};
 
@@ -193,10 +194,10 @@ pub enum CryptoError {
 impl std::fmt::Display for CryptoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CryptoError::InvalidSignature  => write!(f, "Invalid signature"),
-            CryptoError::InvalidPublicKey  => write!(f, "Invalid public key"),
+            CryptoError::InvalidSignature => write!(f, "Invalid signature"),
+            CryptoError::InvalidPublicKey => write!(f, "Invalid public key"),
             CryptoError::InvalidPrivateKey => write!(f, "Invalid private key"),
-            CryptoError::SigningError      => write!(f, "Signing error"),
+            CryptoError::SigningError => write!(f, "Signing error"),
         }
     }
 }
@@ -226,7 +227,7 @@ pub fn hash256(data: &[u8]) -> [u8; 32] {
 
 #[derive(Clone)]
 pub struct SigningKey {
-    signing_key:   DalekSigningKey,
+    signing_key: DalekSigningKey,
     verifying_key: VerifyingKey,
 }
 
@@ -249,9 +250,12 @@ impl SigningKey {
     }
 
     fn from_seed(seed: [u8; 32]) -> Self {
-        let signing_key   = DalekSigningKey::from_bytes(&seed);
+        let signing_key = DalekSigningKey::from_bytes(&seed);
         let verifying_key = signing_key.verifying_key();
-        Self { signing_key, verifying_key }
+        Self {
+            signing_key,
+            verifying_key,
+        }
     }
 
     /// Sign a message. Returns a 64-byte Ed25519 signature.
@@ -279,8 +283,8 @@ impl SigningKey {
 /// Returns `Ok(())` if the signature is valid, or a `CryptoError` otherwise.
 pub fn verify_signature(
     public_key: &[u8],
-    message:    &[u8],
-    signature:  &[u8],
+    message: &[u8],
+    signature: &[u8],
 ) -> Result<(), CryptoError> {
     if public_key.len() != 32 {
         return Err(CryptoError::InvalidPublicKey);
@@ -289,13 +293,13 @@ pub fn verify_signature(
         return Err(CryptoError::InvalidSignature);
     }
 
-    let mut pk_bytes  = [0u8; 32];
+    let mut pk_bytes = [0u8; 32];
     let mut sig_bytes = [0u8; 64];
     pk_bytes.copy_from_slice(public_key);
     sig_bytes.copy_from_slice(signature);
 
-    let verifying_key = VerifyingKey::from_bytes(&pk_bytes)
-        .map_err(|_| CryptoError::InvalidPublicKey)?;
+    let verifying_key =
+        VerifyingKey::from_bytes(&pk_bytes).map_err(|_| CryptoError::InvalidPublicKey)?;
     let sig = Signature::from_bytes(&sig_bytes);
 
     verifying_key
@@ -329,9 +333,9 @@ mod tests {
 
     #[test]
     fn test_generate_and_sign() {
-        let key     = SigningKey::generate();
+        let key = SigningKey::generate();
         let message = b"Hello, world!";
-        let sig     = key.sign(message);
+        let sig = key.sign(message);
 
         assert_eq!(sig.len(), 64);
         assert!(verify_signature(&key.public_key(), message, &sig).is_ok());
@@ -348,15 +352,15 @@ mod tests {
     fn test_wrong_public_key_rejected() {
         let key1 = SigningKey::generate();
         let key2 = SigningKey::generate();
-        let sig  = key1.sign(b"Hello");
+        let sig = key1.sign(b"Hello");
         assert!(verify_signature(&key2.public_key(), b"Hello", &sig).is_err());
     }
 
     #[test]
     fn test_from_bytes_roundtrip() {
-        let key1  = SigningKey::generate();
-        let key2  = SigningKey::from_bytes(&key1.to_bytes()).unwrap();
-        let msg   = b"Test message";
+        let key1 = SigningKey::generate();
+        let key2 = SigningKey::from_bytes(&key1.to_bytes()).unwrap();
+        let msg = b"Test message";
         assert_eq!(key1.sign(msg), key2.sign(msg));
     }
 
@@ -401,15 +405,11 @@ pub fn derive_address_from_public_key(public_key: &[u8]) -> [u8; 20] {
 }
 
 /// Batch verify multiple signatures (more efficient than individual verification)
-pub fn verify_batch(
-    public_keys: &[&[u8]],
-    messages: &[&[u8]],
-    signatures: &[&[u8]],
-) -> bool {
+pub fn verify_batch(public_keys: &[&[u8]], messages: &[&[u8]], signatures: &[&[u8]]) -> bool {
     if public_keys.len() != messages.len() || messages.len() != signatures.len() {
         return false;
     }
-    
+
     for i in 0..public_keys.len() {
         if verify_signature(public_keys[i], messages[i], signatures[i]).is_err() {
             return false;
@@ -432,12 +432,12 @@ impl SigningKey {
             .map_err(|_| CryptoError::InvalidPrivateKey)?;
         Self::from_bytes(&bytes)
     }
-    
+
     /// Export public key as hex
     pub fn public_key_hex(&self) -> String {
         hex::encode(self.public_key())
     }
-    
+
     /// Export private key as hex
     pub fn to_hex(&self) -> String {
         hex::encode(self.to_bytes())
@@ -447,7 +447,7 @@ impl SigningKey {
 #[cfg(test)]
 mod additional_tests {
     use super::*;
-    
+
     #[test]
     fn test_hash_pair() {
         let left = [1u8; 32];
@@ -457,40 +457,40 @@ mod additional_tests {
         assert_ne!(result, left);
         assert_ne!(result, right);
     }
-    
+
     #[test]
     fn test_derive_address() {
         let pubkey = [1u8; 32];
         let address = derive_address_from_public_key(&pubkey);
         assert_eq!(address.len(), 20);
     }
-    
+
     #[test]
     fn test_batch_verify() {
         let key1 = SigningKey::generate();
         let key2 = SigningKey::generate();
-        
+
         let msg1 = b"message 1";
         let msg2 = b"message 2";
-        
+
         let sig1 = key1.sign(msg1);
         let sig2 = key2.sign(msg2);
-        
+
         let pk1 = key1.public_key();
         let pk2 = key2.public_key();
         let pubkeys = vec![pk1.as_slice(), pk2.as_slice()];
         let messages = vec![msg1.as_slice(), msg2.as_slice()];
         let sigs = vec![sig1.as_slice(), sig2.as_slice()];
-        
+
         assert!(verify_batch(&pubkeys, &messages, &sigs));
     }
-    
+
     #[test]
     fn test_key_hex_roundtrip() {
         let key1 = SigningKey::generate();
         let hex = key1.to_hex();
         let key2 = SigningKey::from_hex(&hex).unwrap();
-        
+
         let msg = b"test";
         assert_eq!(key1.sign(msg), key2.sign(msg));
     }

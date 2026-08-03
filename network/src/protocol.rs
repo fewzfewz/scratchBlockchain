@@ -69,8 +69,8 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let json_bytes = serde_json::to_vec(&req)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let json_bytes =
+            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_length_prefixed(io, &json_bytes).await
     }
 
@@ -83,8 +83,8 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let json_bytes = serde_json::to_vec(&res)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let json_bytes =
+            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_length_prefixed(io, &json_bytes).await
     }
 }
@@ -123,7 +123,10 @@ where
             return Ok(value);
         }
     }
-    Err(io::Error::new(io::ErrorKind::InvalidData, "varint too long"))
+    Err(io::Error::new(
+        io::ErrorKind::InvalidData,
+        "varint too long",
+    ))
 }
 
 async fn write_varint<T>(io: &mut T, value: usize) -> io::Result<()>
@@ -235,10 +238,7 @@ mod tests {
             .unwrap();
 
         let read_cursor = Cursor::new(&write_buffer);
-        let decoded_response = codec
-            .read_response(&protocol, read_cursor)
-            .await
-            .unwrap();
+        let decoded_response = codec.read_response(&protocol, read_cursor).await.unwrap();
 
         assert_eq!(
             original_response.blocks.len(),

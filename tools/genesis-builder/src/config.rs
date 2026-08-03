@@ -3,9 +3,9 @@
 //! This module defines the configuration structures for blockchain genesis.
 //! Configuration is loaded from TOML files and validated before genesis generation.
 
+use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-use anyhow::{anyhow, Result};
 
 /// Complete genesis configuration loaded from TOML
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,7 +76,7 @@ pub struct EconomicConfig {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ValidatorConfig {
     pub address: String,
-    pub stake: String, // Parse as u128
+    pub stake: String,           // Parse as u128
     pub commission_rate: String, // Stored as string, parsed to f64
     pub public_key: String,
     #[serde(default)]
@@ -105,17 +105,39 @@ pub struct PrecompileConfig {
 }
 
 // Default value functions
-fn default_initial_height() -> u64 { 0 }
-fn default_network_id() -> u64 { 1 }
-fn default_chain_name() -> String { "Modular Blockchain".to_string() }
-fn default_unbonding_period() -> u64 { 100_800 } // ~7 days at 6s blocks
-fn default_max_validators_per_epoch() -> usize { 100 }
-fn default_approval_threshold() -> String { "0.5".to_string() }
-fn default_max_proposals() -> usize { 100 }
-fn default_initial_reward() -> String { "10000000000000000000".to_string() } // 10 tokens
-fn default_halving_interval() -> u64 { 2_100_000 } // ~4 years
-fn default_fee_burn_percentage() -> u8 { 50 }
-fn default_treasury_address() -> String { "0x0000000000000000000000000000000000000000".to_string() }
+fn default_initial_height() -> u64 {
+    0
+}
+fn default_network_id() -> u64 {
+    1
+}
+fn default_chain_name() -> String {
+    "Modular Blockchain".to_string()
+}
+fn default_unbonding_period() -> u64 {
+    100_800
+} // ~7 days at 6s blocks
+fn default_max_validators_per_epoch() -> usize {
+    100
+}
+fn default_approval_threshold() -> String {
+    "0.5".to_string()
+}
+fn default_max_proposals() -> usize {
+    100
+}
+fn default_initial_reward() -> String {
+    "10000000000000000000".to_string()
+} // 10 tokens
+fn default_halving_interval() -> u64 {
+    2_100_000
+} // ~4 years
+fn default_fee_burn_percentage() -> u8 {
+    50
+}
+fn default_treasury_address() -> String {
+    "0x0000000000000000000000000000000000000000".to_string()
+}
 
 impl GenesisConfig {
     /// Load genesis configuration from TOML string
@@ -123,13 +145,13 @@ impl GenesisConfig {
         let config: GenesisConfig = toml::from_str(content)?;
         Ok(config)
     }
-    
+
     /// Load from file
     pub fn from_file(path: &std::path::Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)?;
         Self::from_toml(&content)
     }
-    
+
     /// Generate example TOML configuration
     pub fn example_toml() -> String {
         r#"# Genesis Configuration Example
@@ -177,6 +199,7 @@ balance = "100000000000000000000"  # 100 tokens
 address = "0x0000000000000000000000000000000000000001"
 contract_type = "ecrecover"
 enabled = true
-"#.to_string()
+"#
+        .to_string()
     }
 }

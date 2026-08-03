@@ -229,9 +229,18 @@ impl StakingContract {
     }
 
     /// Register a new validator
-    pub fn register_validator(&mut self, address: Address, public_key: Vec<u8>, stake: u128, commission_rate: u8) -> Result<(), String> {
+    pub fn register_validator(
+        &mut self,
+        address: Address,
+        public_key: Vec<u8>,
+        stake: u128,
+        commission_rate: u8,
+    ) -> Result<(), String> {
         if stake < self.min_stake {
-            return Err(format!("Stake {} is below minimum {}", stake, self.min_stake));
+            return Err(format!(
+                "Stake {} is below minimum {}",
+                stake, self.min_stake
+            ));
         }
 
         if commission_rate > 100 {
@@ -243,7 +252,10 @@ impl StakingContract {
         }
 
         if self.validators.len() >= self.max_validators {
-            return Err(format!("Maximum validators ({}) reached", self.max_validators));
+            return Err(format!(
+                "Maximum validators ({}) reached",
+                self.max_validators
+            ));
         }
 
         let validator = Validator {
@@ -267,7 +279,13 @@ impl StakingContract {
     }
 
     /// Delegate stake to a validator
-    pub fn delegate(&mut self, delegator: Address, validator: Address, amount: u128, current_height: u64) -> Result<(), String> {
+    pub fn delegate(
+        &mut self,
+        delegator: Address,
+        validator: Address,
+        amount: u128,
+        current_height: u64,
+    ) -> Result<(), String> {
         if !self.validators.contains_key(&validator) {
             return Err("Validator not found".into());
         }
@@ -293,7 +311,13 @@ impl StakingContract {
     }
 
     /// Request to undelegate (starts unbonding period)
-    pub fn undelegate(&mut self, delegator: Address, validator: Address, amount: u128, current_height: u64) -> Result<(), String> {
+    pub fn undelegate(
+        &mut self,
+        delegator: Address,
+        validator: Address,
+        amount: u128,
+        current_height: u64,
+    ) -> Result<(), String> {
         // Find and reduce delegation
         let mut found = false;
         let mut remaining_amount = amount;
@@ -357,9 +381,17 @@ impl StakingContract {
     }
 
     /// Slash a validator for misbehavior
-    pub fn slash(&mut self, validator: Address, reason: SlashingReason, current_height: u64) -> Result<u128, String> {
-        let val = self.validators.get_mut(&validator).ok_or("Validator not found")?;
-        
+    pub fn slash(
+        &mut self,
+        validator: Address,
+        reason: SlashingReason,
+        current_height: u64,
+    ) -> Result<u128, String> {
+        let val = self
+            .validators
+            .get_mut(&validator)
+            .ok_or("Validator not found")?;
+
         let slash_percentage = if reason == SlashingReason::Downtime {
             // Special case: 0.1% for downtime
             1 // 0.1% = 1/1000
@@ -401,9 +433,18 @@ impl StakingContract {
     }
 
     /// Distribute block rewards to validator and delegators
-    pub fn distribute_rewards(&mut self, validator: Address, block_reward: u128, fees: u128, _current_height: u64) -> Result<(), String> {
-        let metadata = self.validator_metadata.get_mut(&validator).ok_or("Validator not found")?;
-        
+    pub fn distribute_rewards(
+        &mut self,
+        validator: Address,
+        block_reward: u128,
+        fees: u128,
+        _current_height: u64,
+    ) -> Result<(), String> {
+        let metadata = self
+            .validator_metadata
+            .get_mut(&validator)
+            .ok_or("Validator not found")?;
+
         // Calculate total reward (block reward + fees after burn)
         let fee_burn = self.inflation_schedule.calculate_fee_burn(fees);
         let fee_to_distribute = fees - fee_burn;
@@ -415,7 +456,11 @@ impl StakingContract {
         let remaining_reward = total_reward - treasury_share;
 
         // Get validator's self-stake and total delegated
-        let validator_self_stake = self.validators.get(&validator).map(|v| v.stake as u128).unwrap_or(0);
+        let validator_self_stake = self
+            .validators
+            .get(&validator)
+            .map(|v| v.stake as u128)
+            .unwrap_or(0);
         let total_delegated = metadata.total_delegated;
         let total_stake = validator_self_stake + total_delegated;
 
@@ -449,7 +494,10 @@ impl StakingContract {
     pub fn record_missed_block(&mut self, validator: Address) -> Result<(), String> {
         // Check if we need to slash before borrowing
         let should_slash = {
-            let metadata = self.validator_metadata.get(&validator).ok_or("Validator not found")?;
+            let metadata = self
+                .validator_metadata
+                .get(&validator)
+                .ok_or("Validator not found")?;
             metadata.blocks_missed + 1 >= 100
         };
 
@@ -471,24 +519,27 @@ impl StakingContract {
 
     /// Get active validators sorted by total stake (self + delegated)
     pub fn get_active_validators(&self) -> Vec<(Validator, ValidatorMetadata)> {
-        let mut active: Vec<(Validator, ValidatorMetadata)> = self.validators
+        let mut active: Vec<(Validator, ValidatorMetadata)> = self
+            .validators
             .iter()
             .filter_map(|(addr, val)| {
                 if val.is_active {
-                    self.validator_metadata.get(addr).map(|meta| (val.clone(), meta.clone()))
+                    self.validator_metadata
+                        .get(addr)
+                        .map(|meta| (val.clone(), meta.clone()))
                 } else {
                     None
                 }
             })
             .collect();
-        
+
         // Sort by total stake (self + delegated) descending
         active.sort_by(|a, b| {
             let a_total = a.0.stake as u128 + a.1.total_delegated;
             let b_total = b.0.stake as u128 + b.1.total_delegated;
             b_total.cmp(&a_total)
         });
-        
+
         active
     }
 
@@ -499,7 +550,10 @@ impl StakingContract {
 
     /// Get delegations for a specific delegator
     pub fn get_delegations(&self, delegator: &Address) -> Vec<&Delegation> {
-        self.delegations.iter().filter(|d| d.delegator == *delegator).collect()
+        self.delegations
+            .iter()
+            .filter(|d| d.delegator == *delegator)
+            .collect()
     }
 
     /// Get treasury balance
@@ -512,7 +566,6 @@ impl StakingContract {
         self.inflation_schedule.calculate_reward(height)
     }
 }
-
 
 // Governance Structures
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -631,14 +684,21 @@ impl Governance {
     }
 
     pub fn vote(&mut self, proposal_id: u64, voter: Address, vote: bool) -> Result<(), String> {
-        let proposal = self.proposals.get_mut(&proposal_id).ok_or("Proposal not found")?;
+        let proposal = self
+            .proposals
+            .get_mut(&proposal_id)
+            .ok_or("Proposal not found")?;
 
         if proposal.status != ProposalStatus::Active {
             return Err("Proposal is not active".into());
         }
 
         // Check if voter is a validator
-        let validator = self.staking.validators.get(&voter).ok_or("Only validators can vote")?;
+        let validator = self
+            .staking
+            .validators
+            .get(&voter)
+            .ok_or("Only validators can vote")?;
         let voting_power = validator.stake;
 
         // Record vote
@@ -659,7 +719,10 @@ impl Governance {
     }
 
     pub fn tally_votes(&mut self, proposal_id: u64) -> Result<ProposalStatus, String> {
-        let proposal = self.proposals.get_mut(&proposal_id).ok_or("Proposal not found")?;
+        let proposal = self
+            .proposals
+            .get_mut(&proposal_id)
+            .ok_or("Proposal not found")?;
 
         // Simple majority check
         // In real system, check quorum and threshold
@@ -678,7 +741,6 @@ impl Governance {
     }
 }
 
-
 // ============================================================================
 // Governance Execution & Parameter Updates
 // ============================================================================
@@ -693,9 +755,15 @@ pub enum GovernanceAction {
     /// Execute treasury spend
     TreasurySpend { recipient: Address, amount: u128 },
     /// Upgrade runtime
-    RuntimeUpgrade { version: String, code_hash: [u8; 32] },
+    RuntimeUpgrade {
+        version: String,
+        code_hash: [u8; 32],
+    },
     /// Update inflation schedule
-    UpdateInflation { new_initial_reward: u128, new_halving_interval: u64 },
+    UpdateInflation {
+        new_initial_reward: u128,
+        new_halving_interval: u64,
+    },
 }
 
 /// Governance executor that applies approved proposals
@@ -711,7 +779,7 @@ impl GovernanceExecutor {
             executed_actions: Vec::new(),
         }
     }
-    
+
     /// Execute an approved governance action
     pub fn execute(&mut self, action: GovernanceAction) -> Result<(), String> {
         match action {
@@ -721,24 +789,34 @@ impl GovernanceExecutor {
             GovernanceAction::UpdateValidatorSet { ref validators } => {
                 self.update_validator_set(validators)?;
             }
-            GovernanceAction::TreasurySpend { recipient: _, ref amount } => {
+            GovernanceAction::TreasurySpend {
+                recipient: _,
+                ref amount,
+            } => {
                 self.staking.treasury.spend(*amount)?;
                 // Transfer to recipient logic here
             }
-            GovernanceAction::RuntimeUpgrade { ref version, code_hash: _ } => {
+            GovernanceAction::RuntimeUpgrade {
+                ref version,
+                code_hash: _,
+            } => {
                 info!("Runtime upgrade to version {} approved", version);
             }
-            GovernanceAction::UpdateInflation { ref new_initial_reward, ref new_halving_interval } => {
-                let _new_schedule = InflationSchedule::new(*new_initial_reward, *new_halving_interval, 50);
+            GovernanceAction::UpdateInflation {
+                ref new_initial_reward,
+                ref new_halving_interval,
+            } => {
+                let _new_schedule =
+                    InflationSchedule::new(*new_initial_reward, *new_halving_interval, 50);
                 // Apply new schedule - would need to update staking
                 info!("Inflation schedule updated");
             }
         }
-        
+
         self.executed_actions.push(action);
         Ok(())
     }
-    
+
     fn set_parameter(&mut self, key: &str, value: &str) -> Result<(), String> {
         match key {
             "min_stake" => {
@@ -746,18 +824,24 @@ impl GovernanceExecutor {
                 self.staking.min_stake = new_min;
             }
             "unbonding_period" => {
-                let new_period = value.parse().map_err(|_| "Invalid unbonding_period value")?;
+                let new_period = value
+                    .parse()
+                    .map_err(|_| "Invalid unbonding_period value")?;
                 self.staking.unbonding_period = new_period;
             }
             _ => return Err(format!("Unknown parameter: {}", key)),
         }
         Ok(())
     }
-    
+
     fn update_validator_set(&mut self, validators: &[ValidatorInfo]) -> Result<(), String> {
         // Update active validator set (match by public_key)
         for validator in validators {
-            let existing = self.staking.validators.values_mut().find(|v| v.public_key == validator.public_key);
+            let existing = self
+                .staking
+                .validators
+                .values_mut()
+                .find(|v| v.public_key == validator.public_key);
             if let Some(existing) = existing {
                 existing.stake = validator.stake;
                 existing.is_active = !validator.slashed;
@@ -896,7 +980,8 @@ impl ChainGovernance {
             VoteChoice::Abstain => proposal.abstain_votes += voting_power,
         }
 
-        proposal.status = Self::compute_status(quorum_bps, pass_bps, total_stake, proposal, current_block);
+        proposal.status =
+            Self::compute_status(quorum_bps, pass_bps, total_stake, proposal, current_block);
         Ok(())
     }
 
@@ -957,8 +1042,8 @@ impl ChainGovernance {
         voting_power: u128,
         current_block: u64,
     ) -> Result<(), String> {
-        let value: serde_json::Value =
-            serde_json::from_slice(payload).map_err(|_| "Invalid governance payload".to_string())?;
+        let value: serde_json::Value = serde_json::from_slice(payload)
+            .map_err(|_| "Invalid governance payload".to_string())?;
 
         let action = value
             .get("action")
@@ -1038,21 +1123,44 @@ mod chain_governance_tests {
     fn test_propose_and_active_status() {
         let mut gov = setup();
         let id = gov
-            .propose(addr(1), "Upgrade", "Upgrade description", ProposalType::TextProposal { title: "Upgrade".into(), description: "Upgrade description".into() }, 100)
+            .propose(
+                addr(1),
+                "Upgrade",
+                "Upgrade description",
+                ProposalType::TextProposal {
+                    title: "Upgrade".into(),
+                    description: "Upgrade description".into(),
+                },
+                100,
+            )
             .unwrap();
         assert_eq!(id, 1);
         assert_eq!(gov.next_proposal_id, 2);
         let p = gov.get_proposal(1).unwrap();
         assert_eq!(p.start_block, 100);
-        assert_eq!(p.end_block, 100 + GovernanceParams::default().voting_period_blocks);
+        assert_eq!(
+            p.end_block,
+            100 + GovernanceParams::default().voting_period_blocks
+        );
         assert_eq!(gov.resolve_status(p, 99), ProposalStatus::Active);
     }
 
     #[test]
     fn test_vote_weight_and_double_vote_rejected() {
         let mut gov = setup();
-        gov.propose(addr(1), "T", "D", ProposalType::TextProposal { title: "T".into(), description: "D".into() }, 0).unwrap();
-        gov.vote(1, addr(2), VoteChoice::Yes, 1_000_000, 10).unwrap();
+        gov.propose(
+            addr(1),
+            "T",
+            "D",
+            ProposalType::TextProposal {
+                title: "T".into(),
+                description: "D".into(),
+            },
+            0,
+        )
+        .unwrap();
+        gov.vote(1, addr(2), VoteChoice::Yes, 1_000_000, 10)
+            .unwrap();
         assert_eq!(gov.get_proposal(1).unwrap().yes_votes, 1_000_000);
         assert!(gov.vote(1, addr(2), VoteChoice::No, 500_000, 10).is_err());
     }
@@ -1060,51 +1168,97 @@ mod chain_governance_tests {
     #[test]
     fn test_resolution_after_voting_ends() {
         let mut gov = setup();
-        gov.propose(addr(1), "T", "D", ProposalType::TextProposal { title: "T".into(), description: "D".into() }, 0).unwrap();
+        gov.propose(
+            addr(1),
+            "T",
+            "D",
+            ProposalType::TextProposal {
+                title: "T".into(),
+                description: "D".into(),
+            },
+            0,
+        )
+        .unwrap();
         // Votes from three validators of the 2.4M total stake.
         gov.vote(1, addr(1), VoteChoice::Yes, 1_000_000, 0).unwrap();
         gov.vote(1, addr(2), VoteChoice::No, 800_000, 0).unwrap();
         gov.vote(1, addr(3), VoteChoice::Yes, 600_000, 0).unwrap();
         // Still active while voting is open.
-        assert_eq!(gov.resolve_status(gov.get_proposal(1).unwrap(), 999), ProposalStatus::Active);
+        assert_eq!(
+            gov.resolve_status(gov.get_proposal(1).unwrap(), 999),
+            ProposalStatus::Active
+        );
         // After the voting period, quorum is met and yes has a majority.
-        assert_eq!(gov.resolve_status(gov.get_proposal(1).unwrap(), 1000), ProposalStatus::Passed);
+        assert_eq!(
+            gov.resolve_status(gov.get_proposal(1).unwrap(), 1000),
+            ProposalStatus::Passed
+        );
     }
 
     #[test]
     fn test_rejected_when_majority_no() {
         let mut gov = setup();
-        gov.propose(addr(1), "T", "D", ProposalType::TextProposal { title: "T".into(), description: "D".into() }, 0).unwrap();
+        gov.propose(
+            addr(1),
+            "T",
+            "D",
+            ProposalType::TextProposal {
+                title: "T".into(),
+                description: "D".into(),
+            },
+            0,
+        )
+        .unwrap();
         gov.vote(1, addr(1), VoteChoice::No, 1_000_000, 0).unwrap();
         gov.vote(1, addr(2), VoteChoice::No, 800_000, 0).unwrap();
         gov.vote(1, addr(3), VoteChoice::Yes, 600_000, 0).unwrap();
-        assert_eq!(gov.resolve_status(gov.get_proposal(1).unwrap(), 1000), ProposalStatus::Rejected);
+        assert_eq!(
+            gov.resolve_status(gov.get_proposal(1).unwrap(), 1000),
+            ProposalStatus::Rejected
+        );
     }
 
     #[test]
     fn test_quorum_not_met_rejected() {
         let mut gov = setup();
-        gov.propose(addr(1), "T", "D", ProposalType::TextProposal { title: "T".into(), description: "D".into() }, 0).unwrap();
+        gov.propose(
+            addr(1),
+            "T",
+            "D",
+            ProposalType::TextProposal {
+                title: "T".into(),
+                description: "D".into(),
+            },
+            0,
+        )
+        .unwrap();
         gov.vote(1, addr(1), VoteChoice::Yes, 400_000, 0).unwrap();
         // 400k < 33.4% of 2.4M (801.6k) quorum.
-        assert_eq!(gov.resolve_status(gov.get_proposal(1).unwrap(), 1000), ProposalStatus::Rejected);
+        assert_eq!(
+            gov.resolve_status(gov.get_proposal(1).unwrap(), 1000),
+            ProposalStatus::Rejected
+        );
     }
 
     #[test]
     fn test_apply_payload_propose_and_vote() {
         let mut gov = setup();
-        let propose_payload = br#"{"action":"propose","title":"Airdrop","description":"Send tokens"}"#;
+        let propose_payload =
+            br#"{"action":"propose","title":"Airdrop","description":"Send tokens"}"#;
         gov.apply_payload(addr(1), propose_payload, 0, 5).unwrap();
         assert_eq!(gov.get_proposal(1).unwrap().title, "Airdrop");
 
         let vote_payload = br#"{"action":"vote","proposal_id":1,"choice":"yes"}"#;
-        gov.apply_payload(addr(2), vote_payload, 2_000_000, 5).unwrap();
+        gov.apply_payload(addr(2), vote_payload, 2_000_000, 5)
+            .unwrap();
         assert_eq!(gov.get_proposal(1).unwrap().yes_votes, 2_000_000);
     }
 
     #[test]
     fn test_is_governance_payload() {
-        assert!(ChainGovernance::is_governance_payload(br#"{"action":"vote","proposal_id":1,"choice":"no"}"#));
+        assert!(ChainGovernance::is_governance_payload(
+            br#"{"action":"vote","proposal_id":1,"choice":"no"}"#
+        ));
         assert!(!ChainGovernance::is_governance_payload(b""));
         assert!(!ChainGovernance::is_governance_payload(b"not json"));
     }

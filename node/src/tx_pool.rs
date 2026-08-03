@@ -2,7 +2,7 @@
 
 use common::types::Transaction;
 use execution::account_abstraction::{AccountAbstractionExecutor, UserOperation};
-use mempool::{MevMempool, MempoolConfig};
+use mempool::{MempoolConfig, MevMempool};
 use mev::{DecryptionShare, EncryptedTransaction};
 use std::sync::{Arc, Mutex};
 
@@ -85,13 +85,10 @@ impl TxPool {
         nonce: u64,
         current_height: u64,
     ) -> [u8; 32] {
-        self.mev.lock().unwrap().submit_committed(
-            tx_hash,
-            secret,
-            sender,
-            nonce,
-            current_height,
-        )
+        self.mev
+            .lock()
+            .unwrap()
+            .submit_committed(tx_hash, secret, sender, nonce, current_height)
     }
 
     pub fn reveal_transaction(
@@ -101,20 +98,17 @@ impl TxPool {
         commitment: [u8; 32],
         current_height: u64,
     ) -> Result<Transaction, String> {
-        self.mev.lock().unwrap().reveal_transaction(tx, secret, commitment, current_height)
+        self.mev
+            .lock()
+            .unwrap()
+            .reveal_transaction(tx, secret, commitment, current_height)
     }
 
     pub fn submit_encrypted(&self, encrypted: EncryptedTransaction) -> Result<(), String> {
-        self.mev
-            .lock()
-            .unwrap()
-            .submit_encrypted(encrypted)
+        self.mev.lock().unwrap().submit_encrypted(encrypted)
     }
 
     pub fn submit_decryption_share(&self, share: DecryptionShare) -> Result<(), String> {
-        self.mev
-            .lock()
-            .unwrap()
-            .submit_decryption_share(share)
+        self.mev.lock().unwrap().submit_decryption_share(share)
     }
 }

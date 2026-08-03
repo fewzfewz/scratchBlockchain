@@ -1,11 +1,6 @@
 pub mod upgrade;
 
 pub use upgrade::{
-    RuntimeVersion,
-    RuntimeMetadata,
-    UpgradeCoordinator,
-    PendingUpgrade,
-    UpgradeState,
-    StateMigration,
-    MigrationPlan,
+    MigrationPlan, PendingUpgrade, RuntimeMetadata, RuntimeVersion, StateMigration,
+    UpgradeCoordinator, UpgradeState,
 };

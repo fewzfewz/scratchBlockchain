@@ -1,6 +1,6 @@
+use ed25519_dalek::{Signature as Ed25519Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use ed25519_dalek::{Verifier, VerifyingKey, Signature as Ed25519Signature};
 
 // Type aliases for now, can be replaced with specific types later
 pub type Hash = [u8; 32];
@@ -17,8 +17,8 @@ pub struct Header {
     pub epoch: u64,
     pub validator_set_id: u64,
     pub signature: Signature,
-    pub gas_used: u64,      // Total gas used in block
-    pub base_fee: u64,      // Base fee per gas (EIP-1559)
+    pub gas_used: u64, // Total gas used in block
+    pub base_fee: u64, // Base fee per gas (EIP-1559)
 }
 
 impl Header {
@@ -55,12 +55,12 @@ pub struct Transaction {
     pub nonce: u64,
     pub payload: Vec<u8>,
     pub signature: Vec<u8>,
-    
+
     // Gas fields (EIP-1559 style)
     pub gas_limit: u64,
     pub max_fee_per_gas: u64,
     pub max_priority_fee_per_gas: u64,
-    
+
     // Optional fields
     pub chain_id: Option<u64>, // For replay protection
     pub to: Option<Address>,   // None for contract creation
@@ -119,7 +119,7 @@ impl Transaction {
             payload: vec![],
             signature: vec![],
             gas_limit: 21_000,
-            max_fee_per_gas: 1_000_000_000, // 1 Gwei
+            max_fee_per_gas: 1_000_000_000,        // 1 Gwei
             max_priority_fee_per_gas: 100_000_000, // 0.1 Gwei
             chain_id: Some(chain_id),
             to: Some(to),
@@ -135,7 +135,7 @@ impl Transaction {
             payload: vec![],
             signature: vec![0; 64],
             gas_limit: 21_000,
-            max_fee_per_gas: 10_000_000_000,        // 10 Gwei
+            max_fee_per_gas: 10_000_000_000,         // 10 Gwei
             max_priority_fee_per_gas: 2_000_000_000, // 2 Gwei
             chain_id: Some(1),
             to: Some([0; 20]),
@@ -189,7 +189,7 @@ pub struct GenesisAccount {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisValidator {
-    pub address: Address,  // [u8; 20]
+    pub address: Address, // [u8; 20]
     pub stake: u128,
     pub commission_rate: f64,
     pub public_key: String,
@@ -209,7 +209,6 @@ impl GenesisConfig {
         let config: GenesisConfig = serde_json::from_str(&content)?;
         Ok(config)
     }
-
 }
 
 impl Default for GenesisConfig {

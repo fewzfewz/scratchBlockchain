@@ -1,5 +1,5 @@
+use crate::types::{Account, Address, Transaction};
 use anyhow::{anyhow, Result};
-use crate::types::{Address, Transaction, Account};
 use std::collections::HashMap;
 
 /// Comprehensive transaction validation
@@ -13,16 +13,15 @@ impl TransactionValidator {
     }
 
     /// Validate transaction before accepting into mempool
-    pub fn validate(
-        &self,
-        tx: &Transaction,
-        state: &HashMap<Address, Account>,
-    ) -> Result<()> {
+    pub fn validate(&self, tx: &Transaction, state: &HashMap<Address, Account>) -> Result<()> {
         // 1. Chain ID validation (replay protection)
         if let Some(tx_chain_id) = tx.chain_id {
             if tx_chain_id != self.chain_id {
-                return Err(anyhow!("Invalid chain ID: expected {}, got {}", 
-                    self.chain_id, tx_chain_id));
+                return Err(anyhow!(
+                    "Invalid chain ID: expected {}, got {}",
+                    self.chain_id,
+                    tx_chain_id
+                ));
             }
         }
 
@@ -48,7 +47,8 @@ impl TransactionValidator {
         }
 
         // 3. Sender account validation
-        let account = state.get(&tx.sender)
+        let account = state
+            .get(&tx.sender)
             .ok_or_else(|| anyhow!("Sender account not found"))?;
 
         // 4. Nonce validation
@@ -77,11 +77,7 @@ impl TransactionValidator {
     }
 
     /// Validate transaction for inclusion in block (additional checks)
-    pub fn validate_for_block(
-        &self,
-        tx: &Transaction,
-        base_fee: u64,
-    ) -> Result<()> {
+    pub fn validate_for_block(&self, tx: &Transaction, base_fee: u64) -> Result<()> {
         // Check if transaction can pay base fee
         if tx.max_fee_per_gas < base_fee {
             return Err(anyhow!(
@@ -98,10 +94,10 @@ impl TransactionValidator {
     pub fn effective_gas_price(tx: &Transaction, base_fee: u64) -> u64 {
         let max_priority_fee = tx.max_priority_fee_per_gas;
         let max_fee = tx.max_fee_per_gas;
-        
+
         // Effective priority fee is min of max_priority_fee and (max_fee - base_fee)
         let priority_fee = max_priority_fee.min(max_fee.saturating_sub(base_fee));
-        
+
         base_fee + priority_fee
     }
 }
@@ -178,14 +174,13 @@ mod tests {
     fn test_effective_gas_price() {
         let tx = create_test_tx(0, 21_000, 1_000_000_000, 0);
         let base_fee = 900_000_000;
-        
+
         let effective = TransactionValidator::effective_gas_price(&tx, base_fee);
         // Should be base_fee + min(priority_fee, max_fee - base_fee)
         // = 900_000_000 + min(100_000_000, 100_000_000) = 1_000_000_000
         assert_eq!(effective, 1_000_000_000);
     }
 }
-
 
 // Add after the existing code
 
@@ -213,7 +208,7 @@ impl TransactionType {
             _ => None,
         }
     }
-    
+
     pub fn to_byte(&self) -> u8 {
         *self as u8
     }
@@ -248,14 +243,14 @@ impl TransactionValidator {
             }
         }
     }
-    
+
     /// Validate access list (EIP-2930)
     fn validate_access_list(&self, access_list: &[(Address, Vec<[u8; 32]>)]) -> Result<()> {
         for (address, storage_keys) in access_list {
             if address.len() != 20 {
                 return Err(anyhow!("Invalid address in access list"));
             }
-            
+
             for key in storage_keys {
                 if key.len() != 32 {
                     return Err(anyhow!("Invalid storage key in access list"));
@@ -264,7 +259,7 @@ impl TransactionValidator {
         }
         Ok(())
     }
-    
+
     /// Validate transaction gas price against EIP-1559 rules
     pub fn validate_eip1559_gas(&self, tx: &Transaction, base_fee: u64) -> Result<()> {
         if tx.max_fee_per_gas < base_fee {
@@ -274,7 +269,7 @@ impl TransactionValidator {
                 base_fee
             ));
         }
-        
+
         if tx.max_priority_fee_per_gas > tx.max_fee_per_gas {
             return Err(anyhow!(
                 "Max priority fee ({}) exceeds max fee ({})",
@@ -282,7 +277,7 @@ impl TransactionValidator {
                 tx.max_fee_per_gas
             ));
         }
-        
+
         Ok(())
     }
 }

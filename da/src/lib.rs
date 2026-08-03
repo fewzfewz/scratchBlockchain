@@ -164,10 +164,7 @@ impl ErasureCoder {
         let mut shards: Vec<Vec<u8>> = (0..self.data_chunks)
             .map(|i| padded[i * chunk_size..(i + 1) * chunk_size].to_vec())
             .collect();
-        shards.resize(
-            self.data_chunks + self.parity_chunks,
-            vec![0u8; chunk_size],
-        );
+        shards.resize(self.data_chunks + self.parity_chunks, vec![0u8; chunk_size]);
         rs.encode(&mut shards)
             .map_err(|e| anyhow::anyhow!("Reed-Solomon encode: {}", e))?;
 
@@ -220,7 +217,10 @@ impl ErasureCoder {
 
 impl Default for ErasureCoder {
     fn default() -> Self {
-        Self { data_chunks: 4, parity_chunks: 2 }
+        Self {
+            data_chunks: 4,
+            parity_chunks: 2,
+        }
     }
 }
 
@@ -415,22 +415,22 @@ mod tests {
         mixed_chunks.push(chunks[1].clone());
         mixed_chunks.push(chunks[4].clone()); // Parity chunk
         mixed_chunks.push(chunks[5].clone()); // Parity chunk
-        
-        // Note: Our simplified XOR implementation might not support arbitrary subsets perfectly 
+
+        // Note: Our simplified XOR implementation might not support arbitrary subsets perfectly
         // like Reed-Solomon, but let's verify what it does support.
         // The current implementation just concatenates data chunks if available.
         // If we pass parity chunks, the simple implementation might not use them to recover missing data.
         // Let's check the implementation of decode:
         // "Simplified decoding: just concatenate data chunks"
         // So it actually requires the *data* chunks specifically.
-        
+
         // Let's verify that behavior explicitly for now, acknowledging the limitation
         // In a real RS implementation, any k chunks would work.
-        
+
         // For this MVP, we expect it to fail if data chunks are missing, even if we have parity
         // This test documents the current limitation
         let result = coder.decode(&mixed_chunks);
-        // It sorts by index and takes first data_chunks. 
+        // It sorts by index and takes first data_chunks.
         // If we have indices 0, 1, 4, 5. It takes 0, 1, 4, 5.
         // It expects to find data in them.
         // This confirms the simplified implementation is very basic.
@@ -473,7 +473,7 @@ impl DaLightClient {
             sample_size,
         }
     }
-    
+
     /// Add a trusted root
     pub fn add_trusted_root(&mut self, root: [u8; 32]) {
         self.trusted_roots.push_back(root);
@@ -481,31 +481,31 @@ impl DaLightClient {
             self.trusted_roots.pop_front();
         }
     }
-    
+
     /// Sample random chunks to verify availability
     pub fn sample_availability(&self, chunks: &[ErasureChunk], total_chunks: usize) -> bool {
         use rand::Rng;
         let mut rng = rand::thread_rng();
-        
+
         let samples: Vec<usize> = (0..self.sample_size)
             .map(|_| rng.gen_range(0..total_chunks))
             .collect();
-        
+
         for sample_index in samples {
             if !chunks.iter().any(|c| c.index == sample_index) {
                 return false; // Missing chunk
             }
         }
-        
+
         true
     }
-    
+
     /// Verify blob against a trusted root
     pub fn verify_blob(&self, blob: &DataBlob, root: &[u8; 32]) -> bool {
         let computed_root = self.compute_root(blob);
         &computed_root == root && blob.verify()
     }
-    
+
     fn compute_root(&self, blob: &DataBlob) -> [u8; 32] {
         let mut hasher = Sha256::new();
         hasher.update(&blob.data);
@@ -544,15 +544,19 @@ impl AvailabilityProver {
             coder: ErasureCoder::new(data_chunks, parity_chunks),
         }
     }
-    
+
     /// Generate availability proof for a blob
-    pub fn generate_proof(&self, data: &[u8], sample_indices: &[usize]) -> Result<AvailabilityProof> {
+    pub fn generate_proof(
+        &self,
+        data: &[u8],
+        sample_indices: &[usize],
+    ) -> Result<AvailabilityProof> {
         let chunks = self.coder.encode(data)?;
         let total_chunks = chunks.len();
-        
+
         let mut sample_results = Vec::new();
         let mut merkle_proofs = Vec::new();
-        
+
         for &index in sample_indices {
             if index < total_chunks {
                 sample_results.push(true);
@@ -562,14 +566,14 @@ impl AvailabilityProver {
                 merkle_proofs.push(vec![]);
             }
         }
-        
+
         Ok(AvailabilityProof {
             sample_results,
             merkle_proofs,
             sample_indices: sample_indices.to_vec(),
         })
     }
-    
+
     fn generate_merkle_proof(&self, _chunks: &[ErasureChunk], _index: usize) -> Vec<[u8; 32]> {
         // Simplified Merkle proof generation
         vec![[0; 32]]

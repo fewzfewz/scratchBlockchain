@@ -1,6 +1,6 @@
+use crate::ValidatorInfo;
 use common::consensus_types::{Proposal, Step, Vote};
 use common::crypto;
-use crate::ValidatorInfo;
 use common::types::{Block, Hash};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -51,7 +51,7 @@ pub struct BftEngine {
     own_proposal: Option<Proposal>,
 
     votes: HashMap<(u64, Step), HashMap<Vec<u8>, Vote>>,
-    max_votes_per_round: usize,  // FIX: Added memory protection
+    max_votes_per_round: usize, // FIX: Added memory protection
 
     locked_block: Option<(Block, u64)>,
     valid_block: Option<(Block, u64)>,
@@ -86,7 +86,7 @@ impl BftEngine {
             proposal: None,
             own_proposal: None,
             votes: HashMap::new(),
-            max_votes_per_round: 1000,  // FIX: Prevent memory DoS
+            max_votes_per_round: 1000, // FIX: Prevent memory DoS
             locked_block: None,
             valid_block: None,
             timeout_config: TimeoutConfig::default(),
@@ -137,7 +137,8 @@ impl BftEngine {
         if proposal.round > self.round {
             tracing::info!(
                 "Round-sync: jumping to round {} (was {}) for proposal",
-                proposal.round, self.round
+                proposal.round,
+                self.round
             );
             events.extend(self.start_round(proposal.round));
         }
@@ -259,7 +260,8 @@ impl BftEngine {
         if vote.round > self.round {
             tracing::info!(
                 "Round-sync: jumping to round {} (was {})",
-                vote.round, self.round
+                vote.round,
+                self.round
             );
             events.extend(self.start_round(vote.round));
         }
@@ -288,16 +290,18 @@ impl BftEngine {
     }
 
     fn add_vote(&mut self, vote: Vote) {
-        let round_votes = self.votes
-            .entry((vote.round, vote.step))
-            .or_default();
-        
+        let round_votes = self.votes.entry((vote.round, vote.step)).or_default();
+
         // FIX: Prevent memory DoS attack
         if round_votes.len() >= self.max_votes_per_round {
-            tracing::warn!("Too many votes for round {}, step {:?}", vote.round, vote.step);
+            tracing::warn!(
+                "Too many votes for round {}, step {:?}",
+                vote.round,
+                vote.step
+            );
             return;
         }
-        
+
         round_votes.insert(vote.voter.clone(), vote);
     }
 
@@ -313,7 +317,8 @@ impl BftEngine {
                 if let Some(block_hash) = &hash {
                     if let Some(proposal) = &self.proposal {
                         if &proposal.block.hash() == block_hash {
-                            let current_lock_round = self.locked_block.as_ref().map(|(_, r)| *r).unwrap_or(0);
+                            let current_lock_round =
+                                self.locked_block.as_ref().map(|(_, r)| *r).unwrap_or(0);
                             if self.round >= current_lock_round {
                                 let block = proposal.block.clone();
                                 let round = self.round;
@@ -399,7 +404,7 @@ impl BftEngine {
             tracing::error!("No validators configured!");
             return self.public_key.clone();
         }
-        
+
         let mut sorted_validators: Vec<&Vec<u8>> = self.validators.keys().collect();
         sorted_validators.sort();
 
@@ -425,7 +430,10 @@ impl BftEngine {
             Step::Precommit => self.timeout_config.precommit_timeout_ms,
             Step::Commit => return Duration::from_secs(0),
         };
-        let multiplier = self.timeout_config.timeout_increase_factor.powi(round as i32);
+        let multiplier = self
+            .timeout_config
+            .timeout_increase_factor
+            .powi(round as i32);
         let timeout_ms = (base_timeout_ms as f64 * multiplier) as u64;
         Duration::from_millis(timeout_ms)
     }
@@ -448,7 +456,11 @@ impl BftEngine {
     }
 
     pub fn handle_timeout_propose(&mut self) -> Vec<BftEvent> {
-        tracing::info!("Propose timeout at height={} round={} — voting nil", self.height, self.round);
+        tracing::info!(
+            "Propose timeout at height={} round={} — voting nil",
+            self.height,
+            self.round
+        );
         self.step = Step::Prevote;
         self.start_timeout(Step::Prevote);
 
@@ -467,7 +479,11 @@ impl BftEngine {
     }
 
     pub fn handle_timeout_prevote(&mut self) -> Vec<BftEvent> {
-        tracing::info!("Prevote timeout at height={} round={} — precommitting nil", self.height, self.round);
+        tracing::info!(
+            "Prevote timeout at height={} round={} — precommitting nil",
+            self.height,
+            self.round
+        );
         self.step = Step::Precommit;
         self.start_timeout(Step::Precommit);
 
@@ -486,7 +502,11 @@ impl BftEngine {
     }
 
     pub fn handle_timeout_precommit(&mut self) -> Vec<BftEvent> {
-        tracing::info!("Precommit timeout at height={} round={} — advancing round", self.height, self.round);
+        tracing::info!(
+            "Precommit timeout at height={} round={} — advancing round",
+            self.height,
+            self.round
+        );
         let new_round = self.round + 1;
         self.start_round(new_round)
     }
@@ -592,10 +612,18 @@ mod tests {
         let block = make_block(1);
         let events = engine.create_proposal(block.clone());
 
-        assert!(events.iter().any(|e| matches!(e, BftEvent::BroadcastProposal(_))));
-        assert!(events.iter().any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Prevote)));
-        assert!(events.iter().any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Precommit)));
-        assert!(events.iter().any(|e| matches!(e, BftEvent::FinalizeBlock(_))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, BftEvent::BroadcastProposal(_))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Prevote)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Precommit)));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, BftEvent::FinalizeBlock(_))));
         assert!(events.iter().any(|e| matches!(e, BftEvent::NewRound(_, _))));
 
         assert_eq!(engine.height, 2);
@@ -655,8 +683,16 @@ mod tests {
         let sk2 = crypto::SigningKey::generate();
         let pk2 = sk2.public_key();
 
-        let v1 = ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false };
-        let v2 = ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false };
+        let v1 = ValidatorInfo {
+            public_key: pk1.clone(),
+            stake: 100,
+            slashed: false,
+        };
+        let v2 = ValidatorInfo {
+            public_key: pk2.clone(),
+            stake: 100,
+            slashed: false,
+        };
 
         // Determine who is proposer for (height=1, round=0) given these 2 validators
         let proposer_pk = {
@@ -673,12 +709,11 @@ mod tests {
             sorted[idx].clone()
         };
 
-        let (proposer_sk, proposer_pk, nonproposer_sk, nonproposer_pk) =
-            if proposer_pk == pk1 {
-                (sk1, pk1, sk2, pk2)
-            } else {
-                (sk2, pk2, sk1, pk1)
-            };
+        let (proposer_sk, proposer_pk, nonproposer_sk, nonproposer_pk) = if proposer_pk == pk1 {
+            (sk1, pk1, sk2, pk2)
+        } else {
+            (sk2, pk2, sk1, pk1)
+        };
 
         let block = make_block(1);
         let block_hash = block.hash();
@@ -693,7 +728,8 @@ mod tests {
             b
         };
         let proposal = Proposal {
-            height: 1, round: 0,
+            height: 1,
+            round: 0,
             block,
             signature: proposer_sk.sign(&p_bytes),
             proposer: proposer_pk.clone(),
@@ -702,7 +738,8 @@ mod tests {
         // Non-proposer creates a signed prevote on the same block
         let vote = {
             let mut v = Vote {
-                height: 1, round: 0,
+                height: 1,
+                round: 0,
                 step: Step::Prevote,
                 block_hash: Some(block_hash),
                 signature: vec![],
@@ -723,8 +760,7 @@ mod tests {
 
         // ---- TEST 1: manual add_vote + check_quorum ----
         {
-            let proposer_sk_copy =
-                crypto::SigningKey::from_bytes(&proposer_sk.to_bytes()).unwrap();
+            let proposer_sk_copy = crypto::SigningKey::from_bytes(&proposer_sk.to_bytes()).unwrap();
             let mut engine = BftEngine::new(
                 proposer_pk.clone(),
                 vec![v1.clone(), v2.clone()],
@@ -735,11 +771,18 @@ mod tests {
 
             // Receive proposal (moves engine to Prevote, adds proposer's own vote)
             let prop_events = engine.handle_proposal(proposal.clone());
-            assert!(!prop_events.is_empty(), "proposal from correct proposer should be accepted");
+            assert!(
+                !prop_events.is_empty(),
+                "proposal from correct proposer should be accepted"
+            );
 
             // Now add the non-proposer's vote
             engine.add_vote_public(vote.clone());
-            let after = engine.votes.get(&(0, Step::Prevote)).map(|m| m.len()).unwrap_or(0);
+            let after = engine
+                .votes
+                .get(&(0, Step::Prevote))
+                .map(|m| m.len())
+                .unwrap_or(0);
             assert_eq!(after, 2, "both validator votes should be in the map");
 
             let quorum = engine.has_quorum_public(0, Step::Prevote);
@@ -751,14 +794,8 @@ mod tests {
 
         // ---- TEST 2: handle_vote directly (full flow) ----
         {
-            let proposer_sk_copy =
-                crypto::SigningKey::from_bytes(&proposer_sk.to_bytes()).unwrap();
-            let mut engine = BftEngine::new(
-                proposer_pk,
-                vec![v1, v2],
-                1,
-                proposer_sk_copy,
-            );
+            let proposer_sk_copy = crypto::SigningKey::from_bytes(&proposer_sk.to_bytes()).unwrap();
+            let mut engine = BftEngine::new(proposer_pk, vec![v1, v2], 1, proposer_sk_copy);
             engine.start_round(0);
 
             // Receive proposal
@@ -766,10 +803,17 @@ mod tests {
 
             // Receive non-proposer's vote
             let events = engine.handle_vote(vote);
-            assert_eq!(events.len(), 1,
-                "handle_vote on second prevote should reach quorum and return events");
-            assert!(events.iter().any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Precommit)),
-                    "should transition to Precommit and broadcast");
+            assert_eq!(
+                events.len(),
+                1,
+                "handle_vote on second prevote should reach quorum and return events"
+            );
+            assert!(
+                events
+                    .iter()
+                    .any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Precommit)),
+                "should transition to Precommit and broadcast"
+            );
         }
     }
 
@@ -783,9 +827,21 @@ mod tests {
         let pk3 = sk3.public_key();
 
         let validators = vec![
-            ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false },
-            ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false },
-            ValidatorInfo { public_key: pk3.clone(), stake: 100, slashed: false },
+            ValidatorInfo {
+                public_key: pk1.clone(),
+                stake: 100,
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk2.clone(),
+                stake: 100,
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk3.clone(),
+                stake: 100,
+                slashed: false,
+            },
         ];
 
         let mut engine = BftEngine::new(pk1, validators, 1, sk1.clone());
@@ -811,21 +867,26 @@ mod tests {
         vote.signature = sk2.sign(&bytes);
 
         let events = engine.handle_vote(vote);
-        assert_eq!(engine.round, 3, "engine should round-sync to the vote's round");
+        assert_eq!(
+            engine.round, 3,
+            "engine should round-sync to the vote's round"
+        );
         assert!(
             events.iter().any(|e| matches!(e, BftEvent::NewRound(1, 3))),
             "round-sync should emit a NewRound event"
         );
 
         // A stale vote from a lower round is now ignored.
-        assert!(engine.handle_vote(Vote {
-            height: 1,
-            round: 1,
-            step: Step::Prevote,
-            block_hash: Some(block_hash),
-            signature: vec![],
-            voter: pk3,
-        }).is_empty());
+        assert!(engine
+            .handle_vote(Vote {
+                height: 1,
+                round: 1,
+                step: Step::Prevote,
+                block_hash: Some(block_hash),
+                signature: vec![],
+                voter: pk3,
+            })
+            .is_empty());
     }
 
     #[test]
@@ -838,9 +899,21 @@ mod tests {
         let pk3 = sk3.public_key();
 
         let validators = vec![
-            ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false },
-            ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false },
-            ValidatorInfo { public_key: pk3.clone(), stake: 100, slashed: false },
+            ValidatorInfo {
+                public_key: pk1.clone(),
+                stake: 100,
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk2.clone(),
+                stake: 100,
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk3.clone(),
+                stake: 100,
+                slashed: false,
+            },
         ];
 
         // Build the engine with whoever is the proposer at height 1, round 0.
@@ -866,8 +939,10 @@ mod tests {
 
         let events = engine.re_propose();
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], BftEvent::BroadcastProposal(_)),
-            "Proposer should re-broadcast its proposal");
+        assert!(
+            matches!(events[0], BftEvent::BroadcastProposal(_)),
+            "Proposer should re-broadcast its proposal"
+        );
 
         // After moving to a new round the old proposal must not be re-broadcast.
         engine.start_round(1);
@@ -884,9 +959,21 @@ mod tests {
         let pk3 = sk3.public_key();
 
         let validators = vec![
-            ValidatorInfo { public_key: pk1.clone(), stake: 100, slashed: false },
-            ValidatorInfo { public_key: pk2.clone(), stake: 100, slashed: false },
-            ValidatorInfo { public_key: pk3.clone(), stake: 100, slashed: false },
+            ValidatorInfo {
+                public_key: pk1.clone(),
+                stake: 100,
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk2.clone(),
+                stake: 100,
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk3.clone(),
+                stake: 100,
+                slashed: false,
+            },
         ];
 
         let mut engine = BftEngine::new(pk1.clone(), validators, 1, sk1.clone());
@@ -917,8 +1004,11 @@ mod tests {
         }
 
         let quorum = engine.has_quorum_public(0, Step::Prevote);
-        assert_eq!(quorum, Some(Some(block_hash)),
-            "2 of 3 equal-stake validators must reach the 2/3 quorum");
+        assert_eq!(
+            quorum,
+            Some(Some(block_hash)),
+            "2 of 3 equal-stake validators must reach the 2/3 quorum"
+        );
         let _ = sk3;
     }
 
@@ -948,7 +1038,9 @@ mod tests {
         assert!(engine.valid_block.is_none());
         assert!(engine.proposal.is_none());
         assert!(engine.votes.is_empty());
-        assert!(events.iter().any(|e| matches!(e, BftEvent::NewRound(42, 0))));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, BftEvent::NewRound(42, 0))));
     }
 
     #[test]
@@ -965,6 +1057,9 @@ mod tests {
         engine.handle_timeout_propose();
         engine.start_round(1);
         let past_votes = engine.collect_past_round_votes();
-        assert!(!past_votes.is_empty(), "Past round votes should be retained");
+        assert!(
+            !past_votes.is_empty(),
+            "Past round votes should be retained"
+        );
     }
 }
