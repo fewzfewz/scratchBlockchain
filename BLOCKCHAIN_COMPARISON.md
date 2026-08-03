@@ -17,7 +17,7 @@ Comparison of **Nebula** against Bitcoin, Ethereum, Polkadot, Solana, and Cosmos
 | **Model** | Account | UTXO | Account (EVM) | Account (WASM) | Account | Account (CosmWASM) |
 | **Smart contracts** | EVM + WASM | Script only | EVM (Solidity) | WASM (ink!) | BPF (Rust/C) | WASM (CosmWASM) |
 | **Single binary** | ✅ Yes | ✅ Yes | ❌ EL+CL | ❌ Relay+para | ✅ Yes | ✅ Yes |
-| **Built-in frontend** | ✅ 10-route SPA | ❌ | ❌ (MetaMask ecosystem) | ❌ | ❌ | ❌ |
+| **Built-in frontend** | ✅ 16-route SPA | ❌ | ❌ (MetaMask ecosystem) | ❌ | ❌ | ❌ |
 | **Official SDK** | ✅ `@modular-blockchain/sdk` | bitcoinjs | ethers/viem | polkadot.js | @solana/web3.js | cosmjs |
 | **Docker testnet** | ✅ 5-node compose | ✅ | ✅ | ✅ | ✅ | ✅ |
 
@@ -59,8 +59,14 @@ Comparison of **Nebula** against Bitcoin, Ethereum, Polkadot, Solana, and Cosmos
 
 | Feature | **Nebula** | **Typical production chain** |
 |---|---|---|
-| Wallet UI | ✅ Ed25519, send, **tx history** (`GET /txs/{address}`) | MetaMask / Keplr / Phantom |
-| Explorer | ✅ blocks, validators, staking estimator | Etherscan / Mintscan |
+| Wallet UI | ✅ Ed25519, send, balance | MetaMask / Keplr / Phantom |
+| Tx history page | ✅ `/history` + Explorer address tab (`GET /txs/{address}`) | Etherscan address view |
+| Explorer | ✅ blocks, **address lookup**, validators, staking | Etherscan / Mintscan |
+| Contract deploy | ✅ `/deploy` (ERC20/721 presets) | Remix / Hardhat |
+| Contract interact | ✅ `/contracts` (calldata + gas estimate) | Etherscan Write Contract |
+| DeFi UI | ✅ `/defi` swap demo + starter kit links | Uniswap / Jupiter |
+| Bridge UI | ✅ `/bridge` lock flow + relayer checks | Wormhole / IBC UI |
+| NFT marketplace | ✅ `/nft` gallery + ERC721 deploy | OpenSea / Magic Eden |
 | Faucet | ✅ `POST /faucet/request` (in-node) | Public testnet faucets |
 | Governance UI | ✅ proposals, vote via signed txs | Tally / Polkadot.js |
 | Validator onboarding | ✅ `/validators/onboard` + Grafana | Operator runbooks |
@@ -69,7 +75,7 @@ Comparison of **Nebula** against Bitcoin, Ethereum, Polkadot, Solana, and Cosmos
 | Integration tests | ✅ 15+ JS scripts + `run-all-tests.sh` + CI job | Chain-specific testnets |
 | Dev portal | ✅ `/sdk`, `/docs`, starter kits | docs.site |
 
-**Fixed since June 2026 doc:** no tx history → **`GET /txs/{address}`**; SDK “basic, not published” → **aligned with all RPC routes**, npm-ready.
+**Fixed since June 2026 doc:** no tx history → **`GET /txs/{address}` + `/history` page**; SDK “basic, not published” → **aligned with all RPC routes**, npm-ready; no DeFi/NFT/bridge UI → **dedicated `/defi`, `/nft`, `/bridge`, `/contracts` pages**.
 
 ---
 
@@ -119,7 +125,7 @@ Comparison of **Nebula** against Bitcoin, Ethereum, Polkadot, Solana, and Cosmos
 |---|---|
 | **All-in-one repo** | Node + frontend + SDK + tests + Docker in one place |
 | **Single binary** | `./target/debug/node start` — no EL/CL split |
-| **Built-in SPA** | Wallet, explorer, faucet, governance, deploy, API docs — no MetaMask required |
+| **Built-in SPA** | Wallet, history, explorer, DeFi, bridge, NFT, contracts, faucet, governance, deploy, API docs — no MetaMask required |
 | **Interactive API docs** | Swagger UI wired to live node |
 | **Breadth** | EVM, WASM, ZK, MEV, DA, rollups, bridge, governance in one codebase |
 | **Fast local start** | `./start.sh` or `docker compose up` |

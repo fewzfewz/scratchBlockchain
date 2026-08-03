@@ -2,184 +2,235 @@
 
 [![Rust](https://img.shields.io/badge/built_with-Rust-dca282.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ready-blue)](docker-compose.yml)
+[![Docker](https://img.shields.io/badge/docker-ready-blue)](deployment/local/docker-compose.yml)
 
-**Nebula** is a next-generation blockchain built for high-performance enterprise applications. It combines the security of a validator-based network with the flexibility of a modular architecture, supporting both EVM and WASM smart contracts.
+**Nebula** is a modular blockchain with BFT consensus, EVM + WASM execution, built-in React UI (3D dashboard), cross-chain Ethereum bridge, DeFi/NFT pages, and a full Docker testnet.
 
-## Quick Start
+---
+
+## Quick Start — Everything in One Command
 
 ### Prerequisites
-- **Rust** (latest stable)
-- **Node.js** 18+ and npm
 
-### 1. Build & Start the Node
+- **Docker** & Docker Compose v2
+- **Rust** (latest stable) — to build the node binary
+- **Node.js** 18+ — only if using `--local-frontend`
+
+### Start the full stack
+
+From the **repository root**:
 
 ```bash
-cargo build
+./start-all.sh
+```
+
+This single script:
+
+| Step | What it does |
+|------|----------------|
+| 1 | `cargo build --release -p node` |
+| 2 | `docker compose -f deployment/local/docker-compose.yml up` — validators, RPC, monitoring |
+| 3 | Starts **Hardhat** on port **9545** (Ethereum side for Bridge.sol) |
+| 4 | Starts **frontend** on port **5173** (3D UI, wallet, DeFi, bridge, NFT) |
+| 5 | Waits for Nebula RPC health on **8545** |
+| 6 | Deploys **Bridge.sol** → saves address to `frontend/public/bridge-config.json` |
+| 7 | Sets `ETH_RPC_URL=http://hardhat:9545` on Nebula nodes for relayer mint verification |
+
+### Open the app
+
+| URL | Description |
+|-----|-------------|
+| **http://localhost:5173** | Main UI (Home, Explorer, Wallet, DeFi, Bridge, NFT) |
+| **http://localhost:8545** | Nebula JSON-RPC |
+| **http://localhost:9545** | Hardhat Ethereum RPC |
+| **http://localhost:5173/bridge** | Cross-chain bridge (MetaMask + relayer mint) |
+| **http://localhost:3000** | Grafana (`admin` / `admin`) |
+
+### Stop everything
+
+```bash
+./stop-all.sh
+```
+
+### Options
+
+```bash
+./start-all.sh --no-build          # skip cargo build (binary must exist)
+./start-all.sh --no-bridge         # skip Bridge.sol deployment
+./start-all.sh --local-frontend    # run Vite on host instead of Docker container
+```
+
+---
+
+## Architecture (Docker stack)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Frontend :5173  ──►  Nebula RPC :8545  (validator1)      │
+│       │                      │                               │
+│       └── /bridge ──►  Bridge.sol on Hardhat :9545          │
+│                              │                               │
+│                    ETH_RPC_URL (relayer verify + mint)       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Important:** Nebula uses port **8545**. Hardhat uses **9545** (no port conflict).
+
+---
+
+## Manual start (without Docker)
+
+### 1. Nebula node
+
+```bash
+cargo build -p node
 ./target/debug/node start --genesis genesis.json
+# RPC → http://localhost:8545
 ```
 
-The node will start on `http://localhost:8545` with 3 genesis accounts and 3 genesis validators pre-configured.
-
-### 2. Start the Frontend
+### 2. Frontend
 
 ```bash
-cd frontend
-npm install
-npm run dev
+cd frontend && npm install --legacy-peer-deps && npm run dev
+# → http://localhost:5173
 ```
 
-Open **http://localhost:5173** to access the unified UI with all 10 pages:
-
-| Route | Page | Description |
-|-------|------|-------------|
-| `/` | **Home** | Network overview & status |
-| `/explorer` | **Explorer** | Blocks, validators, staking & rewards estimator |
-| `/wallet` | **Wallet** | Keypair management, send tx, on-chain tx history |
-| `/deploy` | **Deploy** | EVM contract deployment (ERC20/ERC721 presets) |
-| `/faucet` | **Faucet** | Test token dispenser (local simulation if backend offline) |
-| `/governance` | **Governance** | Proposal voting, treasury & analytics |
-| `/docs` | **Docs** | Full architecture & RPC API documentation |
-| `/api-docs` | **API Reference** | Interactive Swagger UI — try endpoints from the browser |
-| `/sdk` | **SDK Portal** | JavaScript SDK reference & contract templates |
-| `/developer-portal` | **Dev Portal** | Starter kits & CLI reference |
-
-### 3. Faucet
-
-The faucet is **built into the node RPC**: `POST /faucet/request` credits the address directly in the state trie. No separate faucet service is needed. Call it from the Faucet page in the UI or with curl:
+### 3. Ethereum bridge (separate terminals)
 
 ```bash
-curl -X POST http://localhost:8545/faucet/request \
-  -H "Content-Type: application/json" \
-  -d '{"address":"0x...","amount":100}'
+# Terminal A — Hardhat (port 9545)
+cd interop && npm install
+npx hardhat node --port 9545
+
+# Terminal B — Deploy Bridge.sol
+ETH_RPC_URL=http://127.0.0.1:9545 ./deployment/local/scripts/deploy-bridge.sh
+
+# Terminal C — Nebula with ETH verification (if running node locally)
+ETH_RPC_URL=http://127.0.0.1:9545 cargo run -p node -- start --genesis genesis.json
 ```
 
-## Port Mapping
+Bridge address is auto-loaded in the UI from `/bridge-config.json`.
 
-| Port | Service | Notes |
-|------|---------|-------|
-| 8545-8549 | Node RPC | One per node in the local testnet (validator1: 8545) |
-| 26656-26657 | P2P / RPC | libp2p gossip + metrics (`/health`, `/metrics` on 26657) |
-| 5173 | Frontend | Unified Vite/React SPA |
-| 9095 | Prometheus | Container port 9090, scrapes all 5 nodes |
-| 3000 | Grafana | `admin`/`admin` |
+---
 
-## RPC API
+## Frontend routes (16 pages)
 
-The node exposes RESTful JSON endpoints on `http://localhost:8545` plus a WebSocket at `/ws`:
+| Route | Page |
+|-------|------|
+| `/` | Home — 3D hero, live stats |
+| `/explorer` | Blocks, address lookup, validators, staking |
+| `/wallet` | Ed25519 wallet, send, tx history |
+| `/history` | Address transaction search |
+| `/deploy` | ERC20 / ERC721 deploy |
+| `/contracts` | Contract read/write |
+| `/defi` | On-chain swaps & liquidity |
+| `/bridge` | Ethereum ↔ Nebula bridge |
+| `/nft` | ERC721 mint & gallery |
+| `/faucet` | Test tokens |
+| `/governance` | Proposals & voting |
+| `/api-docs` | Swagger UI (34 routes) |
+| `/sdk` | JavaScript SDK |
+| `/developer-portal` | Starter kits |
+
+---
+
+## Port mapping (Docker testnet)
+
+| Port | Service |
+|------|---------|
+| 5173 | Frontend (Vite) |
+| 8545 | Nebula RPC — **validator1** (primary) |
+| 8546–8547 | validator2, validator3 |
+| 8548–8549 | rpc1, rpc2 |
+| 9545 | Hardhat Ethereum node |
+| 26656–26663 | P2P / internal RPC |
+| 3000 | Grafana |
+| 9095 | Prometheus |
+| 80 | nginx gateway |
+
+---
+
+## Key RPC endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/status` | Node status (height, peers, mempool) |
 | GET | `/health` | Health check |
-| GET | `/gas_price` | Current gas price (EIP-1559) |
-| GET | `/mempool` | Pending transactions |
-| GET | `/peers` | Connected peers |
-| GET | `/validators` | Active validator set |
-| GET | `/block/latest` | Latest block |
-| GET | `/block/{height}` | Block by height |
-| GET | `/block/hash/{hash}` | Block by 32-byte hash |
-| GET | `/tx/{hash}` | Transaction receipt by hash |
-| GET | `/txs/{address}` | On-chain tx history for address (optional `?limit=N`) |
-| GET | `/balance/{address}` | Account balance & nonce |
-| GET | `/delegations/{address}` | Delegations by address |
-| GET | `/governance` | On-chain governance state |
-| GET | `/proposal/{id}` | Single proposal |
-| GET | `/slashing/events` | Slashed validators |
-| GET | `/user_operations/pending` | Pending account-abstraction ops |
+| GET | `/status` | Chain height, mempool, `chain_id` |
+| GET | `/balance/{address}` | Balance & nonce |
+| GET | `/txs/{address}` | Transaction history |
 | POST | `/submit_tx` | Submit signed transaction |
-| POST | `/submit_user_operation` | Submit ERC-4337 UserOperation |
-| POST | `/delegate` | Delegate stake to validator |
-| POST | `/validators/register` | Register new validator |
-| POST | `/mev/commit` | MEV commit-reveal: submit commitment |
-| POST | `/mev/reveal` | MEV commit-reveal: reveal transaction |
-| POST | `/mev/encrypted` | Submit encrypted transaction |
-| POST | `/mev/decryption_share` | Submit decryption share |
-| POST | `/connect_peer` | Connect to a peer |
-| POST | `/estimate_gas` | Estimate gas for a transaction |
-| POST | `/faucet/request` | Request test tokens (60s cooldown) |
-| GET | `/fee_history/{count}` | Historical fee data |
-| GET | `/metrics` | Prometheus metrics |
-| WS | `/ws` | WebSocket `newHead` events |
+| POST | `/call_contract` | Read-only EVM call |
+| POST | `/estimate_gas` | Gas estimation |
+| POST | `/faucet/request` | Test tokens |
+| GET | `/bridge/status` | Bridge vault, relayers, ETH RPC |
+| POST | `/bridge/mint` | Mint on Nebula after ETH lock |
+| POST | `/deploy_wasm` | Deploy WASM contract |
+| GET | `/governance` | Proposals & treasury |
 
-### Rate Limiting
+Full spec: [`docs/openapi.yaml`](docs/openapi.yaml) · Interactive UI: http://localhost:5173/api-docs
 
-All RPC endpoints are rate-limited per IP (default: **200 requests/second**, configurable via `api.rate_limit` in the node config). If you see `{"error":"Rate limit exceeded"}`, your client is sending requests too quickly — either increase the limit in the config or add client-side throttling.
+---
 
-## API Documentation
+## Cross-chain bridge flow
 
-- **Interactive Swagger UI**: Open `http://localhost:5173/api-docs` — try endpoints from the browser (OpenAPI spec may lag behind latest routes; see table above)
-- **OpenAPI 3.0 spec**: [`docs/openapi.yaml`](docs/openapi.yaml) — machine-readable spec with schemas and example responses
-- **Frontend docs page**: `http://localhost:5173/docs` for human-readable reference with real `curl` examples
-- **Frontend SDK page**: `http://localhost:5173/sdk` for the JavaScript SDK reference
+1. **ETH → Nebula**
+   - Connect MetaMask on `/bridge`
+   - Lock ETH on `Bridge.sol` (Hardhat :9545)
+   - Click **Relayer mint on Nebula** → `POST /bridge/mint` credits NBL
 
-## Transaction Flow
+2. **Nebula → ETH**
+   - Lock NBL to on-chain bridge vault via signed tx
+   - Relayers process unlock on Ethereum (requires live relayer ops)
 
-1. Generate an Ed25519 keypair (in the Wallet page or via CLI)
-2. Fund the address via the Faucet page
-3. Construct a transaction with sender, recipient, value, nonce, and gas params
-4. Sign the transaction payload with your private key
-5. Submit via `POST /submit_tx` and get back a hash for tracking
+Deploy Bridge manually:
 
-## Configuration
+```bash
+./deployment/local/scripts/deploy-bridge.sh
+```
 
-The node uses a TOML config file (default: `config.toml`). Key settings:
-
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `api.rate_limit` | 200 | Requests per second per IP |
-| `network.rpc_port` | 8545 | RPC server port |
-| `network.p2p_port` | 9000 | P2P networking port |
-| `consensus.max_validators` | 32 | Max active validators |
-| `mempool.max_tx_per_block` | 500 | Max transactions per block |
+---
 
 ## Troubleshooting
 
-| Symptom | Likely Cause | Fix |
-|---------|-------------|-----|
-| `{"error":"Rate limit exceeded"}` | Too many requests from the same IP | Increase `api.rate_limit` in config, or throttle your client |
-| `TweetNaCl library not loaded` | Missing npm dependency | Run `npm install` in the `frontend/` directory |
-| `POST http://localhost:3006/faucet` connection refused | Stale faucet service URL | The faucet is built into the node (`POST /faucet/request` on 8545) — no separate service needed |
-| `GET /validators` returns empty array | Validators not in state trie | Ensure `genesis.json` has validators and restart the node |
-| `Endpoint not found` 404 | RPC endpoint doesn't exist | Check the RPC API table above or open `http://localhost:5173/api-docs` for the full interactive reference; may need to rebuild after adding new endpoints |
+| Symptom | Fix |
+|---------|-----|
+| Port 8545 in use | Stop other services; Nebula validator1 needs 8545 |
+| Port 9545 in use | Hardhat conflict — use `9545` only for Ethereum |
+| Bridge address empty | Run `./start-all.sh` or `deploy-bridge.sh` |
+| `ETH_RPC_URL not configured` | Set on node env or pass `eth_rpc_url` in `/bridge/mint` |
+| Docker build slow | First run builds Rust inside Docker; use pre-built `target/release/node` mount |
+| Frontend 5173 empty | `docker logs nebula-frontend` or use `--local-frontend` |
+| MetaMask wrong network | Add Hardhat localhost chainId `1337`, RPC `http://127.0.0.1:9545` |
 
-## Project Structure
+---
+
+## Project structure
 
 ```
 .
-├── common/             # Shared types (Block, Tx, traits)
-├── consensus/          # BFT consensus + GRANDPA finality
-├── execution/          # Multi-VM (EVM + WASM + parallel)
-├── network/            # P2P networking (libp2p, Gossipsub)
-├── node/               # Node binary, TxPool, RPC server, faucet
-├── storage/            # RocksDB / Sled + Patricia trie
-├── frontend/           # Unified React SPA (all 8 UIs)
-├── sdk/javascript/     # JavaScript SDK (RxJS-based)
-├── faucet/             # Standalone faucet crate
-├── docs/               # Markdown docs + OpenAPI 3.0 spec
-├── scripts/            # Deployment & operation scripts
-└── monitoring/         # Prometheus & Grafana config
+├── start-all.sh              # ← One command to start everything
+├── stop-all.sh               # Stop Docker + host processes
+├── deployment/local/         # Docker Compose testnet
+├── frontend/                 # React SPA (Three.js 3D UI)
+├── interop/                  # Bridge.sol + Hardhat
+├── node/                     # Rust node + RPC
+├── sdk/javascript/           # TypeScript SDK
+└── docs/openapi.yaml         # OpenAPI spec
 ```
 
-## Features
+---
 
-| Feature | Status |
-|---------|--------|
-| Validator-based consensus w/ GRANDPA finality | Ready |
-| P2P networking via libp2p + Gossipsub | Ready |
-| Multi-VM (EVM + WASM scaffold) parallel execution | Ready |
-| RocksDB persistent storage + Patricia trie | Ready |
-| Ed25519 cryptographic signatures (via tweetnacl) | Ready |
-| Governance (proposals, voting, treasury) | Ready |
-| Account abstraction (ERC-4337 bundler + RPC) | Ready |
-| MEV protection (commit-reveal + encrypted mempool) | Ready |
-| Dynamic validator registration + delegation RPC | Ready |
-| WebSocket `/ws` for block head events | Ready |
-| Light/dark theme with glassmorphism UI | Ready |
-| OpenAPI 3.0 spec (core endpoints) | Ready |
-| Genesis validators in state trie | Ready |
-| Rate-limited RPC (configurable) | Ready |
-| Prometheus + Grafana monitoring | Ready |
+## Legacy scripts
+
+| Script | Purpose |
+|--------|---------|
+| `./start.sh` | Simple local node + frontend (no Docker) |
+| `./scripts/start-testnet.sh` | Old root docker-compose |
+| `./scripts/start-frontends.sh` | Frontend only |
+
+**Recommended:** use `./start-all.sh` for the complete experience.
+
+---
 
 ## License
 

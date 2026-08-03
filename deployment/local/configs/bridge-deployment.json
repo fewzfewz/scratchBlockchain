@@ -1,0 +1,6 @@
+{
+  "bridge": "",
+  "ethRpcUrl": "http://localhost:9545",
+  "deployed": false,
+  "note": "Auto-populated by ./start-all.sh or deployment/local/scripts/deploy-bridge.sh"
+}

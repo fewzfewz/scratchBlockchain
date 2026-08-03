@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
 import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Fingerprint, Coins, Fuel, Sliders, ShieldAlert, Droplets, FlaskConical, Plus, Check, History } from 'lucide-react'
+import PageShell from '../components/PageShell.jsx'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b }
@@ -357,15 +358,8 @@ export default function WalletPage() {
   }
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Aurora blobs + grid backdrop */}
-      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
-      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(251,146,60,0.32), transparent 70%)' }} />
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
-
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8 animate-fade-in">
+    <PageShell variant="default">
+      <div className="max-w-5xl mx-auto px-4 py-8 animate-fade-in">
         {/* ── Header ─────────────────────────────────────────────── */}
         <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
           <div className="flex items-center gap-3">
@@ -663,7 +657,10 @@ export default function WalletPage() {
                   </div>
                   <div>
                     <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Transaction History</h2>
-                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">On-chain activity + local pending txs</p>
+                    <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">
+                      On-chain activity + local pending txs ·{' '}
+                      <Link to={`/history?address=${encodeURIComponent(address)}`} className="text-violet-500 hover:underline">Full history</Link>
+                    </p>
                   </div>
                   {txHistory.length > 0 && (
                     <span className="text-xs bg-blue-500/20 text-blue-600 dark:text-blue-300 px-2 py-0.5 rounded-full">{txHistory.length}</span>
@@ -759,6 +756,6 @@ export default function WalletPage() {
           </div>
         </div>
       )}
-    </div>
+    </PageShell>
   )
 }

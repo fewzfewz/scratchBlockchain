@@ -1,0 +1,5 @@
+{
+  "bridge": "",
+  "ethRpcUrl": "http://localhost:9545",
+  "deployed": false
+}

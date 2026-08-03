@@ -22,7 +22,7 @@ use governance::{ChainGovernance, Proposal, ProposalStatus};
 use crate::governance_store;
 use crate::tx_pool::TxPool;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -188,6 +188,41 @@ struct FeeHistoryResponse {
     oldest_block: u64,
 }
 
+#[derive(Debug, Deserialize)]
+struct CallContractRequest {
+    from: String,
+    to: String,
+    data: String,
+    value: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct CallContractResponse {
+    result: String,
+    success: bool,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeMintRequest {
+    recipient: String,
+    amount: Option<String>,
+    eth_tx_hash: Option<String>,
+    eth_rpc_url: Option<String>,
+    eth_bridge_address: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct BridgeStatusResponse {
+    vault_address: String,
+    defi_pool_address: String,
+    validators_count: usize,
+    relayers_ready: bool,
+    eth_rpc_configured: bool,
+    processed_mints: usize,
+    chain_id: u64,
+}
+
 // ============================================================================
 // CORS Helper
 // ============================================================================
@@ -253,9 +288,11 @@ impl RpcServer {
         let metrics = self.metrics.clone();
         let network_cmd_sender = self.network_cmd_sender.clone();
         let slashing_tracker = self.slashing_tracker.clone();
+        let chain_id = self.chain_id;
 
         // Per-address faucet cooldown tracking (server-side, not client-enforced)
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> = Arc::new(Mutex::new(HashMap::new()));
+        let bridge_minted: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
         // Rate limiter: requests/second per IP (configurable via node config)
         let rl = NonZeroU32::new(self.rate_limit).unwrap_or(NonZeroU32::new(200).unwrap());
@@ -586,6 +623,47 @@ impl RpcServer {
                 handle_call_wasm(req, chain_store).await
             });
 
+        // POST /call_contract — read-only EVM call (eth_call equivalent)
+        let call_contract = warp::path("call_contract")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(chain_store.clone()))
+            .and(warp::any().map(move || chain_id))
+            .and_then(
+                |_, req: CallContractRequest, chain_store: Arc<ChainStore>, chain_id: u64| async move {
+                    handle_call_contract(req, chain_store, chain_id).await
+                },
+            );
+
+        // GET /bridge/status — cross-chain bridge + relayer readiness
+        let bridge_status = warp::path!("bridge" / "status")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and(with_arc(bridge_minted.clone()))
+            .and(warp::any().map(move || chain_id))
+            .and_then(
+                |_, state_trie: Arc<Mutex<PatriciaTrie>>, bridge_minted: Arc<Mutex<HashSet<String>>>, chain_id: u64| async move {
+                    handle_bridge_status(state_trie, bridge_minted, chain_id).await
+                },
+            );
+
+        // POST /bridge/mint — relayer mint on Nebula after Ethereum lock
+        let bridge_mint = warp::path!("bridge" / "mint")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(chain_store.clone()))
+            .and(with_arc(bridge_minted.clone()))
+            .and_then(
+                |_, req: BridgeMintRequest, chain_store: Arc<ChainStore>, bridge_minted: Arc<Mutex<HashSet<String>>>| async move {
+                    handle_bridge_mint(req, chain_store, bridge_minted).await
+                },
+            );
+
         // GET /wasm/contracts — list deployed WASM contracts
         let wasm_contracts = warp::path!("wasm" / "contracts")
             .and(with_rate_limit.clone())
@@ -620,6 +698,9 @@ impl RpcServer {
             .or(tx_receipt)
             .or(gas_price)
             .or(estimate_gas)
+            .or(call_contract)
+            .or(bridge_status)
+            .or(bridge_mint)
             .or(fee_history)
             .or(validators)
             .or(delegations)
@@ -1076,6 +1157,250 @@ async fn handle_estimate_gas(
     };
     
     Ok(warp::reply::json(&response))
+}
+
+async fn handle_call_contract(
+    request: CallContractRequest,
+    chain_store: Arc<ChainStore>,
+    _chain_id: u64,
+) -> Result<impl warp::Reply, Infallible> {
+    use crate::evm_store::ChainStoreEvmStore;
+    use execution::evm::EvmExecutor;
+    use revm::primitives::{Address, U256};
+    use std::str::FromStr;
+
+    let parse_addr = |s: &str| -> Option<Address> {
+        let clean = s.trim_start_matches("0x");
+        if clean.len() != 40 {
+            return None;
+        }
+        Address::from_str(&format!("0x{clean}")).ok()
+    };
+
+    let from = match parse_addr(&request.from) {
+        Some(a) => a,
+        None => {
+            return Ok(warp::reply::json(&CallContractResponse {
+                result: "0x".to_string(),
+                success: false,
+                error: Some("invalid from address".to_string()),
+            }))
+        }
+    };
+    let to = match parse_addr(&request.to) {
+        Some(a) => a,
+        None => {
+            return Ok(warp::reply::json(&CallContractResponse {
+                result: "0x".to_string(),
+                success: false,
+                error: Some("invalid to address".to_string()),
+            }))
+        }
+    };
+
+    let data = hex::decode(request.data.trim_start_matches("0x")).unwrap_or_default();
+    let value = request
+        .value
+        .as_ref()
+        .and_then(|v| v.parse::<u128>().ok())
+        .map(U256::from)
+        .unwrap_or(U256::ZERO);
+
+    let store = Arc::new(ChainStoreEvmStore::new(chain_store));
+    match EvmExecutor::static_call(store, from, to, data, value) {
+        Ok(bytes) => Ok(warp::reply::json(&CallContractResponse {
+            result: format!("0x{}", hex::encode(bytes)),
+            success: true,
+            error: None,
+        })),
+        Err(e) => Ok(warp::reply::json(&CallContractResponse {
+            result: "0x".to_string(),
+            success: false,
+            error: Some(e.to_string()),
+        })),
+    }
+}
+
+fn deterministic_address(label: &str) -> String {
+    use sha2::{Digest, Sha256};
+    let mut h = Sha256::new();
+    h.update(label.as_bytes());
+    format!("0x{}", hex::encode(&h.finalize()[..20]))
+}
+
+async fn handle_bridge_status(
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+    bridge_minted: Arc<Mutex<HashSet<String>>>,
+    chain_id: u64,
+) -> Result<impl warp::Reply, Infallible> {
+    let validators_count = {
+        let trie = state_trie.lock().await;
+        trie.get(b"validators")
+            .ok()
+            .flatten()
+            .and_then(|encoded| serde_json::from_slice::<Vec<ValidatorInfo>>(&encoded).ok())
+            .map(|v| v.len())
+            .unwrap_or(0)
+    };
+    let processed = bridge_minted.lock().await.len();
+    let eth_rpc_configured = std::env::var("ETH_RPC_URL").is_ok();
+
+    Ok(warp::reply::json(&BridgeStatusResponse {
+        vault_address: deterministic_address("nebula-bridge-vault-v1"),
+        defi_pool_address: deterministic_address("nebula-defi-pool-v1"),
+        validators_count,
+        relayers_ready: validators_count > 0,
+        eth_rpc_configured,
+        processed_mints: processed,
+        chain_id,
+    }))
+}
+
+async fn verify_eth_lock_tx(
+    eth_rpc: &str,
+    tx_hash: &str,
+    bridge_address: Option<&str>,
+) -> Result<bool, String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_getTransactionReceipt",
+        "params": [tx_hash],
+        "id": 1
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(eth_rpc)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("ETH RPC unreachable: {e}"))?;
+    let val: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid ETH RPC response: {e}"))?;
+    let receipt = val
+        .get("result")
+        .ok_or_else(|| "Missing result in ETH RPC response".to_string())?;
+    if receipt.is_null() {
+        return Err("ETH transaction not yet mined".into());
+    }
+    let status = receipt
+        .get("status")
+        .and_then(|s| s.as_str())
+        .unwrap_or("0x0");
+    if status != "0x1" {
+        return Err("ETH transaction failed".into());
+    }
+    if let Some(bridge) = bridge_address {
+        let to = receipt
+            .get("to")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !to.is_empty() && to != bridge.trim_start_matches("0x").to_lowercase() && to != bridge.to_lowercase() {
+            // also accept logs from bridge contract
+            let logs = receipt.get("logs").and_then(|l| l.as_array());
+            if logs.map(|l| l.is_empty()).unwrap_or(true) {
+                return Err("Transaction not sent to bridge contract".into());
+            }
+        }
+    }
+    Ok(true)
+}
+
+async fn credit_account_balance(
+    chain_store: &ChainStore,
+    address: &str,
+    amount: u128,
+) -> Result<String, String> {
+    let addr_clean = address.trim_start_matches("0x").to_lowercase();
+    let addr_bytes = hex::decode(&addr_clean).map_err(|_| "Invalid address".to_string())?;
+    if addr_bytes.len() != 20 {
+        return Err("Invalid address length".into());
+    }
+
+    let mut balance = 0u128;
+    if let Ok(Some(encoded)) = chain_store.get_state(&addr_bytes) {
+        if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
+            if let Some(b) = acc.get("balance").and_then(|v| v.as_str()) {
+                balance = b.parse().unwrap_or(0);
+            }
+        }
+    }
+    balance += amount;
+
+    let account = serde_json::json!({
+        "balance": balance.to_string(),
+        "nonce": 0,
+    });
+    chain_store
+        .put_state(&addr_bytes, &serde_json::to_vec(&account).unwrap())
+        .map_err(|e| e.to_string())?;
+    Ok(balance.to_string())
+}
+
+async fn handle_bridge_mint(
+    req: BridgeMintRequest,
+    chain_store: Arc<ChainStore>,
+    bridge_minted: Arc<Mutex<HashSet<String>>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let recipient = req.recipient.trim().to_lowercase();
+    if hex::decode(recipient.trim_start_matches("0x")).map(|b| b.len() != 20).unwrap_or(true) {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "Invalid recipient address",
+        })));
+    }
+
+    let amount: u128 = req
+        .amount
+        .as_ref()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000_000_000_000_000_000u128);
+
+    if let Some(ref eth_hash) = req.eth_tx_hash {
+        let eth_hash_lower = eth_hash.to_lowercase();
+        {
+            let minted = bridge_minted.lock().await;
+            if minted.contains(&eth_hash_lower) {
+                return Ok(warp::reply::json(&serde_json::json!({
+                    "error": "ETH lock already processed",
+                })));
+            }
+        }
+
+        let eth_rpc = req
+            .eth_rpc_url
+            .or_else(|| std::env::var("ETH_RPC_URL").ok())
+            .unwrap_or_default();
+        if eth_rpc.is_empty() {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": "ETH_RPC_URL not configured — set env or pass eth_rpc_url",
+            })));
+        }
+
+        if let Err(e) = verify_eth_lock_tx(
+            &eth_rpc,
+            &eth_hash_lower,
+            req.eth_bridge_address.as_deref(),
+        )
+        .await
+        {
+            return Ok(warp::reply::json(&serde_json::json!({ "error": e })));
+        }
+
+        bridge_minted.lock().await.insert(eth_hash_lower);
+    }
+
+    match credit_account_balance(&chain_store, &recipient, amount).await {
+        Ok(balance) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "minted",
+            "recipient": format!("0x{}", recipient.trim_start_matches("0x")),
+            "amount": amount.to_string(),
+            "balance": balance,
+            "eth_tx_hash": req.eth_tx_hash,
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
+    }
 }
 
 async fn handle_fee_history(

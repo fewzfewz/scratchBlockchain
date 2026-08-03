@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
 import { Rocket, Wallet, Copy, RefreshCw, FileCode, Fuel, CheckCircle, AlertCircle } from 'lucide-react'
+import { saveContract } from '../lib/chain.js'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => {
@@ -195,7 +196,17 @@ export default function ContractDeployPage() {
             const d = await rr.json()
             const receipt = d.receipt
             setDeployResult({ hash, receipt })
-            if (receipt?.contract_address || receipt?.created_address) {
+            const addr =
+              receipt?.contract_address ||
+              receipt?.created_address
+            if (addr) {
+              const full = String(addr).startsWith('0x') ? String(addr) : `0x${addr}`
+              saveContract({
+                address: full,
+                type: preset,
+                name: CONTRACT_PRESETS[preset]?.label || preset,
+                txHash: hash,
+              })
               showMsg('Contract deployed successfully!', 'success')
             }
           }

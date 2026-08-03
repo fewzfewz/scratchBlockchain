@@ -496,6 +496,47 @@ impl EvmExecutor {
     pub fn state_root(&self) -> [u8; 32] {
         self.db.db.state_root()
     }
+
+    /// Read-only EVM call (no state commit, no signature required).
+    pub fn static_call(
+        store: Arc<dyn EvmStore>,
+        from: Address,
+        to: Address,
+        data: Vec<u8>,
+        value: U256,
+    ) -> Result<Vec<u8>> {
+        let mut db = CacheDB::new(EvmDb::new(store));
+        let mut evm = EVM::new();
+        evm.database(&mut db);
+        evm.env.tx.caller = from;
+        evm.env.tx.transact_to = TransactTo::Call(to);
+        evm.env.tx.data = Bytes::from(data);
+        evm.env.tx.value = value;
+        evm.env.tx.gas_limit = 30_000_000;
+        evm.env.tx.gas_price = U256::ZERO;
+        evm.env.tx.nonce = None;
+        evm.env.tx.chain_id = None;
+        evm.env.cfg.disable_balance_check = true;
+        evm.env.cfg.disable_nonce_check = true;
+        evm.env.cfg.disable_base_fee = true;
+
+        let result = evm
+            .transact()
+            .map_err(|e| anyhow::anyhow!("EVM call error: {:?}", e))?;
+
+        match result.result {
+            ExecutionResult::Success { output, .. } => match output {
+                Output::Call(bytes) => Ok(bytes.to_vec()),
+                Output::Create(bytes, _) => Ok(bytes.to_vec()),
+            },
+            ExecutionResult::Revert { output, .. } => {
+                anyhow::bail!("Call reverted: 0x{}", hex::encode(output))
+            }
+            ExecutionResult::Halt { reason, .. } => {
+                anyhow::bail!("Call halted: {:?}", reason)
+            }
+        }
+    }
 }
 
 impl Default for EvmExecutor {
