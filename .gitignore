@@ -32,6 +32,10 @@ frontend/governance/node_modules/
 sdk/javascript/node_modules/
 interop/node_modules/
 
+# Frontend build artifacts (reproducible from source via `npm run build`)
+frontend/dist/
+frontend/.vite/
+
 package-lock.json
 
 # Dev-only scratch notes (not project documentation)
