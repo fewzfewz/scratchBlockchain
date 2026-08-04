@@ -9,6 +9,15 @@
 //! - RPC (API for clients)
 //! - Metrics (monitoring)
 
+#![recursion_limit = "256"]
+//! - Consensus (BFT engine)
+//! - Network (P2P layer)
+//! - Mempool (transaction pool)
+//! - Storage (block and state persistence)
+//! - Rewards & Slashing (validator economics)
+//! - RPC (API for clients)
+//! - Metrics (monitoring)
+
 use clap::{Parser, Subcommand};
 use libp2p::request_response::{RequestId, ResponseChannel};
 use libp2p::PeerId;
