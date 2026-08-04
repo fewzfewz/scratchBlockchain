@@ -517,7 +517,6 @@ impl EvmExecutor {
         evm.env.tx.nonce = None;
         evm.env.tx.chain_id = None;
         evm.env.cfg.disable_balance_check = true;
-        evm.env.cfg.disable_nonce_check = true;
         evm.env.cfg.disable_base_fee = true;
 
         let result = evm

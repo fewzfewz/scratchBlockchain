@@ -15,6 +15,21 @@ SCRIPTS="$ROOT/deployment/local/scripts"
 LOG_DIR="$ROOT/.nebula/logs"
 PID_FILE="$ROOT/.nebula/pids"
 
+# Prefer `docker compose` (v2 plugin); fall back to standalone `docker-compose`.
+if docker compose version >/dev/null 2>&1; then
+  DC="docker compose"
+else
+  DC="docker-compose"
+fi
+
+# The validator images mount the host-built node binary (target/release/node),
+# so only trigger the (slow) in-Docker Rust build when the image is missing.
+if docker image inspect local-validator1 >/dev/null 2>&1; then
+  BUILD_FLAG=""
+else
+  BUILD_FLAG="--build"
+fi
+
 DO_BUILD=true
 DO_BRIDGE=true
 LOCAL_FRONTEND=false
@@ -33,6 +48,11 @@ for arg in "$@"; do
 done
 
 mkdir -p "$LOG_DIR" "$PID_FILE"
+
+# Export host UID/GID so the hardhat container can chown its host-mounted
+# build outputs (artifacts/cache/node_modules) back to the host user.
+export HOST_UID="$(id -u)"
+export HOST_GID="$(id -g)"
 
 echo ""
 echo "╔══════════════════════════════════════════════════════════╗"
@@ -72,7 +92,7 @@ if [ "$LOCAL_FRONTEND" = false ]; then
   COMPOSE_SERVICES+=(frontend)
 fi
 
-docker compose -f "$COMPOSE_FILE" up -d --build "${COMPOSE_SERVICES[@]}"
+$DC -f "$COMPOSE_FILE" up -d $BUILD_FLAG "${COMPOSE_SERVICES[@]}"
 
 # ── Wait for services ───────────────────────────────────────────────────────
 echo ""
@@ -98,7 +118,7 @@ fi
 if [ "$LOCAL_FRONTEND" = true ]; then
   echo ""
   echo "▶ [6/6] Starting frontend on host (port 5173)..."
-  docker compose -f "$COMPOSE_FILE" stop frontend 2>/dev/null || true
+  $DC -f "$COMPOSE_FILE" stop frontend 2>/dev/null || true
   if [ ! -d "$ROOT/frontend/node_modules" ]; then
     npm --prefix "$ROOT/frontend" install --legacy-peer-deps
   fi

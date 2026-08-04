@@ -6,6 +6,13 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 COMPOSE_FILE="$ROOT/deployment/local/docker-compose.yml"
 PID_FILE="$ROOT/.nebula/pids"
 
+# Prefer `docker compose` (v2 plugin); fall back to standalone `docker-compose`.
+if docker compose version >/dev/null 2>&1; then
+  DC="docker compose"
+else
+  DC="docker-compose"
+fi
+
 echo "Stopping Nebula stack..."
 
 # Host frontend started by start-all.sh --local-frontend
@@ -20,6 +27,6 @@ if command -v lsof >/dev/null 2>&1; then
   lsof -ti :5173 2>/dev/null | xargs -r kill 2>/dev/null || true
 fi
 
-docker compose -f "$COMPOSE_FILE" down
+$DC -f "$COMPOSE_FILE" down
 
 echo "✓ All services stopped."
