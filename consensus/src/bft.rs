@@ -32,6 +32,12 @@ pub enum BftEvent {
     FinalizeBlock(Block, Vec<u8>),
     NewRound(u64, u64),
     Timeout(Step),
+    /// A peer is voting/proposing at a height higher than ours: we are behind
+    /// and should fetch the contiguous chain from a peer before continuing.
+    BehindSync(u64),
+    /// We have a 2/3 precommit quorum for a block we don't hold locally; the
+    /// node must fetch that block (and the contiguous chain) from a peer.
+    NeedBlock(Hash, u64),
 }
 
 pub struct BftEngine {
@@ -43,7 +49,7 @@ pub struct BftEngine {
     pub step: Step,
 
     validators: HashMap<Vec<u8>, ValidatorInfo>,
-    total_stake: u64,
+    total_stake: u128,
 
     proposal: Option<Proposal>,
 
@@ -53,6 +59,12 @@ pub struct BftEngine {
 
     votes: HashMap<(u64, Step), HashMap<Vec<u8>, Vote>>,
     max_votes_per_round: usize, // FIX: Added memory protection
+
+    /// Valid proposals seen for the current height, keyed by block hash. Lets a
+    /// node finalize a block that reached 2/3 precommit quorum even when it is
+    /// not the block the node last proposed itself (previously this stalled the
+    /// node forever and required a potentially unsafe engine reset).
+    proposals_by_hash: HashMap<Hash, Proposal>,
 
     locked_block: Option<(Block, u64)>,
     valid_block: Option<(Block, u64)>,
@@ -88,6 +100,7 @@ impl BftEngine {
             own_proposal: None,
             votes: HashMap::new(),
             max_votes_per_round: 1000, // FIX: Prevent memory DoS
+            proposals_by_hash: HashMap::new(),
             locked_block: None,
             valid_block: None,
             timeout_config: TimeoutConfig::default(),
@@ -122,11 +135,16 @@ impl BftEngine {
         self.step = Step::Propose;
         self.proposal = None;
         self.own_proposal = None;
+        // Proposals from a previous height are no longer useful for finalizing.
+        self.proposals_by_hash.retain(|_, p| p.height == self.height);
         self.start_timeout(Step::Propose);
         vec![BftEvent::NewRound(self.height, self.round)]
     }
 
     pub fn handle_proposal(&mut self, proposal: Proposal) -> Vec<BftEvent> {
+        if proposal.height > self.height {
+            return vec![BftEvent::BehindSync(proposal.height)];
+        }
         if proposal.height != self.height {
             return vec![];
         }
@@ -165,17 +183,22 @@ impl BftEngine {
             return events;
         }
 
+        // Cache the valid proposal so a later precommit quorum on this block can
+        // be finalized even if we are currently tracking a different proposal.
+        self.proposals_by_hash
+            .insert(proposal.block.hash(), proposal.clone());
+        if self.proposals_by_hash.len() > 512 {
+            // Defensive bound: drop everything except the proposal in hand.
+            self.proposals_by_hash.clear();
+            self.proposals_by_hash
+                .insert(proposal.block.hash(), proposal.clone());
+        }
+
         self.proposal = Some(proposal.clone());
         self.step = Step::Prevote;
         self.start_timeout(Step::Prevote);
 
-        let vote_hash = match &self.locked_block {
-            Some((locked, _lock_round)) if locked.hash() != proposal.block.hash() => {
-                tracing::info!("Locked on different block — prevoting nil");
-                None
-            }
-            _ => Some(proposal.block.hash()),
-        };
+        let vote_hash = self.prevote_hash(&proposal.block.hash());
 
         let mut vote = Vote {
             height: self.height,
@@ -191,6 +214,23 @@ impl BftEngine {
         self.add_vote(vote.clone());
         events.push(BftEvent::BroadcastVote(vote));
         events
+    }
+
+    /// Decide what to prevote for a proposed block under the Tendermint lock
+    /// rule: if we are locked on a different block, prevote nil unless there is
+    /// a proof-of-lock-change (a prevote quorum for the new block this round).
+    fn prevote_hash(&self, proposed_hash: &Hash) -> Option<Hash> {
+        match &self.locked_block {
+            Some((locked, _lock_round)) if locked.hash() != *proposed_hash => {
+                if self.has_quorum(self.round, Step::Prevote) == Some(Some(*proposed_hash)) {
+                    Some(*proposed_hash)
+                } else {
+                    tracing::info!("Locked on different block — prevoting nil");
+                    None
+                }
+            }
+            _ => Some(*proposed_hash),
+        }
     }
 
     pub fn create_proposal(&mut self, block: Block) -> Vec<BftEvent> {
@@ -216,12 +256,11 @@ impl BftEngine {
 
         self.proposal = Some(proposal.clone());
         self.own_proposal = Some(proposal.clone());
+        self.proposals_by_hash
+            .insert(propose_block.hash(), proposal.clone());
         self.step = Step::Prevote;
 
-        let vote_hash = match &self.locked_block {
-            Some((locked, _)) if locked.hash() != propose_block.hash() => None,
-            _ => Some(propose_block.hash()),
-        };
+        let vote_hash = self.prevote_hash(&propose_block.hash());
 
         let mut vote = Vote {
             height: self.height,
@@ -245,6 +284,11 @@ impl BftEngine {
     }
 
     pub fn handle_vote(&mut self, vote: Vote) -> Vec<BftEvent> {
+        if vote.height > self.height {
+            // A peer is already voting at a future height: we are behind and
+            // must sync the contiguous chain before we can participate.
+            return vec![BftEvent::BehindSync(vote.height)];
+        }
         if vote.height != self.height {
             return vec![];
         }
@@ -316,16 +360,14 @@ impl BftEngine {
 
                 // FIX: Only update locks if round >= current lock_round
                 if let Some(block_hash) = &hash {
-                    if let Some(proposal) = &self.proposal {
-                        if &proposal.block.hash() == block_hash {
-                            let current_lock_round =
-                                self.locked_block.as_ref().map(|(_, r)| *r).unwrap_or(0);
-                            if self.round >= current_lock_round {
-                                let block = proposal.block.clone();
-                                let round = self.round;
-                                self.valid_block = Some((block.clone(), round));
-                                self.locked_block = Some((block, round));
-                            }
+                    if let Some(proposal) = self.proposals_by_hash.get(block_hash) {
+                        let current_lock_round =
+                            self.locked_block.as_ref().map(|(_, r)| *r).unwrap_or(0);
+                        if self.round >= current_lock_round {
+                            let block = proposal.block.clone();
+                            let round = self.round;
+                            self.valid_block = Some((block.clone(), round));
+                            self.locked_block = Some((block, round));
                         }
                     }
                 }
@@ -348,13 +390,24 @@ impl BftEngine {
 
         if self.step == Step::Precommit {
             if let Some(Some(hash)) = self.has_quorum(self.round, Step::Precommit) {
-                if let Some(proposal) = &self.proposal {
-                    if proposal.block.hash() == hash {
+                // Finalize the block that reached the quorum. It may not be the
+                // proposal we are currently tracking (e.g. a delayed proposer),
+                // so look it up from the valid proposals we have seen.
+                let finalized = self
+                    .proposals_by_hash
+                    .get(&hash)
+                    .map(|p| (p.block.clone(), p.proposer.clone()))
+                    .or_else(|| {
+                        self.proposal
+                            .as_ref()
+                            .filter(|p| p.block.hash() == hash)
+                            .map(|p| (p.block.clone(), p.proposer.clone()))
+                    });
+
+                match finalized {
+                    Some((block, proposer)) => {
                         self.step = Step::Commit;
-                        events.push(BftEvent::FinalizeBlock(
-                            proposal.block.clone(),
-                            proposal.proposer.clone(),
-                        ));
+                        events.push(BftEvent::FinalizeBlock(block, proposer));
 
                         self.height += 1;
                         self.round = 0;
@@ -364,7 +417,17 @@ impl BftEngine {
                         self.locked_block = None;
                         self.valid_block = None;
                         self.votes.clear();
+                        self.proposals_by_hash.clear();
                         events.push(BftEvent::NewRound(self.height, 0));
+                    }
+                    None => {
+                        // The network reached 2/3 precommit quorum for a block we
+                        // have not seen the proposal for. Request it from a peer
+                        // instead of getting stuck or resetting the engine.
+                        tracing::info!(
+                            "Precommit quorum for a block not held locally — requesting sync"
+                        );
+                        events.push(BftEvent::NeedBlock(hash, self.height));
                     }
                 }
             }
@@ -380,7 +443,7 @@ impl BftEngine {
     fn has_quorum(&self, round: u64, step: Step) -> Option<Option<Hash>> {
         let votes = self.votes.get(&(round, step))?;
 
-        let mut counts: HashMap<Option<Hash>, u64> = HashMap::new();
+        let mut counts: HashMap<Option<Hash>, u128> = HashMap::new();
         for vote in votes.values() {
             let stake = self
                 .validators
@@ -554,6 +617,7 @@ impl BftEngine {
         self.locked_block = None;
         self.valid_block = None;
         self.votes.clear();
+        self.proposals_by_hash.clear();
         self.current_timeout = None;
         self.timeout_step = None;
         self.start_round(0)
@@ -1012,6 +1076,87 @@ mod tests {
             quorum,
             Some(Some(block_hash)),
             "2 of 3 equal-stake validators must reach the 2/3 quorum"
+        );
+        let _ = sk3;
+    }
+
+    #[test]
+    fn test_wei_scale_stakes_require_real_two_thirds() {
+        // Regression: stakes live in the wei range (1e24/8e23/6e23). A bug that
+        // clamped them to u64::MAX made all validators equal, so a SINGLE vote
+        // met the 2/3 threshold and any validator could finalize solo. With
+        // u128 the real 2/3 of 2.4e24 = 1.6e24 must be enforced.
+        let sk1 = crypto::SigningKey::generate();
+        let pk1 = sk1.public_key();
+        let sk2 = crypto::SigningKey::generate();
+        let pk2 = sk2.public_key();
+        let sk3 = crypto::SigningKey::generate();
+        let pk3 = sk3.public_key();
+
+        let validators = vec![
+            ValidatorInfo {
+                public_key: pk1.clone(),
+                stake: 1_000_000_000_000_000_000_000_000u128, // 1e24
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk2.clone(),
+                stake: 800_000_000_000_000_000_000_000u128, // 8e23
+                slashed: false,
+            },
+            ValidatorInfo {
+                public_key: pk3.clone(),
+                stake: 600_000_000_000_000_000_000_000u128, // 6e23
+                slashed: false,
+            },
+        ];
+
+        let mut engine = BftEngine::new(pk1.clone(), validators, 1, sk1.clone());
+        let block = make_block(1);
+        let block_hash = block.hash();
+
+        let vote_bytes = |height: u64, round: u32, voter: Vec<u8>, hash: [u8; 32]| {
+            let mut b = Vec::new();
+            b.extend_from_slice(&height.to_le_bytes());
+            b.extend_from_slice(&round.to_le_bytes());
+            b.push(Step::Prevote as u8);
+            b.extend_from_slice(&hash);
+            b.extend_from_slice(&voter);
+            b
+        };
+
+        // Single (largest) validator alone must NOT reach quorum.
+        let mut solo = Vote {
+            height: 1,
+            round: 0,
+            step: Step::Prevote,
+            block_hash: Some(block_hash),
+            signature: vec![],
+            voter: pk1.clone(),
+        };
+        solo.signature = sk1.sign(&vote_bytes(1, 0, pk1.clone(), block_hash));
+        engine.add_vote_public(solo);
+        assert_eq!(
+            engine.has_quorum_public(0, Step::Prevote),
+            None,
+            "one 1e24 validator (of 2.4e24 total) must NOT meet the 2/3 threshold"
+        );
+
+        // Second vote (1e24 + 8e23 = 1.8e24 >= 1.6e24) reaches quorum.
+        let mut second = Vote {
+            height: 1,
+            round: 0,
+            step: Step::Prevote,
+            block_hash: Some(block_hash),
+            signature: vec![],
+            voter: pk2.clone(),
+        };
+        second.signature = sk2.sign(&vote_bytes(1, 0, pk2.clone(), block_hash));
+        engine.add_vote_public(second);
+        assert_eq!(
+            engine.has_quorum_public(0, Step::Prevote),
+            Some(Some(block_hash)),
+            "1e24 + 8e23 must reach the 2/3 threshold"
         );
         let _ = sk3;
     }

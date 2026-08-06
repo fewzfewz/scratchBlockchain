@@ -191,7 +191,7 @@ impl Default for Treasury {
 pub struct Validator {
     pub address: Address,
     pub public_key: Vec<u8>,
-    pub stake: u64,
+    pub stake: u128,
     pub is_active: bool,
     pub last_active_epoch: u64,
 }
@@ -261,7 +261,7 @@ impl StakingContract {
         let validator = Validator {
             address,
             public_key,
-            stake: stake as u64, // Convert for compatibility
+            stake,
             is_active: true,
             last_active_epoch: 0,
         };
@@ -399,18 +399,18 @@ impl StakingContract {
             reason.slash_percentage() as u128 * 10 // Convert to per-1000
         };
 
-        let validator_stake = val.stake as u128;
+        let validator_stake = val.stake;
         let slashed_amount = if reason == SlashingReason::Downtime {
             validator_stake / 1000 // 0.1%
         } else {
             (validator_stake * slash_percentage) / 1000
         };
 
-        val.stake = (validator_stake.saturating_sub(slashed_amount)) as u64;
+        val.stake = validator_stake.saturating_sub(slashed_amount);
         self.total_stake = self.total_stake.saturating_sub(slashed_amount);
 
         // Deactivate if below minimum
-        if (val.stake as u128) < self.min_stake {
+        if val.stake < self.min_stake {
             val.is_active = false;
             if let Some(metadata) = self.validator_metadata.get_mut(&validator) {
                 metadata.is_active = false;
@@ -459,7 +459,7 @@ impl StakingContract {
         let validator_self_stake = self
             .validators
             .get(&validator)
-            .map(|v| v.stake as u128)
+            .map(|v| v.stake)
             .unwrap_or(0);
         let total_delegated = metadata.total_delegated;
         let total_stake = validator_self_stake + total_delegated;
@@ -535,8 +535,8 @@ impl StakingContract {
 
         // Sort by total stake (self + delegated) descending
         active.sort_by(|a, b| {
-            let a_total = a.0.stake as u128 + a.1.total_delegated;
-            let b_total = b.0.stake as u128 + b.1.total_delegated;
+            let a_total = a.0.stake + a.1.total_delegated;
+            let b_total = b.0.stake + b.1.total_delegated;
             b_total.cmp(&a_total)
         });
 
@@ -710,9 +710,9 @@ impl Governance {
         proposal_votes.insert(voter, vote);
 
         if vote {
-            proposal.yes_votes += voting_power as u128;
+            proposal.yes_votes += voting_power;
         } else {
-            proposal.no_votes += voting_power as u128;
+            proposal.no_votes += voting_power;
         }
 
         Ok(())

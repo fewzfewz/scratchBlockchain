@@ -21,7 +21,7 @@ impl Default for RateLimitConfig {
         Self {
             transactions_per_second: 10,
             block_requests_per_second: 5,
-            consensus_msgs_per_second: 20,
+            consensus_msgs_per_second: 100,
             ban_duration_secs: 300, // 5 minutes
         }
     }
@@ -150,6 +150,17 @@ impl RateLimiter {
 
     /// Record a rate limit violation
     fn record_violation(&mut self, peer: &PeerId, msg_type: MessageType) {
+        // Consensus messages must never escalate to a peer ban. They come from
+        // the (permissioned) validator set, and bursts are a symptom of a peer
+        // being behind, not an attack. Banning a lagging validator drops its
+        // votes and stalls finality. Worse, violation counts never reset, so a
+        // temporary ban would be re-triggered the instant it expires — a
+        // permanent self-inflicted liveness failure. Excess consensus traffic
+        // is simply dropped.
+        if msg_type == MessageType::ConsensusMessage {
+            return;
+        }
+
         let count = self.violation_counts.entry(*peer).or_insert(0);
         *count += 1;
 

@@ -40,7 +40,7 @@ pub struct ValidatorInfo {
     /// Ed25519 public key (32 bytes)
     pub public_key: Vec<u8>,
     /// Staked amount (higher stake = more voting power)
-    pub stake: u64,
+    pub stake: u128,
     /// Whether this validator has been slashed
     pub slashed: bool,
 }

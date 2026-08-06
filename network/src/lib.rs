@@ -129,6 +129,11 @@ pub enum NetworkEvent {
         request_id: request_response::RequestId,
         blocks: Vec<Block>,
     },
+
+    /// An outbound block sync request failed (dial failure, timeout, or the
+    /// connection closed before the peer responded). The node must clear its
+    /// in-flight sync state so a retry can be triggered.
+    BlockRequestFailed { peer: PeerId },
 }
 
 // ============================================================================
@@ -338,17 +343,21 @@ impl NetworkService {
             ping: libp2p::ping::Behaviour::default(),
         };
 
-        // Create the swarm
+        // Create the swarm. The default idle-connection timeout (10s) closes
+        // connections whose behaviours all return `KeepAlive::No`; on this
+        // network that closed live validator links every few seconds, which
+        // made request-response sync calls fail. Keep connections alive.
         let swarm = Swarm::new(
             transport,
             behaviour,
             local_peer_id,
-            Config::with_tokio_executor(),
+            Config::with_tokio_executor()
+                .with_idle_connection_timeout(Duration::from_secs(u64::MAX)),
         );
 
         // Create communication channels
         let (command_sender, command_receiver) = mpsc::channel(64);
-        let (event_sender, event_receiver) = mpsc::channel(256);
+        let (event_sender, event_receiver) = mpsc::channel(1024);
 
         // Initialize rate limiter
         let rate_limiter = Arc::new(TokioMutex::new(
@@ -392,6 +401,19 @@ impl NetworkService {
         service.reconnect_known_peers();
 
         Ok((service, command_sender, event_receiver))
+    }
+
+    /// Forward an event to the node without blocking the network loop.
+    ///
+    /// Awaiting a full channel would stall the whole network task (commands
+    /// included) while the node waits on a command reply — a deadlock. Events
+    /// are therefore dropped (with a warning) when the node cannot keep up.
+    /// Consensus messages are retried each round and blocks are re-gossiped,
+    /// so losing a burst is preferable to wedging the node forever.
+    fn emit(&self, event: NetworkEvent) {
+        if let Err(e) = self.event_sender.try_send(event) {
+            warn!("Dropping network event ({}): node is not draining fast enough", e);
+        }
     }
 
     /// Run the network service main loop
@@ -462,10 +484,7 @@ impl NetworkService {
             // New listening address - we can now accept connections
             SwarmEvent::NewListenAddr { address, .. } => {
                 info!("🔊 Listening on {}", address);
-                let _ = self
-                    .event_sender
-                    .send(NetworkEvent::ListeningOn(address))
-                    .await;
+                self.emit(NetworkEvent::ListeningOn(address));
             }
 
             // ================================================================
@@ -512,19 +531,13 @@ impl NetworkService {
                         peer, request.start_height, request.limit
                     );
 
-                    if let Err(e) = self
-                        .event_sender
-                        .send(NetworkEvent::BlockRequestReceived {
-                            peer,
-                            request_id,
-                            start_height: request.start_height,
-                            limit: request.limit,
-                            channel,
-                        })
-                        .await
-                    {
-                        warn!("Failed to forward block request: {}", e);
-                    }
+                    self.emit(NetworkEvent::BlockRequestReceived {
+                        peer,
+                        request_id,
+                        start_height: request.start_height,
+                        limit: request.limit,
+                        channel,
+                    });
                 }
                 // Received a block response from a peer
                 request_response::Message::Response {
@@ -538,28 +551,23 @@ impl NetworkService {
                     );
                     self.pending_requests.remove(&request_id);
 
-                    if let Err(e) = self
-                        .event_sender
-                        .send(NetworkEvent::BlockResponseReceived {
-                            peer,
-                            request_id,
-                            blocks: response.blocks,
-                        })
-                        .await
-                    {
-                        warn!("Failed to forward block response: {}", e);
-                    }
+                    self.emit(NetworkEvent::BlockResponseReceived {
+                        peer,
+                        request_id,
+                        blocks: response.blocks,
+                    });
                 }
             },
 
             // Request-response failures
             SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::RequestResponse(
                 request_response::Event::OutboundFailure {
-                    request_id, error, ..
+                    request_id, peer, error, ..
                 },
             )) => {
-                warn!("❌ Request {} failed: {:?}", request_id, error);
+                warn!("❌ Request {} to {} failed: {:?}", request_id, peer, error);
                 self.pending_requests.remove(&request_id);
+                self.emit(NetworkEvent::BlockRequestFailed { peer });
             }
 
             // ================================================================
@@ -641,13 +649,7 @@ impl NetworkService {
                         debug!("💰 Received transaction from {}", source);
                         self.reputation.report_good_behavior(source);
 
-                        if let Err(e) = self
-                            .event_sender
-                            .send(NetworkEvent::TransactionReceived(tx_msg.transaction))
-                            .await
-                        {
-                            warn!("Failed to forward transaction: {}", e);
-                        }
+                        self.emit(NetworkEvent::TransactionReceived(tx_msg.transaction));
                     }
                     Err(e) => {
                         warn!("Failed to deserialize transaction: {}", e);
@@ -663,16 +665,10 @@ impl NetworkService {
                         source, block_msg.block.header.slot
                     );
 
-                    if let Err(e) = self
-                        .event_sender
-                        .send(NetworkEvent::BlockReceived {
-                            block: block_msg.block,
-                            source,
-                        })
-                        .await
-                    {
-                        warn!("Failed to forward block: {}", e);
-                    }
+                    self.emit(NetworkEvent::BlockReceived {
+                        block: block_msg.block,
+                        source,
+                    });
                 }
                 Err(e) => {
                     warn!("Failed to deserialize block: {}", e);
@@ -699,13 +695,7 @@ impl NetworkService {
                     Ok(msg) => {
                         debug!("🗳️ Received consensus message from {}", source);
 
-                        if let Err(e) = self
-                            .event_sender
-                            .send(NetworkEvent::ConsensusMessageReceived(msg))
-                            .await
-                        {
-                            warn!("Failed to forward consensus message: {}", e);
-                        }
+                        self.emit(NetworkEvent::ConsensusMessageReceived(msg));
                     }
                     Err(e) => {
                         warn!("Failed to deserialize consensus message: {}", e);

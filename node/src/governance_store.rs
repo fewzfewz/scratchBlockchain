@@ -421,7 +421,11 @@ pub async fn load_consensus_validators(
             }
             let base = parse_stake_value(&v.stake);
             let delegated: u128 = v.total_delegated.parse().unwrap_or(0);
-            let total = base.saturating_add(delegated).min(u64::MAX as u128) as u64;
+            // Keep the full wei stake as u128. Clamping to u64::MAX would give
+            // every validator identical (maximum) voting power, so a single
+            // validator could finalize solo — a safety violation that forked
+            // the network.
+            let total = base.saturating_add(delegated);
             Some(consensus::ValidatorInfo {
                 public_key,
                 stake: total.max(1),
