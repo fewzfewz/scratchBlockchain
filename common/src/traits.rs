@@ -163,7 +163,7 @@ pub trait Validator {
     fn verify(&self, message: &[u8], signature: &[u8]) -> bool;
 
     /// Get validator stake
-    fn stake(&self) -> u64;
+    fn stake(&self) -> u128;
 
     /// Check if validator is active
     fn is_active(&self) -> bool;

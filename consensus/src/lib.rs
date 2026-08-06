@@ -103,7 +103,7 @@ pub struct FinalityGadget {
     validators: HashMap<Vec<u8>, ValidatorInfo>,
 
     /// Total stake across all validators
-    total_stake: u64,
+    total_stake: u128,
 
     /// Votes for each block number (prevotes)
     prevotes: HashMap<u64, Vec<FinalityVote>>,
@@ -127,7 +127,7 @@ pub struct FinalityGadget {
 impl FinalityGadget {
     /// Create a new finality gadget with the given validator set
     pub fn new(validators: Vec<ValidatorInfo>) -> Self {
-        let total_stake: u64 = validators.iter().map(|v| v.stake).sum();
+        let total_stake: u128 = validators.iter().map(|v| v.stake).sum();
         let mut validator_map = HashMap::new();
 
         for v in validators {
@@ -261,7 +261,7 @@ impl FinalityGadget {
         let threshold = (self.total_stake * 2) / 3; // 2/3 threshold (strictly greater)
 
         // Count stake per block hash
-        let mut stake_by_hash: HashMap<[u8; 32], u64> = HashMap::new();
+        let mut stake_by_hash: HashMap<[u8; 32], u128> = HashMap::new();
 
         for vote in precommits {
             if let Some(validator) = self.validators.get(&vote.voter) {
@@ -273,7 +273,7 @@ impl FinalityGadget {
 
         // Find the hash with the most stake (must exceed threshold)
         let mut best_hash: Option<[u8; 32]> = None;
-        let mut best_stake = 0u64;
+        let mut best_stake = 0u128;
 
         for (hash, stake) in stake_by_hash {
             if stake > best_stake {
@@ -322,7 +322,7 @@ impl FinalityGadget {
         while let Some(height) = to_finalize.pop() {
             if let Some(votes) = self.precommits.get(&height) {
                 // Re-check threshold
-                let mut stake = 0u64;
+                let mut stake = 0u128;
                 for vote in votes {
                     if let Some(validator) = self.validators.get(&vote.voter) {
                         if !validator.slashed {
@@ -846,7 +846,7 @@ mod tests {
     fn create_test_validator(key: &SigningKey, stake: u64) -> ValidatorInfo {
         ValidatorInfo {
             public_key: key.public_key(),
-            stake,
+            stake: stake as u128,
             slashed: false,
         }
     }

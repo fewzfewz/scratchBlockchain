@@ -71,6 +71,9 @@ use node::runtime_upgrade::RuntimeUpgradeManager;
 const SYNC_GRACE_SECS: u64 = 20;
 /// Number of blocks requested per sync batch.
 const SYNC_BATCH_SIZE: u32 = 128;
+/// A sync request left in-flight longer than this is presumed dead (the peer
+/// stopped responding without emitting an OutboundFailure) and is retried.
+const SYNC_STUCK_SECS: u64 = 10;
 
 /// CLI arguments parser
 #[derive(Parser)]
@@ -260,6 +263,9 @@ struct Node {
     syncing: bool,
     last_sync_attempt_at: Instant,
     last_finalize_at: Instant,
+    /// Set when the consensus engine signals that we are behind peers
+    /// (BehindSync/NeedBlock) so the next sync tick triggers a fetch promptly.
+    sync_requested: bool,
 
     // State pruning
     prune_config: PruneConfig,
@@ -362,7 +368,7 @@ impl Node {
             .iter()
             .map(|v| ValidatorInfo {
                 public_key: hex::decode(&v.public_key).unwrap_or_default(),
-                stake: v.stake as u64,
+                stake: v.stake,
                 slashed: false,
             })
             .collect();
@@ -585,6 +591,7 @@ impl Node {
             syncing: false,
             last_sync_attempt_at: Instant::now(),
             last_finalize_at: Instant::now(),
+            sync_requested: false,
             prune_config,
         })
     }
@@ -605,7 +612,6 @@ impl Node {
         let mut metrics_interval = interval(Duration::from_secs(5));
         let mut sync_interval = interval(Duration::from_secs(5));
         let mut repropose_interval = interval(Duration::from_secs(1));
-        let mut bft_align_interval = interval(Duration::from_secs(10));
 
         loop {
             // Process BFT events
@@ -648,27 +654,6 @@ impl Node {
                         engine.re_propose()
                     };
                     pending_events.extend(events);
-                }
-
-                _ = bft_align_interval.tick() => {
-                    // Re-anchor BFT height if it drifted from the chain tip.
-                    let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
-                    if tip > 0 {
-                        let expected_bft = tip + 2;
-                        let mut engine = self.bft_engine.lock().await;
-                        if engine.height.saturating_add(1) < expected_bft
-                            || engine.height > expected_bft + 2
-                        {
-                            warn!(
-                                "BFT height {} out of sync with chain tip {} — re-anchoring to {}",
-                                engine.height, tip, expected_bft
-                            );
-                            let events = engine.reset_to_height(expected_bft);
-                            pending_events.extend(events);
-                            drop(engine);
-                            self.block_producer.lock().await.set_current_slot(tip + 1);
-                        }
-                    }
                 }
 
                 Some(event) = self.network_event_receiver.recv() => {
@@ -875,6 +860,23 @@ impl Node {
                 };
                 new_events.extend(events);
             }
+
+            BftEvent::BehindSync(_target_height) => {
+                // Peers are ahead of us — request a contiguous sync on the
+                // next sync tick so we catch up to the canonical chain.
+                info!("🚩 Behind peers (height {}) — flagging sync", _target_height);
+                self.sync_requested = true;
+            }
+
+            BftEvent::NeedBlock(_hash, _height) => {
+                // The network finalized a block we don't hold — fetch the
+                // contiguous chain from a peer.
+                info!(
+                    "📥 Need block at height {} from peers — flagging sync",
+                    _height
+                );
+                self.sync_requested = true;
+            }
         }
 
         Ok(())
@@ -927,6 +929,18 @@ impl Node {
                     .await?;
             }
 
+            NetworkEvent::BlockRequestFailed { .. } => {
+                // A sync request failed (peer unreachable or timed out) and no
+                // response will ever arrive. Clear the in-flight sync flag so
+                // the next sync tick retries — otherwise `syncing` stays true
+                // forever and the node never catches up.
+                if self.syncing {
+                    warn!("Block sync request failed — clearing sync so it can retry");
+                    self.syncing = false;
+                    self.sync_requested = true;
+                }
+            }
+
             NetworkEvent::ListeningOn(addr) => {
                 info!("🔊 Network listening on {}", addr);
             }
@@ -939,70 +953,50 @@ impl Node {
 
     /// Handle an incoming block from gossip.
     ///
-    /// Only blocks that extend our chain tip by exactly one (with a matching
-    /// parent) are applied immediately. A block that skips heights indicates a
-    /// gap in our chain — we request a contiguous sync from the sender instead
-    /// of committing it out of order (which previously let the chain fork or
-    /// regress). Blocks behind our tip are ignored.
+    /// Blocks are NEVER applied here: a block may only enter the chain store
+    /// through a BFT `FinalizeBlock` (the node participated in the quorum) or
+    /// through a contiguous sync fetch from a peer. Applying gossip blocks
+    /// directly previously let each validator's store diverge (forks) and let
+    /// the engine drift from the store, which then required an unsafe engine
+    /// reset that could reuse block slots.
+    ///
+    /// Instead a gossip block only informs sync: if it is further ahead than
+    /// our tip by more than one, we are missing intermediate blocks and request
+    /// a contiguous sync from the sender.
     async fn handle_incoming_block(
         &mut self,
         block: Block,
         source: PeerId,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        // Check if we already have this block
-        let block_hash = block.hash();
-        if self.chain_store.get_block(&block_hash)?.is_some() {
-            debug!("Block already known, ignoring");
+        if block.header.slot == 0 {
             return Ok(());
         }
 
         let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
         let block_slot = block.header.slot;
 
-        // Ignore genesis-shadow blocks delivered via gossip; the canonical
-        // genesis lives at slot 0 and the first produced block is committed
-        // through the BFT finalize path.
-        if block_slot == 0 {
+        // Current or near-future block: we either already have it or will
+        // finalize slot tip+1 through BFT ourselves.
+        if block_slot <= tip + 1 {
             return Ok(());
         }
 
-        // A block ahead of our tip means we are missing intermediate blocks.
-        // Trigger a contiguous sync from the sender to fill the gap.
-        if block_slot > tip + 1 {
+        // We are missing intermediate blocks. Request a contiguous sync from
+        // the sender, which presumably holds the canonical chain.
+        if !self.syncing {
             info!(
                 "Block at slot {} ahead of tip {} — requesting sync",
                 block_slot, tip
             );
-            if !self.syncing {
-                self.syncing = true;
-                self.network_cmd_sender
-                    .send(NetworkCommand::RequestBlock {
-                        peer: source,
-                        start_height: if tip == 0 { 0 } else { tip + 1 },
-                        limit: SYNC_BATCH_SIZE,
-                    })
-                    .await?;
-            }
-            return Ok(());
-        }
-
-        // Stale block (already past).
-        if block_slot <= tip {
-            return Ok(());
-        }
-
-        // block_slot == tip + 1: must extend our current tip.
-        let tip_hash = self.current_tip_hash()?;
-        if block.header.parent_hash != tip_hash {
-            warn!(
-                "Block at slot {} has mismatched parent (fork) — ignoring",
-                block_slot
-            );
-            return Ok(());
-        }
-
-        if let Err(e) = self.apply_block(&block).await {
-            warn!("Failed to apply gossip block at slot {}: {}", block_slot, e);
+            self.syncing = true;
+            self.last_sync_attempt_at = Instant::now();
+            self.network_cmd_sender
+                .send(NetworkCommand::RequestBlock {
+                    peer: source,
+                    start_height: if tip == 0 { 0 } else { tip + 1 },
+                    limit: SYNC_BATCH_SIZE,
+                })
+                .await?;
         }
         Ok(())
     }
@@ -1120,36 +1114,80 @@ impl Node {
         }
     }
 
-    /// Periodically check whether consensus has stalled and, if so, request a
-    /// contiguous block sync from a connected peer so the node can catch up.
+    /// Periodically check whether we are behind peers or consensus has stalled
+    /// and, if so, request a contiguous block sync from a connected peer so the
+    /// node can catch up to the canonical chain.
+    ///
+    /// Triggered when:
+    /// - the engine signals we are behind (BehindSync / NeedBlock),
+    /// - the BFT engine height no longer matches the chain tip + 2 (desync), or
+    /// - no block has been finalized for a while (stall).
+    ///
+    /// The engine is only ever advanced AFTER a sync has brought the chain
+    /// store up to the peer's canonical chain (finish_sync). We never reset the
+    /// engine forward to a stale local tip, which previously let a node re-propose
+    /// an already-committed slot (an equivocation vector that forked the chain).
     async fn maybe_trigger_sync(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if self.syncing {
-            return Ok(());
-        }
-        // Don't hammer peers if a previous sync attempt found nothing.
-        if self.last_sync_attempt_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS) {
-            return Ok(());
-        }
-        if self.last_finalize_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS) {
-            return Ok(());
+            // Watchdog: a request that never completes (peer stopped responding
+            // and no OutboundFailure fires) must not wedge the node forever.
+            // Clear the flag so the next tick retries against another peer.
+            if self.last_sync_attempt_at.elapsed() >= Duration::from_secs(SYNC_STUCK_SECS) {
+                warn!(
+                    "Sync request in-flight for {}s without completing — clearing sync flag to retry",
+                    SYNC_STUCK_SECS
+                );
+                self.syncing = false;
+            } else {
+                return Ok(());
+            }
         }
 
         let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+        let engine_height = {
+            let engine = self.bft_engine.lock().await;
+            engine.height
+        };
+        let desync = tip > 0 && engine_height != tip + 2;
+        let sync_requested = std::mem::take(&mut self.sync_requested);
+        let urgent = sync_requested || desync;
+
+        let stalled =
+            self.last_finalize_at.elapsed() >= Duration::from_secs(SYNC_GRACE_SECS);
+
+        // Non-urgent (stall) triggers are throttled; urgent ones retry quickly.
+        if !urgent && !stalled {
+            return Ok(());
+        }
+        if !urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS)
+        {
+            return Ok(());
+        }
+        if urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(2) {
+            return Ok(());
+        }
 
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
         self.network_cmd_sender
             .send(NetworkCommand::ListConnectedPeers(reply_tx))
             .await?;
-        let peers = reply_rx.await.unwrap_or_default();
+        // Bound the wait so a stalled reply can never wedge the main loop
+        // (which would stop draining network events and deadlock the network).
+        let peers = tokio::time::timeout(Duration::from_secs(5), reply_rx)
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .unwrap_or_default();
         let peer = peers.into_iter().next();
 
         match peer {
             Some(peer) => {
                 info!(
-                    "⚠️ Consensus stalled at height {} for {}s — requesting sync from {}",
-                    tip, SYNC_GRACE_SECS, peer
+                    "⚠️ Behind peers at height {} (engine {}) — requesting sync from {}",
+                    tip, engine_height, peer
                 );
                 self.syncing = true;
+                self.last_sync_attempt_at = Instant::now();
                 self.network_cmd_sender
                     .send(NetworkCommand::RequestBlock {
                         peer,
@@ -1159,7 +1197,14 @@ impl Node {
                     .await?;
             }
             None => {
-                debug!("Consensus stalled but no peers connected — will retry");
+                if desync {
+                    warn!(
+                        "Consensus behind (engine {}, tip {}) but no peers connected — will retry",
+                        engine_height, tip
+                    );
+                } else {
+                    debug!("Consensus stalled but no peers connected — will retry");
+                }
             }
         }
         Ok(())
@@ -1268,7 +1313,8 @@ impl Node {
         if applied == 0 {
             warn!("Sync: no blocks applied from {}", peer);
             self.syncing = false;
-            self.last_sync_attempt_at = Instant::now();
+            // Leave last_sync_attempt_at untouched so the next sync tick retries
+            // promptly (possibly against a different peer).
             return Ok(());
         }
 
@@ -1287,6 +1333,7 @@ impl Node {
 
         // Fetch the next contiguous batch from the same peer.
         let start = if tip == 0 { 0 } else { tip + 1 };
+        self.last_sync_attempt_at = Instant::now();
         self.network_cmd_sender
             .send(NetworkCommand::RequestBlock {
                 peer,
@@ -1374,9 +1421,9 @@ impl Node {
         let stake_total = validators
             .iter()
             .map(|v| v.stake)
-            .fold(0u64, |acc, s| acc.saturating_add(s));
+            .fold(0u128, |acc, s| acc.saturating_add(s));
         self.metrics
-            .update_validator_set(validators.len(), stake_total);
+            .update_validator_set(validators.len(), stake_total as u64);
 
         // Network stats (peer count, connection count, gossip bytes)
         let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
