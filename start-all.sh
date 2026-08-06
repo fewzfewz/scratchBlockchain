@@ -147,7 +147,7 @@ echo "║  Ethereum (Hardhat) http://localhost:9545                ║"
 echo "║  Bridge UI         http://localhost:5173/bridge          ║"
 echo "║  Explorer          http://localhost:5173/explorer        ║"
 echo "║  API Docs          http://localhost:5173/api-docs        ║"
-echo "║  Grafana           http://localhost:3000  (admin/admin)  ║"
+echo "║  Grafana           http://localhost:3002  (admin/admin)  ║"
 echo "║  Prometheus        http://localhost:9095                 ║"
 echo "╠══════════════════════════════════════════════════════════╣"
 if [ -n "$BRIDGE_ADDR" ] && [ "$BRIDGE_ADDR" != "" ]; then

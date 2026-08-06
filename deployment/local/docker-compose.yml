@@ -283,7 +283,7 @@ services:
     image: grafana/grafana:latest
     container_name: grafana
     ports:
-      - "3000:3000"
+      - "3002:3000"
     volumes:
       - ../monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
       - ../monitoring/grafana/datasources:/etc/grafana/provisioning/datasources:ro

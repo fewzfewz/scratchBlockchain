@@ -4,9 +4,10 @@ import {
   Shield, CheckCircle, AlertCircle, Server, Cpu, Wifi, ExternalLink,
   Copy, RefreshCw, BookOpen, Activity, Gauge,
 } from 'lucide-react'
+import { walletAddress } from '../lib/chain.js'
 
 const API_URL = 'http://localhost:8545'
-const GRAFANA_URL = 'http://localhost:3000/d/validator-onboarding/validator-onboarding'
+const GRAFANA_URL = 'http://localhost:3002/d/validator-onboarding/validator-onboarding'
 const ONBOARDING_DOC = 'https://github.com/fewzfewz/scratchBlockchain/blob/main/docs/validator-onboarding.md'
 
 const CHECKS = [
@@ -19,7 +20,7 @@ const CHECKS = [
 export default function ValidatorOnboardPage() {
   const [results, setResults] = useState({})
   const [loading, setLoading] = useState(false)
-  const [registerAddr, setRegisterAddr] = useState('')
+  const [registerAddr, setRegisterAddr] = useState(walletAddress())
   const [registerMsg, setRegisterMsg] = useState('')
 
   const runChecks = async () => {
@@ -42,8 +43,22 @@ export default function ValidatorOnboardPage() {
   }, [])
 
   const registerValidator = async () => {
+    const myAddr = walletAddress()
+    if (!myAddr) {
+      setRegisterMsg('Create a wallet on /wallet first — you can only register yourself as a validator.')
+      return
+    }
     if (!registerAddr) {
-      setRegisterMsg('Enter a validator address (0x...)')
+      setRegisterMsg('Enter your validator address (0x...)')
+      return
+    }
+    if (registerAddr.toLowerCase() !== myAddr.toLowerCase()) {
+      setRegisterMsg('You can only register your own wallet address as a validator.')
+      return
+    }
+    const pub = localStorage.getItem('nebula_wallet_pub')
+    if (!pub) {
+      setRegisterMsg('Missing wallet public key — regenerate your wallet on /wallet.')
       return
     }
     try {
@@ -52,7 +67,7 @@ export default function ValidatorOnboardPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           address: registerAddr,
-          public_key: registerAddr,
+          public_key: pub,
           stake: '1000000000000000000',
           commission_rate: 10,
         }),
@@ -131,12 +146,12 @@ export default function ValidatorOnboardPage() {
             <input
               value={registerAddr}
               onChange={(e) => setRegisterAddr(e.target.value)}
-              placeholder="Validator address 0x..."
+              placeholder="Your wallet address 0x..."
               className="w-full px-3 py-2 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm font-mono mb-3"
             />
             <button onClick={registerValidator}
               className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-medium">
-              POST /validators/register
+              Register my wallet as validator
             </button>
             {registerMsg && <p className="text-xs mt-2 text-slate-500 dark:text-slate-400">{registerMsg}</p>}
             <div className="mt-4 flex flex-wrap gap-2">

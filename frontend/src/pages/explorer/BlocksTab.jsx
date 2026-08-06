@@ -9,7 +9,7 @@ const toHex = (arr) => {
   if (!arr) return '--'
   const bytes = Array.isArray(arr) ? arr : []
   if (bytes.length === 0) return '0x00'
-  return '0x' + bytes.map(b => String(b & 0xff).padStart(2, '0')).join('')
+  return '0x' + bytes.map(b => (b & 0xff).toString(16).padStart(2, '0')).join('')
 }
 const shorten = (s, n = 16) => !s || s === '0x00' ? '--' : `${s.slice(0, n)}...${s.slice(-8)}`
 

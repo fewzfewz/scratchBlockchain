@@ -18,8 +18,8 @@ pub mod slashing;
 pub use bft::{BftEngine, BftEvent};
 pub use common::consensus_types::ValidatorInfo;
 use common::traits::Consensus;
-use common::types::{Block, Header};
-use ed25519_dalek::Verifier;
+use common::types::{Block, Hash, Header};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -516,6 +516,34 @@ impl EnhancedConsensus {
         self.validators.contains(pubkey)
     }
 
+    /// Find which known validator's key verifies a header signature.
+    pub fn recover_signer(
+        validators: &HashSet<Vec<u8>>,
+        message: &Hash,
+        signature: &ed25519_dalek::Signature,
+    ) -> Option<Vec<u8>> {
+        for validator_pubkey in validators {
+            if let Ok(key_bytes) = validator_pubkey.as_slice().try_into() {
+                if let Ok(verifying_key) = VerifyingKey::from_bytes(key_bytes) {
+                    if verifying_key.verify(message, signature).is_ok() {
+                        return Some(validator_pubkey.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Return the public key of the validator that signed this block header.
+    pub fn verify_block_author(&self, block: &Block) -> Option<Vec<u8>> {
+        if block.header.signature.is_empty() || block.header.signature.len() != 64 {
+            return None;
+        }
+        let signature = ed25519_dalek::Signature::from_slice(&block.header.signature).ok()?;
+        let message = block.header.hash();
+        Self::recover_signer(&self.validators, &message, &signature)
+    }
+
     /// Get liveness status of validators
     pub fn get_liveness(&self, current_height: u64, max_missed: u64) -> Vec<&Vec<u8>> {
         let mut offline = Vec::new();
@@ -557,24 +585,10 @@ impl Consensus for EnhancedConsensus {
         }
 
         // Verify the signature against known validators
-        use ed25519_dalek::{Signature, VerifyingKey};
-
         let signature = Signature::from_slice(&header.signature)?;
         let message = header.hash();
 
-        let mut verified = false;
-        for validator_pubkey in &self.validators {
-            if let Ok(verifying_key) =
-                VerifyingKey::from_bytes(validator_pubkey.as_slice().try_into()?)
-            {
-                if verifying_key.verify(&message, &signature).is_ok() {
-                    verified = true;
-                    break;
-                }
-            }
-        }
-
-        if !verified {
+        if Self::recover_signer(&self.validators, &message, &signature).is_none() {
             return Err("Invalid signature or unknown validator".into());
         }
 

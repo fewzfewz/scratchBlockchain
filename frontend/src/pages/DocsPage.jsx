@@ -535,7 +535,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
     "value": 1000000000000000000,
     "gas_limit": 21000,
     "max_fee_per_gas": 1000000000,
-    "max_priority_fee_per_gas": 100000000,
+    "max_priority_fee_per_gas": 1000000000,
     "payload": [],
     "chain_id": 1,
     "signature": [1,2,...]
@@ -569,7 +569,7 @@ Private key:  0xdeadbeef... (64 bytes, keep secret!)`} />
                   { method: 'GET', path: '/mempool', desc: 'Pending transactions in the mempool queue.', real: '{"size":0,"transactions":[]}' },
                   { method: 'GET', path: '/gas_price', desc: 'EIP-1559 gas price suggestions (base + 3 priority tiers).', real: '{"base_fee":"1000000000","suggested_priority_fee_low":"1000000000","suggested_priority_fee_medium":"2000000000","suggested_priority_fee_high":"5000000000","block_height":0}' },
                   { method: 'GET', path: '/fee_history/{count}', desc: 'Historical base fee and gas used ratio for last N blocks (max 100).', real: '{"base_fee_per_gas":[],"gas_used_ratio":[],"oldest_block":0}' },
-                  { method: 'POST', path: '/estimate_gas', desc: 'Estimate gas for a transaction. Body: {from, to, data}.', real: '{"estimated_gas":23100,"base_fee":"1000000000","total_cost_estimate":"23100000000000","estimated_priority_fee":"100000000"}' },
+                  { method: 'POST', path: '/estimate_gas', desc: 'Estimate gas for a transaction. Body: {from, to, data}.', real: '{"estimated_gas":23100,"base_fee":"1000000000","total_cost_estimate":"23100000000000","estimated_priority_fee":"1000000000"}' },
                   { method: 'GET', path: '/validators', desc: 'Active validator set from on-chain state.', real: '{"validators":[],"count":0}' },
                   { method: 'GET', path: '/delegations/{address}', desc: 'Staking delegations for an address.', real: '{"delegations":[],"address":"0x..."}' },
                   { method: 'GET', path: '/governance', desc: 'On-chain governance state: proposals, treasury, parameters.', real: '{"params":{...},"treasury":{...},"proposals":[]}' },

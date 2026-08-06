@@ -349,6 +349,63 @@ fn parse_stake_value(v: &serde_json::Value) -> u128 {
     }
 }
 
+/// Record block production stats for the finalized block at `height`.
+///
+/// - Increments `blocks_produced` for the actual proposer (matched by public key).
+/// - Increments `blocks_missed` for the validator the deterministic round-0
+///   leader schedule expected to propose this height but did not.
+pub async fn record_block_stats(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+    height: u64,
+    proposer_pubkey: &[u8],
+) -> Result<(), String> {
+    let mut validators = load_validators(trie).await?;
+    if validators.is_empty() {
+        return Ok(());
+    }
+    let proposer_hex = hex::encode(proposer_pubkey);
+    let expected = expected_round0_proposer(&validators, height);
+
+    for entry in validators.iter_mut() {
+        if entry.public_key.eq_ignore_ascii_case(&proposer_hex) {
+            entry.blocks_produced = entry.blocks_produced.saturating_add(1);
+        }
+    }
+    if let Some(expected_pubkey) = expected {
+        if !expected_pubkey.eq_ignore_ascii_case(&proposer_hex) {
+            if let Some(entry) = validators
+                .iter_mut()
+                .find(|v| v.public_key.eq_ignore_ascii_case(&expected_pubkey))
+            {
+                entry.blocks_missed = entry.blocks_missed.saturating_add(1);
+            }
+        }
+    }
+    persist_validators(trie, &validators).await
+}
+
+/// Deterministic round-0 proposer for a height, mirroring BFT's `select_proposer`
+/// (sorted public keys, index = LE u64 of SHA-256(height || 0) mod n).
+fn expected_round0_proposer(validators: &[ValidatorEntry], height: u64) -> Option<String> {
+    let mut pubkeys: Vec<&str> = validators
+        .iter()
+        .filter(|v| v.is_active && !v.public_key.is_empty())
+        .map(|v| v.public_key.as_str())
+        .collect();
+    if pubkeys.is_empty() {
+        return None;
+    }
+    pubkeys.sort();
+
+    let mut seed_input = Vec::with_capacity(16);
+    seed_input.extend_from_slice(&height.to_le_bytes());
+    seed_input.extend_from_slice(&0u64.to_le_bytes());
+    let seed = common::crypto::hash(&seed_input);
+    let index =
+        u64::from_le_bytes(seed[..8].try_into().unwrap_or([0u8; 8])) as usize % pubkeys.len();
+    Some(pubkeys[index].to_string())
+}
+
 /// Load active validators for BFT / finality hot-reload (stake + delegated).
 pub async fn load_consensus_validators(
     trie: &Arc<Mutex<PatriciaTrie>>,
