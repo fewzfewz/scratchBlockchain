@@ -42,7 +42,7 @@ const sha256 = async (data) => new Uint8Array(await crypto.subtle.digest('SHA-25
 
 export async function deriveAddress(pubBytes) {
   const hash = await sha256(pubBytes)
-  return toHex(hash.slice(0, 20))
+  return toHex(hash.slice(-20))
 }
 
 export async function hashAddress(label) {
@@ -133,7 +133,8 @@ export function loadWalletKeyPair() {
 }
 
 export function walletAddress() {
-  return localStorage.getItem('nebula_wallet_addr') || ''
+  const a = localStorage.getItem('nebula_wallet_addr') || ''
+  return a ? (a.startsWith('0x') ? a : '0x' + a) : ''
 }
 
 export async function txHash(tx) {
@@ -181,7 +182,7 @@ export async function buildSignedTx({ from, to, valueWei, payload = [], gasLimit
     value: Number(valueWei),
     gas_limit: gasLimit,
     max_fee_per_gas: 1e9,
-    max_priority_fee_per_gas: 1e8,
+    max_priority_fee_per_gas: 1e9,
     payload: Array.isArray(payload) ? payload : Array.from(fromHex(String(payload).replace(/^0x/, ''))),
     chain_id: chainId,
     signature: [],

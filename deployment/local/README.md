@@ -29,7 +29,7 @@ This will:
 | **8545** | Nebula RPC (validator1 — use this in the wallet) |
 | **8546–8549** | Other node RPC ports |
 | **9545** | Hardhat / Ethereum (Bridge.sol) |
-| **3000** | Grafana (`admin` / `admin`) |
+| **3002** | Grafana (`admin` / `admin`) |
 | **9095** | Prometheus |
 | **80** | nginx gateway |
 

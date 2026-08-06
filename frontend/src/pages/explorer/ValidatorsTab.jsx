@@ -4,7 +4,7 @@ import { Cpu, ArrowLeft, ShieldCheck, Clock, Coins, Users, Wallet, TrendingUp, P
 const API_URL = 'http://localhost:8545'
 const shorten = (v, s = 10, e = 8) => !v ? '--' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}...${v.slice(-e)}`
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
-const fmtStake = (s) => !s ? '--' : `${Number(s).toLocaleString()} NBL`
+const fmtStake = (s) => !s || isNaN(Number(s)) ? '--' : `${(Number(s) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 2 })} NBL`
 
 const RANK_COLORS = ['from-amber-400 to-yellow-500', 'from-slate-300 to-slate-400', 'from-orange-400 to-red-400']
 

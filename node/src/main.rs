@@ -713,7 +713,7 @@ impl Node {
                     .await?;
             }
 
-            BftEvent::FinalizeBlock(block) => {
+            BftEvent::FinalizeBlock(block, proposer) => {
                 info!("🔒 Finalizing block at height {}", block.header.slot);
                 self.last_finalize_at = Instant::now();
 
@@ -733,8 +733,18 @@ impl Node {
                 // Get voters (simplified - in production, get from consensus)
                 let voters: Vec<Vec<u8>> = vec![];
 
+                // Track per-validator block production stats in the state trie
+                if let Err(e) = node::governance_store::record_block_stats(
+                    &self.state_trie,
+                    block.header.slot,
+                    &proposer,
+                )
+                .await
+                {
+                    warn!("Error recording block stats: {}", e);
+                }
+
                 // Process rewards
-                let proposer = block.header.validator_set_id.to_le_bytes().to_vec();
                 let rewards = {
                     let mut rm = self.reward_manager.lock().await;
                     rm.process_block(&block, proposer, &voters, total_fees)
@@ -1007,6 +1017,7 @@ impl Node {
             warn!("Invalid block: {}", e);
             return Err(format!("Invalid block: {}", e).into());
         }
+        let proposer = consensus.verify_block_author(block);
 
         // Execute block
         let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
@@ -1046,12 +1057,25 @@ impl Node {
             }
         }
 
+        // Track per-validator block production stats in the state trie
+        if let Some(pubkey) = &proposer {
+            if let Err(e) = node::governance_store::record_block_stats(
+                &self.state_trie,
+                block.header.slot,
+                pubkey,
+            )
+            .await
+            {
+                warn!("Error recording block stats: {}", e);
+            }
+        }
+
         // Process rewards
         let total_fees: u64 = receipts
             .iter()
             .map(|r| r.gas_used * block.header.base_fee)
             .sum();
-        let proposer = block.header.validator_set_id.to_le_bytes().to_vec();
+        let proposer = proposer.unwrap_or_default();
         let voters = vec![];
 
         let rewards = {
@@ -1373,12 +1397,14 @@ impl Node {
         validator: &[u8],
         amount: u64,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let address = if validator.len() >= 20 {
+        let address = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(validator);
+            let digest = hasher.finalize();
             let mut addr = [0u8; 20];
-            addr.copy_from_slice(&validator[..20]);
+            addr.copy_from_slice(&digest[digest.len() - 20..]);
             addr
-        } else {
-            [0u8; 20]
         };
 
         let mut trie = self.state_trie.lock().await;

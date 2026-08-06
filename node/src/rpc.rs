@@ -1228,7 +1228,7 @@ async fn handle_estimate_gas(
         .unwrap_or(1_000_000_000);
 
     let total_cost = estimated_gas as u128 * max_fee;
-    let estimated_priority = (max_fee / 10) as u64; // 10% of max fee as priority
+    let estimated_priority = (max_fee / 2).max(1_000_000_000) as u64; // ≥ mempool min_fee_per_gas
 
     let response = EstimateGasResponse {
         estimated_gas,

@@ -335,6 +335,7 @@ impl NetworkService {
             kademlia,
             request_response,
             connection_limits: connection_limits::Behaviour::new(connection_limits_config),
+            ping: libp2p::ping::Behaviour::default(),
         };
 
         // Create the swarm
@@ -487,6 +488,11 @@ impl NetworkService {
             SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::Kademlia(event)) => {
                 debug!("🔍 Kademlia event: {:?}", event);
             }
+
+            // ================================================================
+            // Ping Events (connection keep-alive)
+            // ================================================================
+            SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::Ping(_)) => {}
 
             // ================================================================
             // Request-Response Events (block synchronization)

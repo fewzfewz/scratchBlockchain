@@ -28,7 +28,8 @@ impl Default for TimeoutConfig {
 pub enum BftEvent {
     BroadcastVote(Vote),
     BroadcastProposal(Proposal),
-    FinalizeBlock(Block),
+    /// Block finalized by BFT quorum, plus the proposer's ed25519 public key.
+    FinalizeBlock(Block, Vec<u8>),
     NewRound(u64, u64),
     Timeout(Step),
 }
@@ -350,7 +351,10 @@ impl BftEngine {
                 if let Some(proposal) = &self.proposal {
                     if proposal.block.hash() == hash {
                         self.step = Step::Commit;
-                        events.push(BftEvent::FinalizeBlock(proposal.block.clone()));
+                        events.push(BftEvent::FinalizeBlock(
+                            proposal.block.clone(),
+                            proposal.proposer.clone(),
+                        ));
 
                         self.height += 1;
                         self.round = 0;
@@ -623,7 +627,7 @@ mod tests {
             .any(|e| matches!(e, BftEvent::BroadcastVote(v) if v.step == Step::Precommit)));
         assert!(events
             .iter()
-            .any(|e| matches!(e, BftEvent::FinalizeBlock(_))));
+            .any(|e| matches!(e, BftEvent::FinalizeBlock(_, _))));
         assert!(events.iter().any(|e| matches!(e, BftEvent::NewRound(_, _))));
 
         assert_eq!(engine.height, 2);

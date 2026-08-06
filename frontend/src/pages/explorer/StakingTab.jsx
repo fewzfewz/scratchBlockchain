@@ -3,7 +3,7 @@ import { Users, Coins, Percent, TrendingUp, Search, Inbox, Cpu } from 'lucide-re
 
 const API_URL = 'http://localhost:8545'
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
-const fmtStake = (s) => !s ? '--' : `${Number(s).toLocaleString()} NBL`
+const fmtStake = (s) => !s || isNaN(Number(s)) ? '--' : `${(Number(s) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 2 })} NBL`
 const shorten = (v, s = 12, e = 10) => !v ? '--' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}...${v.slice(-e)}`
 
 export default function StakingTab() {

@@ -1,0 +1,140 @@
+{
+  "uid": "validator-onboarding",
+  "title": "Validator Onboarding",
+  "tags": ["nebula", "validator"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Block Height",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
+      "id": 1,
+      "targets": [
+        { "expr": "max(blockchain_blocks_total)", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Finalized Height",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
+      "id": 2,
+      "targets": [
+        { "expr": "max(blockchain_finalized_height)", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Validators",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "id": 3,
+      "targets": [
+        { "expr": "max(blockchain_validator_count)", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Total Staked (NBL)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "id": 4,
+      "targets": [
+        { "expr": "sum(blockchain_validator_stake_total) / 1e18", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "TPS",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "id": 5,
+      "targets": [
+        { "expr": "max(blockchain_tps)", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Mempool Size",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "id": 6,
+      "targets": [
+        { "expr": "max(blockchain_mempool_size)", "refId": "A" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Block Height per Node",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "id": 7,
+      "targets": [
+        { "expr": "blockchain_blocks_total", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Block Latency (ms)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "id": 8,
+      "targets": [
+        { "expr": "blockchain_block_latency_ms", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Transactions (cumulative)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "id": 9,
+      "targets": [
+        { "expr": "sum by (job) (rate(blockchain_transactions_total[1m]))", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Peer Count",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "id": 10,
+      "targets": [
+        { "expr": "blockchain_peer_count", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Consensus Round",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "id": 11,
+      "targets": [
+        { "expr": "blockchain_consensus_round", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Stake per Node (NBL)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "id": 12,
+      "targets": [
+        { "expr": "blockchain_validator_stake_total / 1e18", "legendFormat": "{{job}}", "refId": "A" }
+      ]
+    }
+  ],
+  "time": { "from": "now-30m", "to": "now" },
+  "timepicker": {},
+  "templating": { "list": [] }
+}

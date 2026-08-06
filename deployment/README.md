@@ -10,7 +10,7 @@ Infrastructure-as-code for local and cloud deployments of the Modular Blockchain
 | WebSocket | `ws://localhost:8545/ws` |
 | Frontend | `http://localhost:5173` |
 | Prometheus | `http://localhost:9095` |
-| Grafana | `http://localhost:3000` |
+| Grafana | `http://localhost:3002` (or `http://localhost/grafana/` via nginx) |
 
 ```bash
 cd deployment/local && docker-compose up -d

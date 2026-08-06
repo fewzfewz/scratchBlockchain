@@ -19,8 +19,10 @@ const TEST_ADDRESSES = [
 
 const addrFromPub = async (pubBytes) => {
   const hash = await crypto.subtle.digest('SHA-256', pubBytes)
-  return new Uint8Array(hash.slice(0, 20))
+  return new Uint8Array(hash.slice(-20))
 }
+
+const normAddr = (a) => (a && a.startsWith('0x') ? a : '0x' + (a || ''))
 
 const inputCls = 'w-full px-3 py-2.5 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40'
 const iconBtnCls = 'p-2 rounded-xl bg-slate-200/50 dark:bg-slate-700/50 border border-slate-300/50 dark:border-slate-600/50 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white hover:bg-slate-300/50 dark:hover:bg-slate-600/50 transition-colors'
@@ -85,7 +87,7 @@ export default function WalletPage() {
     if (!address) return
     setHistoryLoading(true)
     try {
-      const r = await window.fetch(`${apiUrl}/txs/${address}?limit=25`)
+      const r = await window.fetch(`${apiUrl}/txs/${address.replace(/^0x/, '')}?limit=25`)
       if (!r.ok) return
       const d = await r.json()
       const chain = (d.transactions || []).map((t) => ({
@@ -135,7 +137,7 @@ export default function WalletPage() {
     if (!saved[idx]) return
     const acc = saved[idx]
     const kp = { publicKey: fromHex(acc.pub), secretKey: fromHex(acc.priv) }
-    setKeyPair(kp); setPubKey(acc.pub); setAddress(acc.addr); setPrivKey(acc.priv)
+    setKeyPair(kp); setPubKey(acc.pub); setAddress(normAddr(acc.addr)); setPrivKey(acc.priv)
     setActiveAccountIdx(idx)
     localStorage.setItem('nebula_wallet_pub', acc.pub)
     localStorage.setItem('nebula_wallet_priv', acc.priv)
@@ -171,7 +173,7 @@ export default function WalletPage() {
       const pub = toHex(kp.publicKey)
       const priv = toHex(kp.secretKey)
       const addrBytes = await addrFromPub(kp.publicKey)
-      const addr = toHex(addrBytes)
+      const addr = '0x' + toHex(addrBytes)
       setKeyPair(kp); setPubKey(pub); setAddress(addr); setPrivKey(priv)
       localStorage.setItem('nebula_wallet_priv', priv)
       localStorage.setItem('nebula_wallet_pub', pub)
@@ -188,7 +190,7 @@ export default function WalletPage() {
       const acc = saved[active] || saved[0]
       try {
         const kp = { publicKey: fromHex(acc.pub), secretKey: fromHex(acc.priv) }
-        setKeyPair(kp); setPubKey(acc.pub); setAddress(acc.addr); setPrivKey(acc.priv)
+        setKeyPair(kp); setPubKey(acc.pub); setAddress(normAddr(acc.addr)); setPrivKey(acc.priv)
         setActiveAccountIdx(saved.indexOf(acc))
         return
       } catch {}
@@ -200,7 +202,7 @@ export default function WalletPage() {
     if (!priv || !pub) return
     try {
       const kp = { publicKey: fromHex(pub), secretKey: fromHex(priv) }
-      if (!addr) { const addrBytes = await addrFromPub(kp.publicKey); addr = toHex(addrBytes); localStorage.setItem('nebula_wallet_addr', addr) }
+      if (!addr) { const addrBytes = await addrFromPub(kp.publicKey); addr = '0x' + toHex(addrBytes); localStorage.setItem('nebula_wallet_addr', addr) }
       setKeyPair(kp); setPubKey(pub); setAddress(addr); setPrivKey(priv)
       saveAccount('Account 1', pub, priv, addr)
     } catch { localStorage.removeItem('nebula_wallet_priv'); localStorage.removeItem('nebula_wallet_pub') }
@@ -227,7 +229,7 @@ export default function WalletPage() {
   const fetchNonce = async () => {
     if (!keyPair || !address) return 0
     try {
-      const r = await window.fetch(`${apiUrl}/balance/${address}`)
+      const r = await window.fetch(`${apiUrl}/balance/${address.replace(/^0x/, '')}`)
       if (r.ok) { const d = await r.json(); setNonce(d.nonce || 0); return d.nonce || 0 }
     } catch { /* ignore */ }
     return 0
@@ -236,7 +238,7 @@ export default function WalletPage() {
   const updateBalance = useCallback(async () => {
     if (!keyPair || !address) { setBalance('0.0000'); return }
     try {
-      const r = await window.fetch(`${apiUrl}/balance/${address}`)
+      const r = await window.fetch(`${apiUrl}/balance/${address.replace(/^0x/, '')}`)
       if (r.ok) { const d = await r.json(); setBalance(weiToNbl(d.balance || '0')) }
       else setBalance('0.0000')
     } catch { setBalance('?') }
@@ -260,10 +262,10 @@ export default function WalletPage() {
   const createTx = (to, amt, nonceVal) => {
     const amountInWei = Math.floor(parseFloat(amt) * 1e18)
     return {
-      sender: Array.from(fromHex(address)),
+      sender: Array.from(fromHex(address.replace(/^0x/, ''))),
       to: Array.from(fromHex(to.replace('0x', ''))),
       nonce: nonceVal, value: amountInWei,
-      gas_limit: gasLimit, max_fee_per_gas: 1e9, max_priority_fee_per_gas: 1e8,
+      gas_limit: gasLimit, max_fee_per_gas: 1e9, max_priority_fee_per_gas: 1e9,
       payload: [], chain_id: 1, signature: [],
     }
   }
