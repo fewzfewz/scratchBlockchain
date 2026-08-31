@@ -47,7 +47,7 @@ const govTxHash = async (tx) => {
   if (tx.chain_id) { const cb = new Uint8Array(8); new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true); ap(cb) }
   if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)));
   const vb = new Uint8Array(8); new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true); ap(vb);
-  return await sha256b(await sha256b(h));
+  return await sha256b(h);
 };
 
 const buildGovTx = (wallet, payloadObj, nonceVal) => ({
@@ -58,7 +58,7 @@ const buildGovTx = (wallet, payloadObj, nonceVal) => ({
   gas_limit: 21000,
   max_fee_per_gas: 1e9,
   max_priority_fee_per_gas: 1e9,
-  payload: Array.from(new TextEncoder().encode(JSON.stringify(payloadObj))),
+  payload: [...Array.from(wallet.publicKey), ...Array.from(new TextEncoder().encode(JSON.stringify(payloadObj)))],
   chain_id: 1,
   signature: [],
 });
@@ -79,8 +79,13 @@ async function submitGovTx(wallet, payloadObj, apiUrl) {
     body: JSON.stringify(tx),
   });
   const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = null; }
+  if (data?.status?.startsWith("error")) throw new Error(data.status);
   if (!res.ok) throw new Error(text);
-  return text.replace(/^"|"$/g, "");
+  const hash = data?.hash || text.replace(/^"|"$/g, "");
+  if (!hash) throw new Error("No transaction hash returned");
+  return hash;
 }
 
 function mapProposals(raw, deposit) {

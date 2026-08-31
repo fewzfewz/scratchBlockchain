@@ -100,7 +100,7 @@ export default function ContractDeployPage() {
     const vb = new Uint8Array(8)
     new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true)
     ap(vb)
-    return await sha256(await sha256(h))
+    return await sha256(h)
   }
 
   const fetchNonce = async () => {
@@ -159,7 +159,8 @@ export default function ContractDeployPage() {
     try {
       showMsg('Preparing deployment transaction...', 'info')
       const nonce = await fetchNonce()
-      const payload = Array.from(fromHex(clean))
+      const bytecodePayload = Array.from(fromHex(clean))
+      const payload = [...Array.from(keyPair.publicKey), ...bytecodePayload]
       const tx = {
         sender: Array.from(fromHex(address.replace('0x', ''))),
         nonce,
@@ -181,12 +182,21 @@ export default function ContractDeployPage() {
         body: JSON.stringify(tx),
       })
       const text = await r.text()
+      let data
+      try { data = JSON.parse(text) } catch { data = null }
+      if (data?.status?.startsWith('error')) {
+        showMsg('Deploy failed: ' + data.status, 'error')
+        return
+      }
       if (!r.ok) {
         showMsg('Deploy failed: ' + text, 'error')
         return
       }
-
-      const hash = text.replace(/^"|"$/g, '')
+      const hash = data?.hash || text.replace(/^"|"$/g, '')
+      if (!hash) {
+        showMsg('Deploy failed: no hash returned', 'error')
+        return
+      }
       showMsg(`Deploy tx sent: ${hash.slice(0, 10)}...`, 'success')
 
       setTimeout(async () => {

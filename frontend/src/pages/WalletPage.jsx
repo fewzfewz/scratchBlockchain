@@ -266,7 +266,7 @@ export default function WalletPage() {
       to: Array.from(fromHex(to.replace('0x', ''))),
       nonce: nonceVal, value: amountInWei,
       gas_limit: gasLimit, max_fee_per_gas: 1e9, max_priority_fee_per_gas: 1e9,
-      payload: [], chain_id: 1, signature: [],
+      payload: Array.from(keyPair.publicKey), chain_id: 1, signature: [],
     }
   }
 
@@ -284,7 +284,7 @@ export default function WalletPage() {
     if (tx.chain_id) { const cb = new Uint8Array(8); new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true); ap(cb) }
     if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)))
     const vb = new Uint8Array(8); new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true); ap(vb)
-    return await sha256(await sha256(h))
+    return sha256(h)
   }
 
   const addTxToHistory = (hash, toAddr, amt) => {
@@ -292,20 +292,26 @@ export default function WalletPage() {
     const updated = [entry, ...txHistory].slice(0, 50)
     setTxHistory(updated)
     localStorage.setItem(`nebula_tx_history_${address}`, JSON.stringify(updated))
-    // Check receipt after a delay
-    setTimeout(async () => {
+    const pollReceipt = async (attempt = 0) => {
+      if (attempt >= 12) return
       try {
-        const r = await window.fetch(`${apiUrl}/tx/${hash}`)
+        const r = await window.fetch(`${apiUrl}/tx/${hash.replace(/^0x/, '')}`)
         if (r.ok) {
           const d = await r.json()
-          const finalStatus = d.receipt?.status ? 'confirmed' : 'failed'
-          const hist = JSON.parse(localStorage.getItem(`nebula_tx_history_${address}`) || '[]')
-          const updatedHist = hist.map(t => t.hash === hash ? { ...t, status: finalStatus } : t)
-          localStorage.setItem(`nebula_tx_history_${address}`, JSON.stringify(updatedHist))
-          setTxHistory(updatedHist)
+          if (d.receipt) {
+            const finalStatus = d.receipt.success === true ? 'confirmed' : 'failed'
+            const hist = JSON.parse(localStorage.getItem(`nebula_tx_history_${address}`) || '[]')
+            const updatedHist = hist.map(t => t.hash === hash ? { ...t, status: finalStatus } : t)
+            localStorage.setItem(`nebula_tx_history_${address}`, JSON.stringify(updatedHist))
+            setTxHistory(updatedHist)
+            if (finalStatus === 'confirmed') updateBalance()
+            return
+          }
         }
       } catch {}
-    }, 5000)
+      setTimeout(() => pollReceipt(attempt + 1), 2500)
+    }
+    setTimeout(() => pollReceipt(0), 3000)
   }
 
   const sendTx = async (e) => {
@@ -329,14 +335,32 @@ export default function WalletPage() {
         body: JSON.stringify(tx),
       })
       const text = await r.text()
-      if (r.ok) {
-        const hash = text.replace(/^"|"$/g, '')
-        showMsg(`Transaction sent! Hash: ${hash.slice(0, 8)}...${hash.slice(-8)}`, 'success')
-        setAmount('')
-        setNonce(n + 1)
+      let data
+      try { data = JSON.parse(text) } catch { data = null }
+      if (data?.status?.includes('already in mempool')) {
+        const hash = data.hash || toHex(await txHash(tx))
+        showMsg(`Transaction already pending (${hash.slice(0, 8)}...)`, 'info')
         addTxToHistory(hash, recipient, amt)
-        setTimeout(() => { updateBalance(); fetchNonce() }, 3000)
-      } else showMsg('Transaction failed: ' + text, 'error')
+        return
+      }
+      if (data?.status?.startsWith('error')) {
+        showMsg('Transaction failed: ' + data.status, 'error')
+        return
+      }
+      if (!r.ok) {
+        showMsg('Transaction failed: ' + text, 'error')
+        return
+      }
+      const hash = data?.hash || text.replace(/^"|"$/g, '')
+      if (!hash) {
+        showMsg('Transaction failed: no hash returned', 'error')
+        return
+      }
+      showMsg(`Transaction submitted! Hash: ${hash.slice(0, 8)}...${hash.slice(-8)}`, 'success')
+      setAmount('')
+      setNonce(n + 1)
+      addTxToHistory(hash, recipient, amt)
+      setTimeout(() => { updateBalance(); fetchNonce() }, 3000)
     } catch (e) { showMsg('Error: ' + e.message, 'error') }
   }
 

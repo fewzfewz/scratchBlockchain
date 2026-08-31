@@ -168,13 +168,22 @@ export async function txHash(tx) {
   const vb = new Uint8Array(8)
   new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true)
   ap(vb)
-  return sha256(await sha256(h))
+  return sha256(h)
+}
+
+/** Prepend Ed25519 public key — required by the native executor for signature verification. */
+export function payloadWithPubKey(pubKeyBytes, extra = []) {
+  const pub = Array.from(pubKeyBytes)
+  const rest = Array.isArray(extra) ? extra : Array.from(extra)
+  if (rest.length >= 32 && rest.slice(0, 32).every((b, i) => b === pub[i])) return rest
+  return [...pub, ...rest]
 }
 
 export async function buildSignedTx({ from, to, valueWei, payload = [], gasLimit = 21000, chainId = 1 }) {
   const kp = loadWalletKeyPair()
   if (!kp) throw new Error('No wallet — create one on /wallet')
   const { nonce } = await fetchBalance(from)
+  const extra = Array.isArray(payload) ? payload : Array.from(fromHex(String(payload).replace(/^0x/, '')))
   const tx = {
     sender: Array.from(fromHex(from.replace(/^0x/, ''))),
     to: to ? Array.from(fromHex(to.replace(/^0x/, ''))) : [],
@@ -183,13 +192,39 @@ export async function buildSignedTx({ from, to, valueWei, payload = [], gasLimit
     gas_limit: gasLimit,
     max_fee_per_gas: 1e9,
     max_priority_fee_per_gas: 1e9,
-    payload: Array.isArray(payload) ? payload : Array.from(fromHex(String(payload).replace(/^0x/, ''))),
+    payload: payloadWithPubKey(kp.publicKey, extra),
     chain_id: chainId,
     signature: [],
   }
   const msg = await txHash(tx)
   tx.signature = Array.from(nacl.sign.detached(msg, kp.secretKey))
   return tx
+}
+
+export function receiptStatus(receipt) {
+  if (!receipt) return 'pending'
+  if (receipt.success === true) return 'confirmed'
+  if (receipt.success === false) return 'failed'
+  return 'failed'
+}
+
+export function parseSubmitTxResponse(text, ok = true) {
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    if (!ok) throw new Error(text)
+    const hash = text.replace(/^"|"$/g, '')
+    if (!hash) throw new Error('Empty response from submit_tx')
+    return { status: 'success', hash }
+  }
+  if (data.status?.includes('already in mempool')) {
+    return { status: data.status, hash: data.hash || '', alreadyPending: true }
+  }
+  if (data.status?.startsWith('error')) throw new Error(data.status)
+  if (!ok) throw new Error(data.status || text)
+  if (!data.hash) throw new Error(data.status || 'No transaction hash returned')
+  return data
 }
 
 export async function submitTx(tx) {
@@ -199,8 +234,8 @@ export async function submitTx(tx) {
     body: JSON.stringify(tx),
   })
   const text = await r.text()
-  if (!r.ok) throw new Error(text)
-  return text.replace(/^"|"$/g, '')
+  const data = parseSubmitTxResponse(text, r.ok)
+  return data.hash
 }
 
 export async function signAndSubmit(opts) {

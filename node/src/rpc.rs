@@ -841,10 +841,18 @@ async fn handle_submit_tx(
                 hash: hex::encode(tx.hash()),
             }))
         }
-        Err(e) => Ok(warp::reply::json(&SubmitTxResponse {
-            status: format!("error: {}", e),
-            hash: String::new(),
-        })),
+        Err(e) => {
+            let msg = e.to_string();
+            let hash = if msg.contains("already in mempool") {
+                hex::encode(tx.hash())
+            } else {
+                String::new()
+            };
+            Ok(warp::reply::json(&SubmitTxResponse {
+                status: format!("error: {}", msg),
+                hash,
+            }))
+        }
     }
 }
 

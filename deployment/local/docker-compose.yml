@@ -312,7 +312,7 @@ services:
       - FAUCET_PORT=3006
       - RPC_URL=http://rpc1:8545
       - DRIP_AMOUNT=1000000000000000000000
-      - COOLDOWN_SECONDS=86400
+      - COOLDOWN_SECONDS=60
     volumes:
       - ../../target/release/node:/usr/local/bin/modular-node:ro
     command: ["faucet"]
