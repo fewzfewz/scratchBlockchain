@@ -179,6 +179,34 @@ export function payloadWithPubKey(pubKeyBytes, extra = []) {
   return [...pub, ...rest]
 }
 
+export async function buildSignedDeployTx({ keyPair, from, bytecodeHex, nonce, gasLimit = 500000, chainId = 1 }) {
+  const bytecodePayload = Array.from(fromHex(String(bytecodeHex).replace(/^0x/, '')))
+  const tx = {
+    sender: Array.from(fromHex(from.replace(/^0x/, ''))),
+    nonce,
+    value: 0,
+    gas_limit: gasLimit,
+    max_fee_per_gas: 1e9,
+    max_priority_fee_per_gas: 1e9,
+    payload: payloadWithPubKey(keyPair.publicKey, bytecodePayload),
+    chain_id: chainId,
+    signature: [],
+  }
+  const msg = await txHash(tx)
+  tx.signature = Array.from(nacl.sign.detached(msg, keyPair.secretKey))
+  return tx
+}
+
+export async function submitDeployTx(tx) {
+  const r = await window.fetch(`${getApiUrl()}/submit_tx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(tx),
+  })
+  const text = await r.text()
+  return parseSubmitTxResponse(text, r.ok)
+}
+
 export async function buildSignedTx({ from, to, valueWei, payload = [], gasLimit = 21000, chainId = 1 }) {
   const kp = loadWalletKeyPair()
   if (!kp) throw new Error('No wallet — create one on /wallet')

@@ -1,10 +1,17 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
-import { Rocket, Wallet, Copy, RefreshCw, FileCode, Fuel, CheckCircle, AlertCircle } from 'lucide-react'
-import { saveContract } from '../lib/chain.js'
+import { Rocket, Wallet, Copy, RefreshCw, FileCode, Fuel, CheckCircle, AlertCircle, BookOpen } from 'lucide-react'
+import {
+  saveContract,
+  buildSignedDeployTx,
+  submitDeployTx,
+  waitForReceipt,
+  receiptStatus,
+  getApiUrl,
+  txHash,
+} from '../lib/chain.js'
 
-const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => {
   const clean = hex.replace(/^0x/, '')
   const b = new Uint8Array(clean.length / 2)
@@ -29,7 +36,7 @@ const inputCls =
   'w-full px-3 py-2.5 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 font-mono'
 
 export default function ContractDeployPage() {
-  const [apiUrl] = useState(() => localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545')
+  const [apiUrl] = useState(getApiUrl)
   const [keyPair, setKeyPair] = useState(null)
   const [address, setAddress] = useState('')
   const [preset, setPreset] = useState('ERC20')
@@ -40,6 +47,7 @@ export default function ContractDeployPage() {
   const [statusType, setStatusType] = useState('')
   const [deployResult, setDeployResult] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [pendingHash, setPendingHash] = useState(null)
 
   useEffect(() => {
     const priv = localStorage.getItem('nebula_wallet_priv')
@@ -67,44 +75,8 @@ export default function ContractDeployPage() {
     setStatusType(type)
   }
 
-  const sha256 = async (data) => new Uint8Array(await crypto.subtle.digest('SHA-256', data))
-
-  const txHash = async (tx) => {
-    let h = new Uint8Array(0)
-    const ap = (b) => {
-      const a = new Uint8Array(h.length + b.length)
-      a.set(h)
-      a.set(b, h.length)
-      h = a
-    }
-    ap(new Uint8Array(tx.sender.slice(0, 20)))
-    const nb = new Uint8Array(8)
-    new DataView(nb.buffer).setBigUint64(0, BigInt(tx.nonce), true)
-    ap(nb)
-    ap(new Uint8Array(tx.payload))
-    const gb = new Uint8Array(8)
-    new DataView(gb.buffer).setBigUint64(0, BigInt(tx.gas_limit), true)
-    ap(gb)
-    const fb = new Uint8Array(8)
-    new DataView(fb.buffer).setBigUint64(0, BigInt(tx.max_fee_per_gas), true)
-    ap(fb)
-    const pb = new Uint8Array(8)
-    new DataView(pb.buffer).setBigUint64(0, BigInt(tx.max_priority_fee_per_gas), true)
-    ap(pb)
-    if (tx.chain_id) {
-      const cb = new Uint8Array(8)
-      new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true)
-      ap(cb)
-    }
-    if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)))
-    const vb = new Uint8Array(8)
-    new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true)
-    ap(vb)
-    return await sha256(h)
-  }
-
   const fetchNonce = async () => {
-    const r = await window.fetch(`${apiUrl}/balance/${address}`)
+    const r = await window.fetch(`${apiUrl}/balance/${address.replace(/^0x/, '')}`)
     if (r.ok) {
       const d = await r.json()
       return d.nonce || 0
@@ -112,10 +84,38 @@ export default function ContractDeployPage() {
     return 0
   }
 
+  const pollReceipt = useCallback(async (hash) => {
+    setPendingHash(hash)
+    showMsg(`Deploy submitted — waiting for confirmation (${hash.slice(0, 10)}...)`, 'info')
+    const receipt = await waitForReceipt(hash, 20, 2500)
+    setPendingHash(null)
+    if (!receipt) {
+      showMsg('Deploy submitted but receipt not found yet — check History or retry later', 'info')
+      setDeployResult({ hash, receipt: null })
+      return
+    }
+    setDeployResult({ hash, receipt })
+    const addr = receipt?.contract_address || receipt?.created_address
+    if (receiptStatus(receipt) === 'confirmed' && addr) {
+      const full = String(addr).startsWith('0x') ? String(addr) : `0x${addr}`
+      saveContract({
+        address: full,
+        type: preset,
+        name: CONTRACT_PRESETS[preset]?.label || preset,
+        txHash: hash,
+      })
+      showMsg(`Contract deployed at ${full.slice(0, 10)}...`, 'success')
+    } else if (receiptStatus(receipt) === 'failed') {
+      showMsg(`Deploy failed on-chain: ${receipt.revert_reason || 'execution reverted'}`, 'error')
+    } else {
+      showMsg('Deploy transaction included but no contract address returned', 'info')
+    }
+  }, [preset])
+
   const estimateGas = async () => {
     if (!address || !bytecode) return
     try {
-      const payload = Array.from(fromHex(bytecode))
+      const payload = Array.from(fromHex(bytecode.replace(/^0x/, '')))
       const r = await window.fetch(`${apiUrl}/estimate_gas`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -149,6 +149,10 @@ export default function ContractDeployPage() {
       showMsg('Create or import a wallet on the Wallet page first', 'error')
       return
     }
+    if (loading || pendingHash) {
+      showMsg('A deploy is already in progress — wait for confirmation', 'info')
+      return
+    }
     const clean = bytecode.replace(/^0x/, '').trim()
     if (!clean || clean.length < 4) {
       showMsg('Enter valid contract bytecode', 'error')
@@ -159,71 +163,35 @@ export default function ContractDeployPage() {
     try {
       showMsg('Preparing deployment transaction...', 'info')
       const nonce = await fetchNonce()
-      const bytecodePayload = Array.from(fromHex(clean))
-      const payload = [...Array.from(keyPair.publicKey), ...bytecodePayload]
-      const tx = {
-        sender: Array.from(fromHex(address.replace('0x', ''))),
+      const tx = await buildSignedDeployTx({
+        keyPair,
+        from: address,
+        bytecodeHex: clean,
         nonce,
-        value: 0,
-        gas_limit: gasLimit,
-        max_fee_per_gas: 1e9,
-        max_priority_fee_per_gas: 1e9,
-        payload,
-        chain_id: 1,
-        signature: [],
-      }
-      const msg = await txHash(tx)
-      tx.signature = Array.from(nacl.sign.detached(msg, keyPair.secretKey))
+        gasLimit,
+      })
 
       showMsg('Submitting contract creation...', 'info')
-      const r = await window.fetch(`${apiUrl}/submit_tx`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(tx),
+      const data = await submitDeployTx(tx).catch(async (err) => {
+        if (String(err.message).includes('already in mempool')) {
+          const hashHex = Array.from(await txHash(tx)).map(b => b.toString(16).padStart(2, '0')).join('')
+          return { status: err.message, hash: hashHex, alreadyPending: true }
+        }
+        throw err
       })
-      const text = await r.text()
-      let data
-      try { data = JSON.parse(text) } catch { data = null }
-      if (data?.status?.startsWith('error')) {
-        showMsg('Deploy failed: ' + data.status, 'error')
+
+      if (data.alreadyPending) {
+        showMsg('Deploy already pending in mempool — tracking existing transaction', 'info')
+        await pollReceipt(data.hash)
         return
       }
-      if (!r.ok) {
-        showMsg('Deploy failed: ' + text, 'error')
-        return
-      }
-      const hash = data?.hash || text.replace(/^"|"$/g, '')
+
+      const hash = data.hash
       if (!hash) {
         showMsg('Deploy failed: no hash returned', 'error')
         return
       }
-      showMsg(`Deploy tx sent: ${hash.slice(0, 10)}...`, 'success')
-
-      setTimeout(async () => {
-        try {
-          const rr = await window.fetch(`${apiUrl}/tx/${hash}`)
-          if (rr.ok) {
-            const d = await rr.json()
-            const receipt = d.receipt
-            setDeployResult({ hash, receipt })
-            const addr =
-              receipt?.contract_address ||
-              receipt?.created_address
-            if (addr) {
-              const full = String(addr).startsWith('0x') ? String(addr) : `0x${addr}`
-              saveContract({
-                address: full,
-                type: preset,
-                name: CONTRACT_PRESETS[preset]?.label || preset,
-                txHash: hash,
-              })
-              showMsg('Contract deployed successfully!', 'success')
-            }
-          }
-        } catch {
-          /* receipt may not be indexed yet */
-        }
-      }, 5000)
+      await pollReceipt(hash)
     } catch (err) {
       showMsg('Error: ' + err.message, 'error')
     } finally {
@@ -249,6 +217,15 @@ export default function ContractDeployPage() {
           <p className="text-sm text-slate-500 dark:text-slate-400">
             Submit a contract-creation transaction via the node RPC
           </p>
+          <a
+            href="/docs/CONTRACT_DEPLOY.md"
+            target="_blank"
+            rel="noreferrer"
+            className="inline-flex items-center gap-1.5 mt-3 text-xs text-violet-500 hover:underline"
+          >
+            <BookOpen className="w-3.5 h-3.5" />
+            How contract deploy works (docs)
+          </a>
         </div>
 
         {!keyPair ? (
@@ -340,12 +317,16 @@ export default function ContractDeployPage() {
               <p className="text-xs text-emerald-600 dark:text-emerald-400">Estimated: {estimatedGas.toLocaleString()} gas</p>
             )}
 
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Clicking Deploy twice with the same nonce re-submits the identical transaction — the node rejects duplicates while the first is still pending. Wait for confirmation before deploying again.
+            </p>
+
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !!pendingHash}
               className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:opacity-90 text-white font-medium transition-all disabled:opacity-50"
             >
-              {loading ? 'Deploying...' : 'Deploy Contract'}
+              {loading || pendingHash ? 'Deploy in progress...' : 'Deploy Contract'}
             </button>
 
             {status && (
