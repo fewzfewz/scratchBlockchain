@@ -220,6 +220,19 @@ struct BridgeUnlockRequest {
     eth_bridge_address: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RuntimeProposeRequest {
+    spec_version: u32,
+    activation_height: u64,
+    code_hash: String,
+    proposer: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeApproveRequest {
+    proposal_id: u64,
+}
+
 #[derive(Debug, Serialize)]
 struct BridgeStatusResponse {
     vault_address: String,
@@ -627,6 +640,50 @@ impl RpcServer {
                 handle_proposal(id, state_trie, chain_store)
             });
 
+        // GET /runtime/version — active runtime version
+        let runtime_version = warp::path!("runtime" / "version")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and_then(|_, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                handle_runtime_version(state_trie).await
+            });
+
+        // GET /runtime/upgrades — pending runtime upgrade proposals
+        let runtime_upgrades = warp::path!("runtime" / "upgrades")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and_then(|_, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                handle_runtime_upgrades(state_trie).await
+            });
+
+        // POST /runtime/propose — propose a runtime upgrade (testnet admin)
+        let runtime_propose = warp::path!("runtime" / "propose")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(state_trie.clone()))
+            .and_then(
+                |_, req: RuntimeProposeRequest, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                    handle_runtime_propose(req, state_trie).await
+                },
+            );
+
+        // POST /runtime/approve — approve a pending runtime upgrade
+        let runtime_approve = warp::path!("runtime" / "approve")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(state_trie.clone()))
+            .and_then(
+                |_, req: RuntimeApproveRequest, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                    handle_runtime_approve(req, state_trie).await
+                },
+            );
+
         // POST /faucet/request - Request test tokens (directly credits the account)
         let faucet_request = warp::path!("faucet" / "request")
             .and(with_rate_limit.clone())
@@ -779,6 +836,10 @@ impl RpcServer {
             .or(delegations)
             .or(governance)
             .or(proposal_by_id)
+            .or(runtime_version)
+            .or(runtime_upgrades)
+            .or(runtime_propose)
+            .or(runtime_approve)
             .or(faucet_request)
             .or(deploy_wasm)
             .or(call_wasm)
@@ -1431,6 +1492,83 @@ async fn verify_eth_lock_tx(
         }
     }
     Ok(true)
+}
+
+async fn handle_runtime_version(
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    match crate::runtime_upgrade_store::current_version(&state_trie).await {
+        Ok(version) => Ok(warp::reply::json(&serde_json::json!({ "version": version }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn handle_runtime_upgrades(
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    match crate::runtime_upgrade_store::list_pending(&state_trie).await {
+        Ok(upgrades) => Ok(warp::reply::json(&serde_json::json!({ "upgrades": upgrades }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn handle_runtime_propose(
+    req: RuntimeProposeRequest,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    use crate::runtime_upgrade::RuntimeVersion;
+
+    let proposer = match parse_address_20(&req.proposer) {
+        Some(a) => a,
+        None => {
+            return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid proposer" })))
+        }
+    };
+    let hash_bytes = hex::decode(req.code_hash.trim_start_matches("0x")).unwrap_or_default();
+    if hash_bytes.len() != 32 {
+        return Ok(warp::reply::json(
+            &serde_json::json!({ "error": "code_hash must be 32 bytes" }),
+        ));
+    }
+    let mut code_hash = [0u8; 32];
+    code_hash.copy_from_slice(&hash_bytes);
+
+    let new_version = RuntimeVersion {
+        spec_name: "nebula".into(),
+        impl_name: "nebula-node".into(),
+        authoring_version: 1,
+        spec_version: req.spec_version,
+        impl_version: req.spec_version,
+    };
+
+    match crate::runtime_upgrade_store::propose_upgrade(
+        &state_trie,
+        new_version,
+        code_hash,
+        req.activation_height,
+        proposer,
+    )
+    .await
+    {
+        Ok(id) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "proposed",
+            "proposal_id": id,
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
+    }
+}
+
+async fn handle_runtime_approve(
+    req: RuntimeApproveRequest,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    match crate::runtime_upgrade_store::approve_upgrade(&state_trie, req.proposal_id).await {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "approved",
+            "proposal_id": req.proposal_id,
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
+    }
 }
 
 async fn credit_account_balance(

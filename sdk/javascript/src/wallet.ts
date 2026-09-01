@@ -172,6 +172,47 @@ export class ConnectedWallet {
     return await this.client.getNonce(this.address);
   }
 
+  /** Submit a signed governance action (propose / vote) via POST /submit_tx. */
+  async submitGovernanceAction(action: Record<string, unknown>): Promise<any> {
+    const nonce = await this.getNonce();
+    const pubKey = hexToBytes(this.wallet.getPublicKey());
+    const body = new TextEncoder().encode(JSON.stringify(action));
+    const payload = new Uint8Array(pubKey.length + body.length);
+    payload.set(pubKey, 0);
+    payload.set(body, pubKey.length);
+    return this.sendTransaction({
+      data: "0x" + bytesToHex(payload),
+      gasLimit: 21000,
+      chainId: 1,
+      nonce,
+    });
+  }
+
+  async createProposal(req: {
+    title: string;
+    description?: string;
+    proposal_type?: string;
+    version?: string;
+    hash?: string;
+  }): Promise<any> {
+    return this.submitGovernanceAction({
+      action: "propose",
+      title: req.title,
+      description: req.description ?? "",
+      proposal_type: req.proposal_type,
+      version: req.version,
+      hash: req.hash,
+    });
+  }
+
+  async vote(proposalId: number, choice: "yes" | "no" | "abstain"): Promise<any> {
+    return this.submitGovernanceAction({
+      action: "vote",
+      proposal_id: proposalId,
+      choice,
+    });
+  }
+
   getClient(): ModularClient {
     return this.client;
   }

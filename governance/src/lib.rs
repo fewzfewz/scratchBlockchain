@@ -1072,16 +1072,25 @@ impl ChainGovernance {
                     .get("description")
                     .and_then(|d| d.as_str())
                     .unwrap_or("");
-                self.propose(
-                    sender,
-                    title,
-                    description,
-                    ProposalType::TextProposal {
+                let proposal_type = match value.get("proposal_type").and_then(|t| t.as_str()) {
+                    Some("software_upgrade") => ProposalType::SoftwareUpgrade {
+                        version: value
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("0.0.0")
+                            .to_string(),
+                        hash: value
+                            .get("hash")
+                            .and_then(|h| h.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    },
+                    _ => ProposalType::TextProposal {
                         title: title.to_string(),
                         description: description.to_string(),
                     },
-                    current_block,
-                )?;
+                };
+                self.propose(sender, title, description, proposal_type, current_block)?;
                 Ok(())
             }
             _ => Err(format!("Unknown governance action: {}", action)),

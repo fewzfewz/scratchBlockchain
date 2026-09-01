@@ -667,7 +667,7 @@ mod tests {
     use storage::{ChainStore, MemDb};
 
     fn make_test_setup() -> (BlockProducer, Arc<TxPool>) {
-        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]).unwrap();
         let public_key = signing_key.public_key();
         let validator_addr = [0x01u8; 20];
 
@@ -685,7 +685,7 @@ mod tests {
         )));
 
         let store = Arc::new(InMemoryStore::default());
-        let evm = EvmExecutor::with_store(store);
+        let evm = EvmExecutor::with_store(store, 1);
         let db = Arc::new(MemDb::new());
         let chain_store = Arc::new(ChainStore::new(db));
         let executor = BlockExecutor::new(evm, chain_store);
@@ -743,7 +743,7 @@ mod tests {
         let (mut producer, mempool) = make_test_setup();
 
         // Add unsigned transaction
-        let mut tx = Transaction::default();
+        let mut tx = Transaction::test_transaction([1u8; 20], 0);
         tx.gas_limit = 21_000;
         tx.signature = vec![]; // empty - should be dropped
         let _ = mempool.add_transaction(tx);

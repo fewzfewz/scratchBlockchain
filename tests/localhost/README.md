@@ -4,7 +4,7 @@ Complete guide for testing ALL blockchain features on localhost before cloud dep
 
 ## 🎯 Overview
 
-This guide covers **45+ tests** across **11 phases** to validate every feature of your blockchain on localhost.
+This guide covers **21 automated scripts** (plus optional manual checks) to validate core blockchain features on localhost before cloud deployment.
 
 ## 📋 Quick Start
 

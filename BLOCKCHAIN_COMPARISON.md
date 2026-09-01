@@ -2,7 +2,7 @@
 
 Comparison of **Nebula** against Bitcoin, Ethereum, Polkadot, Solana, and Cosmos — updated August 2026 after v0.3.4 pre-mainnet work.
 
-**Status:** PRE-MAINNET **100% code-complete** — local + Docker testnet ready; mainnet blocked only on audit, public testnet soak, and ops deploy.
+**Status:** PRE-MAINNET — **local + Docker testnet feature-complete**; mainnet blocked on audit, public testnet soak, and ops deploy.
 
 ---
 

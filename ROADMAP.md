@@ -2,9 +2,9 @@
 
 ## 🎯 Project Status: **Development** → **Testnet Preparation**
 
-**Last Updated**: August 3, 2026  
+**Last Updated**: September 2026  
 **Node RPC**: `http://localhost:8545`  
-**Frontend SPA**: `http://localhost:5173` (9 pages, dark/light mode)  
+**Frontend SPA**: `http://localhost:5173` (16 pages, dark/light mode)  
 **API Docs**: Interactive Swagger UI at `/api-docs`
 
 This document outlines the journey from our current development codebase to a fully functional public mainnet.
@@ -118,16 +118,16 @@ This document outlines the journey from our current development codebase to a fu
 ### 11.1 Governance Mechanisms
 - [x] **Proposal listing / voting UI** — frontend shell
 - [x] **On-chain state** — `GET /governance`, `GET /proposal/{id}`
-- [ ] **Signed tx submit for vote/propose** — full wallet integration pending
+- [x] **Signed tx submit for vote/propose** — wallet + SDK (`ConnectedWallet.createProposal/vote`)
 
 **Estimated Time**: 3 weeks  
 **Priority**: 🟡 HIGH
 
 ### 11.2 Runtime Upgrades
-- [ ] **Hot-Swappable Modules**: Upgrade without hard fork
-- [ ] **Versioning System**: Track runtime versions
-- [ ] **Migration Scripts**: Handle state transitions
-- [ ] **Rollback Mechanism**: Revert failed upgrades
+- [x] **Runtime upgrade manager** — persisted in state trie, activated on block finalize
+- [x] **RPC** — `GET /runtime/version`, `/runtime/upgrades`, `POST /runtime/propose`, `/runtime/approve`
+- [ ] **Governance-linked auto-approve** — SoftwareUpgrade proposals auto-approve runtime upgrades
+- [ ] **Rollback Mechanism**: Revert failed upgrades on mainnet
 
 **Estimated Time**: 4-5 weeks  
 **Priority**: 🟡 HIGH

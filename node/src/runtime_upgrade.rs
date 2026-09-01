@@ -115,6 +115,11 @@ impl RuntimeUpgradeManager {
         &self.current_version
     }
 
+    /// Pending upgrade proposals (approved or not).
+    pub fn pending_upgrades(&self) -> Vec<UpgradeProposal> {
+        self.pending_upgrades.values().cloned().collect()
+    }
+
     /// Get upgrade history
     pub fn history(&self) -> &[RuntimeVersion] {
         &self.upgrade_history

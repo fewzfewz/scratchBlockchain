@@ -65,7 +65,6 @@ use node::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
 use node::fork_choice::ForkChoice;
 use node::light_client::{LightClient, SyncCommittee, SyncCommitteeManager};
 use node::metrics::Metrics;
-use node::runtime_upgrade::RuntimeUpgradeManager;
 
 /// Seconds without a finalized block before a node attempts to re-sync from peers.
 const SYNC_GRACE_SECS: u64 = 20;
@@ -759,6 +758,15 @@ impl Node {
                     warn!("Error applying governance actions: {}", e);
                 }
 
+                if let Err(e) = node::runtime_upgrade_store::apply_at_height(
+                    &self.state_trie,
+                    block.header.slot,
+                )
+                .await
+                {
+                    warn!("Error applying runtime upgrades: {}", e);
+                }
+
                 // Update metrics
                 self.metrics.record_block();
                 self.metrics.update_finalized_height(block.header.slot);
@@ -1093,6 +1101,15 @@ impl Node {
         .await
         {
             warn!("Error applying governance actions: {}", e);
+        }
+
+        if let Err(e) = node::runtime_upgrade_store::apply_at_height(
+            &self.state_trie,
+            block.header.slot,
+        )
+        .await
+        {
+            warn!("Error applying runtime upgrades: {}", e);
         }
 
         // Update mempool
