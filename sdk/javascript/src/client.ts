@@ -24,6 +24,7 @@ import {
   GovStats,
 } from "./types/governance";
 import EventEmitter from "eventemitter3";
+import { Wallet } from "./wallet";
 
 export class ModularClient extends EventEmitter {
   private provider: Provider;
@@ -247,13 +248,25 @@ export class ModularClient extends EventEmitter {
     }
   }
 
-  /** Governance writes use signed POST /submit_tx — use Wallet.signTransaction with governance payload. */
-  async createProposal(_req: CreateProposalRequest): Promise<any> {
-    throw new Error("Use Wallet.signTransaction with governance payload and client.sendTransaction()");
+  /** Governance writes require a `Wallet` for signing. */
+  async createProposal(req: CreateProposalRequest, wallet: Wallet): Promise<any> {
+    const connected = wallet.connect(this.provider);
+    return connected.createProposal({
+      title: req.title,
+      description: req.description,
+    });
   }
 
-  async vote(_req: VoteRequest): Promise<any> {
-    throw new Error("Use Wallet.signTransaction with governance vote payload and client.sendTransaction()");
+  async vote(req: VoteRequest, wallet: Wallet): Promise<any> {
+    const connected = wallet.connect(this.provider);
+    const choice =
+      req.support === "For" ? "yes" : req.support === "Against" ? "no" : "abstain";
+    return connected.vote(req.proposalId, choice as "yes" | "no" | "abstain");
+  }
+
+  async executeProposal(proposalId: number, wallet: Wallet): Promise<any> {
+    const connected = wallet.connect(this.provider);
+    return connected.executeProposal(proposalId);
   }
 
   async getVotes(_proposalId: number): Promise<GovVote[]> {

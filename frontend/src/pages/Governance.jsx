@@ -47,7 +47,7 @@ const govTxHash = async (tx) => {
   if (tx.chain_id) { const cb = new Uint8Array(8); new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true); ap(cb) }
   if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)));
   const vb = new Uint8Array(8); new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true); ap(vb);
-  return await sha256b(await sha256b(h));
+  return await sha256b(h);
 };
 
 const buildGovTx = (wallet, payloadObj, nonceVal) => ({
@@ -58,7 +58,7 @@ const buildGovTx = (wallet, payloadObj, nonceVal) => ({
   gas_limit: 21000,
   max_fee_per_gas: 1e9,
   max_priority_fee_per_gas: 1e9,
-  payload: Array.from(new TextEncoder().encode(JSON.stringify(payloadObj))),
+  payload: [...Array.from(wallet.publicKey), ...Array.from(new TextEncoder().encode(JSON.stringify(payloadObj)))],
   chain_id: 1,
   signature: [],
 });
@@ -79,8 +79,13 @@ async function submitGovTx(wallet, payloadObj, apiUrl) {
     body: JSON.stringify(tx),
   });
   const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = null; }
+  if (data?.status?.startsWith("error")) throw new Error(data.status);
   if (!res.ok) throw new Error(text);
-  return text.replace(/^"|"$/g, "");
+  const hash = data?.hash || text.replace(/^"|"$/g, "");
+  if (!hash) throw new Error("No transaction hash returned");
+  return hash;
 }
 
 function mapProposals(raw, deposit) {
@@ -453,11 +458,12 @@ function Dashboard({ proposals, treasury, validators, govParams, onTabChange }) 
   );
 }
 
-function Proposals({ proposals, onVote, connected }) {
+function Proposals({ proposals, onVote, onExecute, connected }) {
   const [filter, setFilter] = useState("All");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(null);
   const [voting, setVoting] = useState(null);
+  const [executing, setExecuting] = useState(null);
   const [toast, setToast] = useState(null);
   const filters = ["All", "Active", "Pending", "Passed", "Rejected", "Executed"];
 
@@ -487,6 +493,19 @@ function Proposals({ proposals, onVote, connected }) {
       showToast(`Vote failed: ${e.message}`);
     } finally {
       setVoting(null);
+    }
+  };
+
+  const handleExecute = async (proposalId) => {
+    if (!onExecute) return;
+    setExecuting(proposalId);
+    try {
+      const hash = await onExecute(proposalId);
+      showToast(`Execution submitted for #${proposalId} (tx ${hash.slice(0, 8)}...${hash.slice(-6)})`);
+    } catch (e) {
+      showToast(`Execute failed: ${e.message}`);
+    } finally {
+      setExecuting(null);
     }
   };
 
@@ -627,6 +646,22 @@ function Proposals({ proposals, onVote, connected }) {
               );
             })()}
           </div>
+
+          {selected.status === "Passed" && !selected.executed && onExecute && (
+            <div className="space-y-3 border-t border-slate-200 dark:border-slate-700/50 pt-4">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                This proposal passed — execute on-chain{connected ? "" : " (connect wallet first)"}
+              </p>
+              <button
+                onClick={() => handleExecute(selected.id)}
+                disabled={executing === selected.id || !connected}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-sm font-medium transition-all disabled:opacity-50"
+              >
+                {executing === selected.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                Execute proposal
+              </button>
+            </div>
+          )}
 
           {selected.status === "Active" && (
             <div className="space-y-3">
@@ -1102,6 +1137,14 @@ export default function Governance() {
     return submitGovTx(activeWallet, { action: "vote", proposal_id: proposalId, choice }, RPC_URL);
   };
 
+  const handleExecute = async (proposalId) => {
+    const activeWallet = wallet || loadWallet();
+    if (!activeWallet) {
+      throw new Error("Create a wallet on the Wallet page before executing");
+    }
+    return submitGovTx(activeWallet, { action: "execute", proposal_id: proposalId }, RPC_URL);
+  };
+
   const submitProposal = async (proposal) => {
     const activeWallet = wallet || loadWallet();
     if (!activeWallet) {
@@ -1199,7 +1242,7 @@ export default function Governance() {
               : <Dashboard proposals={proposals} treasury={treasury} validators={validators} govParams={govParams} onTabChange={setActiveTab} />
           )}
           {activeTab === "proposals" && (
-            <Proposals proposals={proposals} onVote={handleVote} connected={!!wallet} />
+            <Proposals proposals={proposals} onVote={handleVote} onExecute={handleExecute} connected={!!wallet} />
           )}
           {activeTab === "create" && (
             <CreateProposal onSubmit={submitProposal} connected={!!wallet} />

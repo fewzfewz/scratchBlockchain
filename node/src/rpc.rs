@@ -15,6 +15,7 @@
 //! ## CORS
 //! CORS headers are enabled to allow web wallets and explorers to connect.
 
+use crate::bridge_queue::{BridgeUnlockQueue, PendingUnlock};
 use crate::governance_store;
 use crate::tx_pool::TxPool;
 use common::types::{Block, Transaction};
@@ -212,6 +213,33 @@ struct BridgeMintRequest {
     eth_bridge_address: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct BridgeUnlockRequest {
+    nebula_tx_hash: String,
+    eth_recipient: Option<String>,
+    eth_rpc_url: Option<String>,
+    eth_bridge_address: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeUnlockAckRequest {
+    nebula_tx_hash: String,
+    eth_tx_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeProposeRequest {
+    spec_version: u32,
+    activation_height: u64,
+    code_hash: String,
+    proposer: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimeApproveRequest {
+    proposal_id: u64,
+}
+
 #[derive(Debug, Serialize)]
 struct BridgeStatusResponse {
     vault_address: String,
@@ -220,6 +248,8 @@ struct BridgeStatusResponse {
     relayers_ready: bool,
     eth_rpc_configured: bool,
     processed_mints: usize,
+    processed_unlocks: usize,
+    pending_unlocks: usize,
     chain_id: u64,
 }
 
@@ -294,6 +324,8 @@ impl RpcServer {
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let bridge_minted: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>> =
+            Arc::new(Mutex::new(BridgeUnlockQueue::new()));
 
         // Rate limiter: requests/second per IP (configurable via node config)
         let rl = NonZeroU32::new(self.rate_limit).unwrap_or(NonZeroU32::new(200).unwrap());
@@ -617,6 +649,50 @@ impl RpcServer {
                 handle_proposal(id, state_trie, chain_store)
             });
 
+        // GET /runtime/version — active runtime version
+        let runtime_version = warp::path!("runtime" / "version")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and_then(|_, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                handle_runtime_version(state_trie).await
+            });
+
+        // GET /runtime/upgrades — pending runtime upgrade proposals
+        let runtime_upgrades = warp::path!("runtime" / "upgrades")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and_then(|_, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                handle_runtime_upgrades(state_trie).await
+            });
+
+        // POST /runtime/propose — propose a runtime upgrade (testnet admin)
+        let runtime_propose = warp::path!("runtime" / "propose")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(state_trie.clone()))
+            .and_then(
+                |_, req: RuntimeProposeRequest, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                    handle_runtime_propose(req, state_trie).await
+                },
+            );
+
+        // POST /runtime/approve — approve a pending runtime upgrade
+        let runtime_approve = warp::path!("runtime" / "approve")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(state_trie.clone()))
+            .and_then(
+                |_, req: RuntimeApproveRequest, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
+                    handle_runtime_approve(req, state_trie).await
+                },
+            );
+
         // POST /faucet/request - Request test tokens (directly credits the account)
         let faucet_request = warp::path!("faucet" / "request")
             .and(with_rate_limit.clone())
@@ -680,13 +756,42 @@ impl RpcServer {
             .and(warp::get())
             .and(with_arc(state_trie.clone()))
             .and(with_arc(bridge_minted.clone()))
+            .and(with_arc(bridge_unlock_queue.clone()))
             .and(warp::any().map(move || chain_id))
             .and_then(
                 |_,
                  state_trie: Arc<Mutex<PatriciaTrie>>,
                  bridge_minted: Arc<Mutex<HashSet<String>>>,
+                 bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
                  chain_id: u64| async move {
-                    handle_bridge_status(state_trie, bridge_minted, chain_id).await
+                    handle_bridge_status(state_trie, bridge_minted, bridge_unlock_queue, chain_id)
+                        .await
+                },
+            );
+
+        // GET /bridge/pending_unlocks — relayer queue (Nebula lock → ETH unlock)
+        let bridge_pending_unlocks = warp::path!("bridge" / "pending_unlocks")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(bridge_unlock_queue.clone()))
+            .and_then(
+                |_, bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>| async move {
+                    handle_bridge_pending_unlocks(bridge_unlock_queue).await
+                },
+            );
+
+        // POST /bridge/unlock/ack — relayer confirms ETH unlock submitted
+        let bridge_unlock_ack = warp::path!("bridge" / "unlock" / "ack")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(bridge_unlock_queue.clone()))
+            .and_then(
+                |_,
+                 req: BridgeUnlockAckRequest,
+                 bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>| async move {
+                    handle_bridge_unlock_ack(req, bridge_unlock_queue).await
                 },
             );
 
@@ -704,6 +809,23 @@ impl RpcServer {
                  chain_store: Arc<ChainStore>,
                  bridge_minted: Arc<Mutex<HashSet<String>>>| async move {
                     handle_bridge_mint(req, chain_store, bridge_minted).await
+                },
+            );
+
+        // POST /bridge/unlock — relayer unlock on Ethereum after Nebula lock
+        let bridge_unlock = warp::path!("bridge" / "unlock")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(chain_store.clone()))
+            .and(with_arc(bridge_unlock_queue.clone()))
+            .and_then(
+                |_,
+                 req: BridgeUnlockRequest,
+                 chain_store: Arc<ChainStore>,
+                 bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>| async move {
+                    handle_bridge_unlock(req, chain_store, bridge_unlock_queue).await
                 },
             );
 
@@ -744,11 +866,18 @@ impl RpcServer {
             .or(call_contract)
             .or(bridge_status)
             .or(bridge_mint)
+            .or(bridge_unlock)
+            .or(bridge_pending_unlocks)
+            .or(bridge_unlock_ack)
             .or(fee_history)
             .or(validators)
             .or(delegations)
             .or(governance)
             .or(proposal_by_id)
+            .or(runtime_version)
+            .or(runtime_upgrades)
+            .or(runtime_propose)
+            .or(runtime_approve)
             .or(faucet_request)
             .or(deploy_wasm)
             .or(call_wasm)
@@ -841,10 +970,18 @@ async fn handle_submit_tx(
                 hash: hex::encode(tx.hash()),
             }))
         }
-        Err(e) => Ok(warp::reply::json(&SubmitTxResponse {
-            status: format!("error: {}", e),
-            hash: String::new(),
-        })),
+        Err(e) => {
+            let msg = e.to_string();
+            let hash = if msg.contains("already in mempool") {
+                hex::encode(tx.hash())
+            } else {
+                String::new()
+            };
+            Ok(warp::reply::json(&SubmitTxResponse {
+                status: format!("error: {}", msg),
+                hash,
+            }))
+        }
     }
 }
 
@@ -1312,6 +1449,7 @@ fn deterministic_address(label: &str) -> String {
 async fn handle_bridge_status(
     state_trie: Arc<Mutex<PatriciaTrie>>,
     bridge_minted: Arc<Mutex<HashSet<String>>>,
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
     chain_id: u64,
 ) -> Result<impl warp::Reply, Infallible> {
     let validators_count = {
@@ -1323,7 +1461,10 @@ async fn handle_bridge_status(
             .map(|v| v.len())
             .unwrap_or(0)
     };
-    let processed = bridge_minted.lock().await.len();
+    let processed_mints = bridge_minted.lock().await.len();
+    let queue = bridge_unlock_queue.lock().await;
+    let processed_unlocks = queue.processed_count();
+    let pending_unlocks = queue.pending().len();
     let eth_rpc_configured = std::env::var("ETH_RPC_URL").is_ok();
 
     Ok(warp::reply::json(&BridgeStatusResponse {
@@ -1332,9 +1473,44 @@ async fn handle_bridge_status(
         validators_count,
         relayers_ready: validators_count > 0,
         eth_rpc_configured,
-        processed_mints: processed,
+        processed_mints,
+        processed_unlocks,
+        pending_unlocks,
         chain_id,
     }))
+}
+
+async fn handle_bridge_pending_unlocks(
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let queue = bridge_unlock_queue.lock().await;
+    Ok(warp::reply::json(&serde_json::json!({
+        "pending": queue.pending(),
+        "count": queue.pending().len(),
+    })))
+}
+
+async fn handle_bridge_unlock_ack(
+    req: BridgeUnlockAckRequest,
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let hash_clean = req
+        .nebula_tx_hash
+        .trim()
+        .trim_start_matches("0x")
+        .to_lowercase();
+    let mut queue = bridge_unlock_queue.lock().await;
+    if queue.ack(&hash_clean) {
+        Ok(warp::reply::json(&serde_json::json!({
+            "status": "acknowledged",
+            "nebula_tx_hash": format!("0x{}", hash_clean),
+            "eth_tx_hash": req.eth_tx_hash,
+        })))
+    } else {
+        Ok(warp::reply::json(&serde_json::json!({
+            "error": "Pending unlock not found",
+        })))
+    }
 }
 
 async fn verify_eth_lock_tx(
@@ -1390,6 +1566,83 @@ async fn verify_eth_lock_tx(
         }
     }
     Ok(true)
+}
+
+async fn handle_runtime_version(
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    match crate::runtime_upgrade_store::current_version(&state_trie).await {
+        Ok(version) => Ok(warp::reply::json(&serde_json::json!({ "version": version }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn handle_runtime_upgrades(
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    match crate::runtime_upgrade_store::list_pending(&state_trie).await {
+        Ok(upgrades) => Ok(warp::reply::json(&serde_json::json!({ "upgrades": upgrades }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e.to_string() }))),
+    }
+}
+
+async fn handle_runtime_propose(
+    req: RuntimeProposeRequest,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    use crate::runtime_upgrade::RuntimeVersion;
+
+    let proposer = match parse_address_20(&req.proposer) {
+        Some(a) => a,
+        None => {
+            return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid proposer" })))
+        }
+    };
+    let hash_bytes = hex::decode(req.code_hash.trim_start_matches("0x")).unwrap_or_default();
+    if hash_bytes.len() != 32 {
+        return Ok(warp::reply::json(
+            &serde_json::json!({ "error": "code_hash must be 32 bytes" }),
+        ));
+    }
+    let mut code_hash = [0u8; 32];
+    code_hash.copy_from_slice(&hash_bytes);
+
+    let new_version = RuntimeVersion {
+        spec_name: "nebula".into(),
+        impl_name: "nebula-node".into(),
+        authoring_version: 1,
+        spec_version: req.spec_version,
+        impl_version: req.spec_version,
+    };
+
+    match crate::runtime_upgrade_store::propose_upgrade(
+        &state_trie,
+        new_version,
+        code_hash,
+        req.activation_height,
+        proposer,
+    )
+    .await
+    {
+        Ok(id) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "proposed",
+            "proposal_id": id,
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
+    }
+}
+
+async fn handle_runtime_approve(
+    req: RuntimeApproveRequest,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+) -> Result<impl warp::Reply, Infallible> {
+    match crate::runtime_upgrade_store::approve_upgrade(&state_trie, req.proposal_id).await {
+        Ok(()) => Ok(warp::reply::json(&serde_json::json!({
+            "status": "approved",
+            "proposal_id": req.proposal_id,
+        }))),
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
+    }
 }
 
 async fn credit_account_balance(
@@ -1484,6 +1737,201 @@ async fn handle_bridge_mint(
         }))),
         Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
     }
+}
+
+fn find_tx_by_hash(chain_store: &ChainStore, tx_hash: &[u8; 32]) -> Option<(Transaction, u64)> {
+    let latest = chain_store.get_latest_height().ok().flatten().unwrap_or(0);
+    let start = latest.saturating_sub(500);
+    for height in (start..=latest).rev() {
+        let Ok(Some(encoded)) = chain_store.get_block_by_height(height) else {
+            continue;
+        };
+        let Ok(block) = serde_json::from_slice::<Block>(&encoded) else {
+            continue;
+        };
+        for tx in block.extrinsics {
+            if tx.hash() == *tx_hash {
+                return Some((tx, height));
+            }
+        }
+    }
+    None
+}
+
+fn verify_nebula_lock_tx(
+    chain_store: &ChainStore,
+    tx_hash: &[u8; 32],
+    vault_address: &str,
+) -> Result<(Transaction, u64), String> {
+    let vault = parse_address_20(vault_address).ok_or("Invalid vault address")?;
+    let (tx, height) = find_tx_by_hash(chain_store, tx_hash)
+        .ok_or_else(|| "Nebula lock transaction not found".to_string())?;
+
+    let to = tx.to.ok_or("Lock transaction missing destination")?;
+    if to != vault {
+        return Err("Transaction not sent to bridge vault".into());
+    }
+    if tx.value == 0 {
+        return Err("Lock transaction has zero value".into());
+    }
+
+    let body = if tx.payload.len() > 32 {
+        &tx.payload[32..]
+    } else {
+        &tx.payload
+    };
+    let payload_str = std::str::from_utf8(body).map_err(|_| "Invalid bridge payload encoding")?;
+    if !payload_str.starts_with("BRIDGE:ethereum:") {
+        return Err(format!(
+            "Expected BRIDGE:ethereum: payload, got {}",
+            payload_str.chars().take(40).collect::<String>()
+        ));
+    }
+
+    let receipt = chain_store
+        .get_receipt(tx_hash)
+        .map_err(|e| e.to_string())?
+        .ok_or("Lock transaction receipt not found")?;
+    let val: serde_json::Value =
+        serde_json::from_slice(&receipt).map_err(|e| format!("Invalid receipt: {e}"))?;
+    if !val.get("success").and_then(|s| s.as_bool()).unwrap_or(false) {
+        return Err("Lock transaction failed on-chain".into());
+    }
+
+    Ok((tx, height))
+}
+
+async fn handle_bridge_unlock(
+    req: BridgeUnlockRequest,
+    chain_store: Arc<ChainStore>,
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let hash_clean = req.nebula_tx_hash.trim().trim_start_matches("0x").to_lowercase();
+    let hash_bytes = match hex::decode(&hash_clean) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        _ => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": "Invalid nebula_tx_hash",
+            })))
+        }
+    };
+
+    {
+        let queue = bridge_unlock_queue.lock().await;
+        if queue.is_processed(&hash_clean) {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": "Nebula lock already processed for unlock",
+            })));
+        }
+        if queue.is_pending(&hash_clean) {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "unlock_queued",
+                "nebula_tx_hash": format!("0x{}", hash_clean),
+                "note": "Already pending for relayer",
+            })));
+        }
+    }
+
+    let vault = deterministic_address("nebula-bridge-vault-v1");
+    let (tx, block_height) = match verify_nebula_lock_tx(&chain_store, &hash_bytes, &vault) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(warp::reply::json(&serde_json::json!({ "error": e })))
+        }
+    };
+
+    let body = if tx.payload.len() > 32 {
+        &tx.payload[32..]
+    } else {
+        &tx.payload
+    };
+    let eth_recipient = req.eth_recipient.clone().unwrap_or_else(|| {
+        std::str::from_utf8(body)
+            .ok()
+            .and_then(|s| s.strip_prefix("BRIDGE:ethereum:"))
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    });
+
+    if eth_recipient.is_empty() || parse_address_20(&eth_recipient).is_none() {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "Missing or invalid eth_recipient",
+        })));
+    }
+
+    let eth_rpc = req
+        .eth_rpc_url
+        .or_else(|| std::env::var("ETH_RPC_URL").ok())
+        .unwrap_or_default();
+
+    let eth_rpc_ok = if !eth_rpc.is_empty() {
+        verify_eth_rpc_reachable(&eth_rpc).await.unwrap_or(false)
+    } else {
+        false
+    };
+
+    let source_chain: u32 = std::env::var("NEBULA_CHAIN_ID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+    let dest_chain: u32 = std::env::var("ETH_CHAIN_ID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let message_id = u64::from_le_bytes(hash_bytes[..8].try_into().unwrap_or([0u8; 8]));
+
+    let pending = PendingUnlock {
+        nebula_tx_hash: hash_clean.clone(),
+        eth_recipient: eth_recipient.clone(),
+        amount: tx.value.to_string(),
+        sender: format!("0x{}", hex::encode(&tx.sender)),
+        nonce: tx.nonce,
+        message_id,
+        source_chain,
+        dest_chain,
+        block_height,
+    };
+
+    bridge_unlock_queue.lock().await.enqueue(pending);
+
+    Ok(warp::reply::json(&serde_json::json!({
+        "status": "unlock_queued",
+        "nebula_tx_hash": format!("0x{}", hash_clean),
+        "eth_recipient": eth_recipient,
+        "amount": tx.value.to_string(),
+        "block_height": block_height,
+        "message_id": message_id,
+        "source_chain": source_chain,
+        "dest_chain": dest_chain,
+        "eth_rpc_configured": !eth_rpc.is_empty(),
+        "eth_rpc_reachable": eth_rpc_ok,
+        "note": "Relayer should poll GET /bridge/pending_unlocks and submit Bridge.unlockTokens on Ethereum",
+    })))
+}
+
+async fn verify_eth_rpc_reachable(eth_rpc: &str) -> Result<bool, String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(eth_rpc)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("ETH RPC unreachable: {e}"))?;
+    let val: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid ETH RPC response: {e}"))?;
+    Ok(!val.get("result").map(|r| r.is_null()).unwrap_or(true))
 }
 
 async fn handle_fee_history(

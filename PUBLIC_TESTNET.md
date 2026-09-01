@@ -40,6 +40,11 @@ cd deployment/cloud/terraform/aws && terraform apply tfplan
 |----------|---------|
 | `AWS_REGION` | Terraform region (default `us-east-1`) |
 | `TF_VAR_domain_name` | Public RPC hostname base |
+| `NODE_BINARY_PATH` | Local `target/release/node` copied by Ansible (default in `deploy-aws.sh`) |
+| `ETH_RPC_URL` | Ethereum JSON-RPC for bridge relayer |
+| `ETH_BRIDGE_ADDRESS` | Deployed `Bridge.sol` on ETH |
+| `RELAYER_PRIVATE_KEYS` | Comma-separated ECDSA keys for `npm run relayer` |
+| `NEBULA_CHAIN_ID` / `ETH_CHAIN_ID` | Bridge message chain IDs (default 100 / 1) |
 | `SLACK_WEBHOOK_URL` | Alertmanager receiver |
 | `PAGERDUTY_ROUTING_KEY` | Critical alerts |
 

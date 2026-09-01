@@ -2,9 +2,9 @@
 
 ## 🎯 Project Status: **Development** → **Testnet Preparation**
 
-**Last Updated**: August 3, 2026  
+**Last Updated**: September 2026  
 **Node RPC**: `http://localhost:8545`  
-**Frontend SPA**: `http://localhost:5173` (9 pages, dark/light mode)  
+**Frontend SPA**: `http://localhost:5173` (19 pages incl. WASM, Advanced, NFT; dark/light mode)  
 **API Docs**: Interactive Swagger UI at `/api-docs`
 
 This document outlines the journey from our current development codebase to a fully functional public mainnet.
@@ -40,7 +40,7 @@ This document outlines the journey from our current development codebase to a fu
 - [x] **Wallet** — Ed25519 key generation, address derivation, tx signing, balance/nonce queries
 - [x] **Explorer** — Dashboard, validators list, staking tab
 - [x] **Faucet** — Direct node RPC integration, no separate backend process
-- [x] **Governance** — Proposal creation/voting with light/dark mode
+- [x] **Governance** — Proposal creation/voting/**execution**, software-upgrade hook → runtime manager
 - [x] **API Docs** — Interactive Swagger UI (core endpoints; new routes in README)
 - [x] **Docs** — Human-readable reference with curl examples
 - [x] **Dark/Light Theme** — Toggle persisted in localStorage, CSS variables
@@ -93,9 +93,11 @@ This document outlines the journey from our current development codebase to a fu
 **Status**: Code exists in `interop/src/`, needs live deployment and testing
 
 ### 10.1 Ethereum Bridge
+- [x] **Local bridge RPC** — `/bridge/mint`, `/bridge/unlock`, `/bridge/pending_unlocks`
+- [x] **ETH relayer daemon** — `interop/scripts/eth-relayer-daemon.js`
 - [/] **Bridge Code**: Written in `interop/src/` (contract, relayer, messaging)
-- [ ] **Deployment**: Deploy bridge contracts on Ethereum
-- [ ] **Test**: End-to-end bridge testing
+- [ ] **Deployment**: Deploy bridge contracts on Ethereum Sepolia/mainnet
+- [ ] **Test**: End-to-end live ETH unlock with funded bridge contract
 - [ ] **Security Audit**: External review of bridge contracts
 
 **Estimated Time**: 4-6 weeks  
@@ -118,16 +120,16 @@ This document outlines the journey from our current development codebase to a fu
 ### 11.1 Governance Mechanisms
 - [x] **Proposal listing / voting UI** — frontend shell
 - [x] **On-chain state** — `GET /governance`, `GET /proposal/{id}`
-- [ ] **Signed tx submit for vote/propose** — full wallet integration pending
+- [x] **Signed tx submit for vote/propose** — wallet + SDK (`ConnectedWallet.createProposal/vote`)
 
 **Estimated Time**: 3 weeks  
 **Priority**: 🟡 HIGH
 
 ### 11.2 Runtime Upgrades
-- [ ] **Hot-Swappable Modules**: Upgrade without hard fork
-- [ ] **Versioning System**: Track runtime versions
-- [ ] **Migration Scripts**: Handle state transitions
-- [ ] **Rollback Mechanism**: Revert failed upgrades
+- [x] **Runtime upgrade manager** — persisted in state trie, activated on block finalize
+- [x] **RPC** — `GET /runtime/version`, `/runtime/upgrades`, `POST /runtime/propose`, `/runtime/approve`
+- [x] **Governance-linked auto-approve** — SoftwareUpgrade execute → runtime upgrade store
+- [ ] **Rollback Mechanism**: Revert failed upgrades on mainnet
 
 **Estimated Time**: 4-5 weeks  
 **Priority**: 🟡 HIGH
@@ -181,6 +183,7 @@ This document outlines the journey from our current development codebase to a fu
 **Priority**: 🟡 HIGH
 
 ### 13.2 Python SDK
+- [x] **Minimal RPC client**: `sdk/python/` — stdlib `NebulaClient` (health, governance, WASM, bridge)
 - [ ] **Async/Await Support**: Modern Python patterns
 - [ ] **Account Management**: Key generation and signing
 - [ ] **PyPI Package**: Easy installation
@@ -199,9 +202,9 @@ This document outlines the journey from our current development codebase to a fu
 
 ---
 
-## 📊 Phase 14: Testnet Campaign
+## Phase 14: Testnet Campaign
 
-**Status**: Infrastructure configured (Docker), not deployed publicly
+**Status**: Cloud scaffolding + ansible hardening; public deploy not yet live
 
 ### 14.1 Public Testnet Launch
 - [ ] **Faucet Service**: Distribute test tokens

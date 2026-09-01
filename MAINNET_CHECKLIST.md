@@ -10,9 +10,9 @@ Use this after public testnet is stable and audit findings are resolved.
 - [x] State pruning (full/minimal/archive)
 - [x] Validator onboarding UI + Grafana dashboard
 - [x] Alertmanager wired (local)
-- [x] Integration test suite (governance, stake, load, chaos)
+- [x] Integration test suite (governance execute, stake, load, chaos, bridge unlock queue)
 - [ ] Public testnet deployed and stable 30+ days
-- [ ] Remaining integration scripts green in CI
+- [ ] Full integration script suite green in CI (23+ scripts; advanced stress tests planned)
 
 ## Phase 2 — Security
 

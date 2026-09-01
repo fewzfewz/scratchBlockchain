@@ -3,7 +3,8 @@ import { Droplets, CheckCircle, AlertCircle, Clock, Copy, WifiOff, Wallet, Histo
 
 const RPC_URL = 'http://localhost:8545'
 const DRIP_AMOUNT = 100
-const COOLDOWN_MS = 24 * 60 * 60 * 1000
+// Local dev: 60s cooldown (matches node RPC). Production UI can use 24h.
+const COOLDOWN_MS = import.meta.env.DEV ? 60 * 1000 : 24 * 60 * 60 * 1000
 
 const DEMO_ADDR = '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18'
 
@@ -165,7 +166,7 @@ export default function FaucetPage() {
 
   const heroStats = [
     { icon: Droplets, label: 'Drip size', value: `${DRIP_AMOUNT} NBL`, sub: 'Per faucet request', chip: 'from-blue-500 to-cyan-600' },
-    { icon: Clock, label: 'Cooldown', value: '24 hours', sub: 'Between requests', chip: 'from-amber-500 to-orange-600' },
+    { icon: Clock, label: 'Cooldown', value: import.meta.env.DEV ? '60 seconds' : '24 hours', sub: 'Between requests', chip: 'from-amber-500 to-orange-600' },
     { icon: ShieldCheck, label: 'Requests left', value: `${remaining} / 10`, sub: 'Per address lifetime', chip: 'from-emerald-500 to-teal-600' },
     { icon: Zap, label: 'Total distributed', value: `${fmt(totalDistributed)} NBL`, sub: 'From this browser', chip: 'from-violet-500 to-purple-600' },
   ]
@@ -379,7 +380,7 @@ export default function FaucetPage() {
               <p className="text-xs font-semibold text-blue-600 dark:text-blue-300 mb-1.5">How it works</p>
               <ul className="space-y-1.5 text-xs text-slate-500 dark:text-slate-400">
                 <li>Each request sends <strong className="text-slate-700 dark:text-slate-200">{DRIP_AMOUNT} test tokens</strong> to one local wallet address.</li>
-                <li>Addresses are limited to <strong className="text-slate-700 dark:text-slate-200">one request every 24h</strong> (browser-side) and the node enforces a 60s server cooldown.</li>
+                <li>Addresses are limited to <strong className="text-slate-700 dark:text-slate-200">one request every {import.meta.env.DEV ? '60s' : '24h'}</strong> (browser-side) and the node enforces a 60s server cooldown.</li>
                 <li>Usage is capped at <strong className="text-slate-700 dark:text-slate-200">10 total requests</strong> per address.</li>
               </ul>
             </div>

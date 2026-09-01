@@ -138,6 +138,158 @@ impl BlockExecutor {
         }
     }
 
+    fn payload_body(payload: &[u8]) -> &[u8] {
+        if payload.len() > 32 {
+            &payload[32..]
+        } else {
+            payload
+        }
+    }
+
+    fn is_native_ed25519_tx(tx: &Transaction) -> bool {
+        tx.signature.len() == 64 && tx.payload.len() >= 32
+    }
+
+    fn load_account_state(chain_store: &ChainStore, addr: &[u8]) -> (u128, u64) {
+        match chain_store.get_state(addr) {
+            Ok(Some(encoded)) => {
+                if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
+                    let balance = acc
+                        .get("balance")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| s.parse::<u128>().ok())
+                        .unwrap_or(0);
+                    let nonce = acc.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0);
+                    return (balance, nonce);
+                }
+            }
+            _ => {}
+        }
+        (0, 0)
+    }
+
+    fn encode_account_state(balance: u128, nonce: u64) -> Vec<u8> {
+        serde_json::to_vec(&serde_json::json!({
+            "balance": balance.to_string(),
+            "nonce": nonce,
+        }))
+        .unwrap_or_default()
+    }
+
+    fn failed_receipt(reason: impl Into<String>) -> TransactionReceipt {
+        TransactionReceipt {
+            success: false,
+            gas_used: 21_000,
+            output: vec![],
+            created_address: None,
+            revert_reason: Some(reason.into()),
+            logs: vec![],
+        }
+    }
+
+    fn execute_native_transfer(
+        tx: &Transaction,
+        chain_store: &ChainStore,
+    ) -> (TransactionReceipt, Vec<(Vec<u8>, Option<Vec<u8>>)>) {
+        use common::crypto::derive_address_from_public_key;
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+
+        let to = match tx.to {
+            Some(to) => to,
+            None => {
+                return (
+                    Self::failed_receipt("Native executor only supports transfers"),
+                    vec![],
+                );
+            }
+        };
+
+        let mut public_key = [0u8; 32];
+        public_key.copy_from_slice(&tx.payload[0..32]);
+
+        let verifying_key = match VerifyingKey::from_bytes(&public_key) {
+            Ok(key) => key,
+            Err(e) => {
+                return (Self::failed_receipt(format!("Invalid public key: {}", e)), vec![]);
+            }
+        };
+
+        let signature = match Signature::from_slice(&tx.signature) {
+            Ok(sig) => sig,
+            Err(e) => {
+                return (Self::failed_receipt(format!("Invalid signature: {}", e)), vec![]);
+            }
+        };
+
+        let message = tx.hash();
+        if verifying_key.verify(&message, &signature).is_err() {
+            return (Self::failed_receipt("Invalid signature"), vec![]);
+        }
+
+        if derive_address_from_public_key(&public_key) != tx.sender {
+            return (
+                Self::failed_receipt("Public key does not match sender"),
+                vec![],
+            );
+        }
+
+        let (sender_balance, sender_nonce) = Self::load_account_state(chain_store, &tx.sender);
+        if sender_nonce != tx.nonce {
+            return (
+                Self::failed_receipt(format!(
+                    "Invalid nonce: expected {}, got {}",
+                    sender_nonce, tx.nonce
+                )),
+                vec![],
+            );
+        }
+
+        let gas_fee = tx.gas_limit as u128 * tx.max_fee_per_gas as u128;
+        let total_cost = tx.value as u128 + gas_fee;
+        if sender_balance < total_cost {
+            return (
+                Self::failed_receipt(format!(
+                    "Insufficient balance: need {}, have {}",
+                    total_cost, sender_balance
+                )),
+                vec![],
+            );
+        }
+
+        let (recipient_balance, recipient_nonce) = Self::load_account_state(chain_store, &to);
+        let new_sender_balance = sender_balance - tx.value as u128 - gas_fee;
+        let new_recipient_balance = recipient_balance + tx.value as u128;
+
+        let state_diffs = vec![
+            (
+                tx.sender.to_vec(),
+                Some(Self::encode_account_state(
+                    new_sender_balance,
+                    sender_nonce + 1,
+                )),
+            ),
+            (
+                to.to_vec(),
+                Some(Self::encode_account_state(
+                    new_recipient_balance,
+                    recipient_nonce,
+                )),
+            ),
+        ];
+
+        (
+            TransactionReceipt {
+                success: true,
+                gas_used: 21_000,
+                output: vec![],
+                created_address: None,
+                revert_reason: None,
+                logs: vec![],
+            },
+            state_diffs,
+        )
+    }
+
     /// Execute all transactions in a block and commit everything atomically.
     /// Called by BlockProducer after BFT finalizes a block.
     ///
@@ -156,8 +308,10 @@ impl BlockExecutor {
         use revm::primitives::{Address, Bytes, U256};
 
         let mut receipts = Vec::with_capacity(block.extrinsics.len());
+        let mut state_diffs = Vec::new();
         for tx in &block.extrinsics {
-            if ChainGovernance::is_governance_payload(&tx.payload) {
+            let body = Self::payload_body(&tx.payload);
+            if ChainGovernance::is_governance_payload(body) {
                 receipts.push(TransactionReceipt {
                     success: true,
                     gas_used: 21_000,
@@ -170,17 +324,40 @@ impl BlockExecutor {
             }
 
             // WASM contract call: payload `WASM:<name>:<func>:<arg>`
-            if tx.payload.starts_with(execution::WASM_TX_PREFIX) {
-                let receipt = Self::execute_wasm_tx(&tx.payload, &self.chain_store);
+            if body.starts_with(execution::WASM_TX_PREFIX) {
+                let receipt = Self::execute_wasm_tx(body, &self.chain_store);
                 receipts.push(receipt);
                 continue;
+            }
+
+            // Native Ed25519 transfer (wallet / SDK transactions)
+            if Self::is_native_ed25519_tx(tx) && tx.to.is_some() {
+                let (receipt, diffs) = Self::execute_native_transfer(tx, &self.chain_store);
+                state_diffs.extend(diffs);
+                receipts.push(receipt);
+                continue;
+            }
+
+            let evm_data = if tx.payload.len() > 32 {
+                Bytes::from(tx.payload[32..].to_vec())
+            } else {
+                Bytes::from(tx.payload.clone())
+            };
+
+            let caller = Address::from_slice(&tx.sender);
+            let (native_bal, native_nonce) = Self::load_account_state(&self.chain_store, &tx.sender);
+            if let Err(e) = self
+                .evm
+                .prepare_native_account(caller, native_bal, native_nonce)
+            {
+                warn!("Failed to sync EVM account for {}: {}", hex::encode(&tx.sender[..6]), e);
             }
 
             let stx = SignedTransaction {
                 caller: Address::from_slice(&tx.sender),
                 to: tx.to.map(|a| Address::from_slice(&a)),
                 value: U256::from(tx.value),
-                data: Bytes::from(tx.payload.clone()),
+                data: evm_data,
                 nonce: tx.nonce,
                 gas_limit: tx.gas_limit,
                 gas_price: U256::from(tx.max_fee_per_gas),
@@ -192,14 +369,7 @@ impl BlockExecutor {
                 Ok(receipt) => receipts.push(receipt),
                 Err(e) => {
                     warn!("Transaction {} failed: {}", hex::encode(tx.hash()), e);
-                    receipts.push(TransactionReceipt {
-                        success: false,
-                        gas_used: 21_000,
-                        output: vec![],
-                        created_address: None,
-                        revert_reason: Some(format!("{}", e)),
-                        logs: vec![],
-                    });
+                    receipts.push(Self::failed_receipt(format!("{}", e)));
                 }
             }
         }
@@ -227,7 +397,7 @@ impl BlockExecutor {
             block_height,
             &block_hash,
             &block_encoded,
-            vec![], // state diffs would come from EVM state backend
+            state_diffs,
             receipt_pairs,
         )?;
 
@@ -497,7 +667,7 @@ mod tests {
     use storage::{ChainStore, MemDb};
 
     fn make_test_setup() -> (BlockProducer, Arc<TxPool>) {
-        let signing_key = SigningKey::from_bytes(&[1u8; 32]);
+        let signing_key = SigningKey::from_bytes(&[1u8; 32]).unwrap();
         let public_key = signing_key.public_key();
         let validator_addr = [0x01u8; 20];
 
@@ -515,7 +685,7 @@ mod tests {
         )));
 
         let store = Arc::new(InMemoryStore::default());
-        let evm = EvmExecutor::with_store(store);
+        let evm = EvmExecutor::with_store(store, 1);
         let db = Arc::new(MemDb::new());
         let chain_store = Arc::new(ChainStore::new(db));
         let executor = BlockExecutor::new(evm, chain_store);
@@ -573,7 +743,7 @@ mod tests {
         let (mut producer, mempool) = make_test_setup();
 
         // Add unsigned transaction
-        let mut tx = Transaction::default();
+        let mut tx = Transaction::test_transaction([1u8; 20], 0);
         tx.gas_limit = 21_000;
         tx.signature = vec![]; // empty - should be dropped
         let _ = mempool.add_transaction(tx);

@@ -723,6 +723,138 @@ paths:
         "200":
           description: Contract names
 
+  /call_contract:
+    post:
+      summary: EVM static call (read-only)
+      operationId: callContract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [from, to, data]
+              properties:
+                from:
+                  type: string
+                to:
+                  type: string
+                data:
+                  type: string
+                value:
+                  type: string
+      responses:
+        "200":
+          description: Call result
+
+  /bridge/status:
+    get:
+      summary: Bridge and relayer readiness
+      operationId: getBridgeStatus
+      responses:
+        "200":
+          description: Bridge status
+
+  /bridge/mint:
+    post:
+      summary: Mint on Nebula after ETH lock
+      operationId: bridgeMint
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recipient]
+              properties:
+                recipient:
+                  type: string
+                amount:
+                  type: string
+                eth_tx_hash:
+                  type: string
+      responses:
+        "200":
+          description: Mint result
+
+  /bridge/unlock:
+    post:
+      summary: Queue ETH unlock after Nebula lock
+      operationId: bridgeUnlock
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [nebula_tx_hash]
+              properties:
+                nebula_tx_hash:
+                  type: string
+                eth_recipient:
+                  type: string
+      responses:
+        "200":
+          description: Unlock queued
+
+  /runtime/version:
+    get:
+      summary: Active runtime version
+      operationId: getRuntimeVersion
+      responses:
+        "200":
+          description: Runtime version
+
+  /runtime/upgrades:
+    get:
+      summary: Pending runtime upgrades
+      operationId: listRuntimeUpgrades
+      responses:
+        "200":
+          description: Pending upgrades
+
+  /runtime/propose:
+    post:
+      summary: Propose runtime upgrade
+      operationId: proposeRuntimeUpgrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [spec_version, activation_height, code_hash, proposer]
+              properties:
+                spec_version:
+                  type: integer
+                activation_height:
+                  type: integer
+                code_hash:
+                  type: string
+                proposer:
+                  type: string
+      responses:
+        "200":
+          description: Proposal created
+
+  /runtime/approve:
+    post:
+      summary: Approve runtime upgrade
+      operationId: approveRuntimeUpgrade
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [proposal_id]
+              properties:
+                proposal_id:
+                  type: integer
+      responses:
+        "200":
+          description: Upgrade approved
+
 components:
   schemas:
     Transaction:

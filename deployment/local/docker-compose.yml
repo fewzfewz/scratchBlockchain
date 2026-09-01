@@ -84,6 +84,8 @@ services:
       - VALIDATOR_NAME=validator1
       - RUST_LOG=info
       - ETH_RPC_URL=http://hardhat:9545
+      - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -120,6 +122,8 @@ services:
     environment:
       - VALIDATOR_NAME=validator2
       - RUST_LOG=info
+      - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -155,6 +159,8 @@ services:
     environment:
       - VALIDATOR_NAME=validator3
       - RUST_LOG=info
+      - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -189,6 +195,9 @@ services:
       - NODE_NAME=rpc1
       - RUST_LOG=info
       - ETH_RPC_URL=http://hardhat:9545
+      - GOVERNANCE_TEST_MODE=1
+      - NEBULA_CHAIN_ID=100
+      - ETH_CHAIN_ID=1
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -312,7 +321,7 @@ services:
       - FAUCET_PORT=3006
       - RPC_URL=http://rpc1:8545
       - DRIP_AMOUNT=1000000000000000000000
-      - COOLDOWN_SECONDS=86400
+      - COOLDOWN_SECONDS=60
     volumes:
       - ../../target/release/node:/usr/local/bin/modular-node:ro
     command: ["faucet"]

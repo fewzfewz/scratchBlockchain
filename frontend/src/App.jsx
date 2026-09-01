@@ -3,7 +3,7 @@ import { Routes, Route, NavLink } from 'react-router-dom'
 import {
   LayoutDashboard, Wallet, Droplets, Compass, BookOpen,
   FileCode, Vote, ExternalLink, Github, Sun, Moon, Menu, X, FileJson, Rocket, Shield,
-  History, Layers, GitBranch,
+  History, Layers, GitBranch, Cpu, Zap, Image,
 } from 'lucide-react'
 import { useTheme } from './ThemeContext.jsx'
 import Home from './pages/Home.jsx'
@@ -21,6 +21,8 @@ import DeFiPage from './pages/DeFiPage.jsx'
 import ContractInteractPage from './pages/ContractInteractPage.jsx'
 import BridgePage from './pages/BridgePage.jsx'
 import NftPage from './pages/NftPage.jsx'
+import WasmPage from './pages/WasmPage.jsx'
+import AdvancedPage from './pages/AdvancedPage.jsx'
 
 const ApiDocs = lazy(() => import('./pages/ApiDocs.jsx'))
 
@@ -33,6 +35,9 @@ const NAV_ITEMS = [
   { to: '/contracts', icon: FileCode, label: 'Contracts' },
   { to: '/defi', icon: Layers, label: 'DeFi' },
   { to: '/bridge', icon: GitBranch, label: 'Bridge' },
+  { to: '/wasm', icon: Cpu, label: 'WASM' },
+  { to: '/advanced', icon: Zap, label: 'Advanced' },
+  { to: '/nft', icon: Image, label: 'NFT' },
   { to: '/faucet', icon: Droplets, label: 'Faucet' },
   { to: '/governance', icon: Vote, label: 'Governance' },
   { to: '/validators/onboard', icon: Shield, label: 'Validators' },
@@ -154,6 +159,8 @@ export default function App() {
           <Route path="/contracts" element={<ContractInteractPage />} />
           <Route path="/defi" element={<DeFiPage />} />
           <Route path="/bridge" element={<BridgePage />} />
+          <Route path="/wasm" element={<WasmPage />} />
+          <Route path="/advanced" element={<AdvancedPage />} />
           <Route path="/nft" element={<NftPage />} />
           <Route path="/faucet" element={<FaucetPage />} />
           <Route path="/docs" element={<DocsPage />} />

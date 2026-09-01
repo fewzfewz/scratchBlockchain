@@ -22,7 +22,19 @@ async function main() {
   console.log("Token A:", TOKEN_A);
   console.log("Token B:", TOKEN_B);
 
-  const initCode = "0x6080604052"; // AMM init bytecode (placeholder — use compiled SimpleAMM bytecode)
+  const initCode =
+    process.env.AMM_BYTECODE ||
+    (() => {
+      try {
+        const fs = require('fs');
+        const path = require('path');
+        const p = path.join(__dirname, '../../../contracts/bytecode/SimpleAMM.json');
+        const art = JSON.parse(fs.readFileSync(p, 'utf8'));
+        return art.bytecode;
+      } catch {
+        return '0x6080604052';
+      }
+    })();
 
   const tx = await wallet.signTransaction({
     to: null,

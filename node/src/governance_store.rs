@@ -14,6 +14,8 @@ use storage::ChainStore;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+use crate::runtime_upgrade::RuntimeVersion;
+
 /// Trie key under which the serialized governance state lives.
 pub const GOVERNANCE_KEY: &[u8] = b"governance";
 
@@ -45,8 +47,28 @@ pub async fn load_or_init(
 async fn seed_governance(
     trie: &Arc<Mutex<PatriciaTrie>>,
 ) -> Result<ChainGovernance, Box<dyn std::error::Error>> {
-    let params = GovernanceParams::default();
-    let total_stake = total_stake(trie).await;
+    let mut params = GovernanceParams::default();
+    if let Ok(v) = std::env::var("GOVERNANCE_VOTING_PERIOD_BLOCKS") {
+        if let Ok(n) = v.parse() {
+            params.voting_period_blocks = n;
+        }
+    }
+    if let Ok(v) = std::env::var("GOVERNANCE_QUORUM_BPS") {
+        if let Ok(n) = v.parse() {
+            params.quorum_threshold_bps = n;
+        }
+    }
+
+    let mut total_stake = total_stake(trie).await;
+    if std::env::var("GOVERNANCE_TEST_MODE")
+        .ok()
+        .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+    {
+        params.voting_period_blocks = params.voting_period_blocks.min(20);
+        params.quorum_threshold_bps = params.quorum_threshold_bps.min(100);
+        total_stake = total_stake.min(1_000_000);
+    }
+
     let mut state = ChainGovernance::new(params, SEED_TREASURY_BALANCE, total_stake);
 
     let validators = validator_stakes(trie).await;
@@ -112,10 +134,20 @@ async fn seed_governance(
     Ok(state)
 }
 
+/// Strip the 32-byte Ed25519 public key prefix wallet txs prepend to payloads.
+fn payload_body(payload: &[u8]) -> &[u8] {
+    if payload.len() > 32 {
+        &payload[32..]
+    } else {
+        payload
+    }
+}
+
 /// Apply any governance transactions in a block's extrinsics and persist the
 /// updated state. Non-governance transactions are ignored here.
 pub async fn apply_extrinsics(
     trie: &Arc<Mutex<PatriciaTrie>>,
+    chain_store: &Arc<ChainStore>,
     extrinsics: &[common::types::Transaction],
     current_block: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -123,11 +155,12 @@ pub async fn apply_extrinsics(
     let mut changed = false;
 
     for tx in extrinsics {
-        if !ChainGovernance::is_governance_payload(&tx.payload) {
+        let body = payload_body(&tx.payload);
+        if !ChainGovernance::is_governance_payload(body) {
             continue;
         }
-        let power = voter_power(trie, &tx.sender).await;
-        match state.apply_payload(tx.sender, &tx.payload, power, current_block) {
+        let power = voter_power(trie, chain_store, &tx.sender).await;
+        match state.apply_payload(tx.sender, body, power, current_block) {
             Ok(()) => {
                 info!(
                     "Governance action applied at block {} (voter {} power {})",
@@ -136,6 +169,17 @@ pub async fn apply_extrinsics(
                     power
                 );
                 changed = true;
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+                    if value.get("action").and_then(|a| a.as_str()) == Some("execute") {
+                        if let Some(id) = value.get("proposal_id").and_then(|v| v.as_u64()) {
+                            if let Err(e) =
+                                on_proposal_executed(trie, &state, id, current_block).await
+                            {
+                                warn!("Post-execute hook failed for proposal {}: {}", id, e);
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => warn!(
                 "Governance transaction rejected at block {}: {}",
@@ -151,16 +195,108 @@ pub async fn apply_extrinsics(
     Ok(())
 }
 
-/// Voting power of an account: its staked (and delegated) balance, resolved
-/// from the consensus-state `b"validators"` trie entry. The validator set is
-/// identical on every node, so vote weights agree across the network — unlike
-/// raw account balances, some of which are only credited on a single node.
-pub async fn voter_power(trie: &Arc<Mutex<PatriciaTrie>>, address: &Address) -> u128 {
-    validator_stakes(trie)
+fn parse_spec_version(version: &str) -> u32 {
+    version
+        .split('.')
+        .filter_map(|part| part.trim().split('-').next()?.parse().ok())
+        .next()
+        .unwrap_or(1)
+}
+
+fn parse_code_hash(hash: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hash.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+    if bytes.len() != 32 {
+        return Err("Software upgrade hash must be 32 bytes".into());
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+/// Side effects when a governance proposal is marked executed on-chain.
+async fn on_proposal_executed(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+    state: &ChainGovernance,
+    proposal_id: u64,
+    current_block: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(proposal) = state.get_proposal(proposal_id) else {
+        return Ok(());
+    };
+    let ProposalType::SoftwareUpgrade { version, hash } = &proposal.proposal_type else {
+        return Ok(());
+    };
+
+    let code_hash = parse_code_hash(hash).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let current = crate::runtime_upgrade_store::current_version(trie).await?;
+    let parsed = parse_spec_version(version);
+    let spec_version = parsed.max(current.spec_version.saturating_add(1));
+
+    let new_version = RuntimeVersion {
+        spec_name: current.spec_name.clone(),
+        impl_name: current.impl_name.clone(),
+        authoring_version: current.authoring_version,
+        spec_version,
+        impl_version: spec_version,
+    };
+    let activation_height = current_block.saturating_add(10);
+
+    let upgrade_id = crate::runtime_upgrade_store::propose_upgrade(
+        trie,
+        new_version.clone(),
+        code_hash,
+        activation_height,
+        proposal.proposer,
+    )
+    .await?;
+    crate::runtime_upgrade_store::approve_upgrade(trie, upgrade_id).await?;
+
+    info!(
+        "Software upgrade proposal {} executed — runtime upgrade {} approved for height {} (spec v{})",
+        proposal_id, upgrade_id, activation_height, spec_version
+    );
+    Ok(())
+}
+
+/// Voting power of an account: validator self-stake + delegations to them,
+/// else delegated stake as delegator, else native token balance (1 wei = 1 vote).
+pub async fn voter_power(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+    chain_store: &Arc<ChainStore>,
+    address: &Address,
+) -> u128 {
+    if let Some((_, power)) = validator_stakes(trie)
         .await
-        .iter()
+        .into_iter()
         .find(|(addr, _)| addr == address)
-        .map(|(_, power)| *power)
+    {
+        return power;
+    }
+
+    let delegator_hex = format!("0x{}", hex::encode(address));
+    let key = [b"delegations/", delegator_hex.as_bytes()].concat();
+    if let Ok(Some(encoded)) = chain_store.get_state(&key) {
+        if let Ok(list) = serde_json::from_slice::<Vec<serde_json::Value>>(&encoded) {
+            let delegated: u128 = list
+                .iter()
+                .filter_map(|e| e.get("amount")?.as_str()?.parse::<u128>().ok())
+                .sum();
+            if delegated > 0 {
+                return delegated;
+            }
+        }
+    }
+
+    native_balance(chain_store, address)
+}
+
+fn native_balance(chain_store: &ChainStore, address: &Address) -> u128 {
+    chain_store
+        .get_state(address)
+        .ok()
+        .flatten()
+        .and_then(|encoded| serde_json::from_slice::<serde_json::Value>(&encoded).ok())
+        .and_then(|acc| acc.get("balance")?.as_str()?.parse().ok())
         .unwrap_or(0)
 }
 
@@ -433,4 +569,33 @@ pub async fn load_consensus_validators(
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_body_strips_ed25519_prefix() {
+        let mut payload = vec![0u8; 32];
+        payload.extend_from_slice(br#"{"action":"vote"}"#);
+        assert_eq!(payload_body(&payload), br#"{"action":"vote"}"#);
+    }
+
+    #[tokio::test]
+    async fn voter_power_uses_native_balance_for_regular_accounts() {
+        let inner = Arc::new(storage::MemDb::new());
+        let chain_store = Arc::new(ChainStore::new(inner.clone()));
+        let trie = Arc::new(Mutex::new(PatriciaTrie::new(inner).unwrap()));
+        let addr = [9u8; 20];
+        let account = serde_json::json!({
+            "balance": "5000000000000000000",
+            "nonce": 0,
+        });
+        chain_store
+            .put_state(&addr, &serde_json::to_vec(&account).unwrap())
+            .unwrap();
+        let power = voter_power(&trie, &chain_store, &addr).await;
+        assert_eq!(power, 5_000_000_000_000_000_000);
+    }
 }

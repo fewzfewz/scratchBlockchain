@@ -39,7 +39,7 @@ async function govTxHash(tx) {
   val.writeBigUInt64LE(BigInt(tx.value));
   parts.push(val);
   const inner = Buffer.concat(parts);
-  return sha256(await sha256(inner));
+  return sha256(inner);
 }
 
 function buildGovTx(wallet, payloadObj, nonceVal) {

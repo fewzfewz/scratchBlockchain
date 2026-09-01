@@ -168,13 +168,50 @@ export async function txHash(tx) {
   const vb = new Uint8Array(8)
   new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true)
   ap(vb)
-  return sha256(await sha256(h))
+  return sha256(h)
+}
+
+/** Prepend Ed25519 public key — required by the native executor for signature verification. */
+export function payloadWithPubKey(pubKeyBytes, extra = []) {
+  const pub = Array.from(pubKeyBytes)
+  const rest = Array.isArray(extra) ? extra : Array.from(extra)
+  if (rest.length >= 32 && rest.slice(0, 32).every((b, i) => b === pub[i])) return rest
+  return [...pub, ...rest]
+}
+
+export async function buildSignedDeployTx({ keyPair, from, bytecodeHex, nonce, gasLimit = 500000, chainId = 1 }) {
+  const bytecodePayload = Array.from(fromHex(String(bytecodeHex).replace(/^0x/, '')))
+  const tx = {
+    sender: Array.from(fromHex(from.replace(/^0x/, ''))),
+    nonce,
+    value: 0,
+    gas_limit: gasLimit,
+    max_fee_per_gas: 1e9,
+    max_priority_fee_per_gas: 1e9,
+    payload: payloadWithPubKey(keyPair.publicKey, bytecodePayload),
+    chain_id: chainId,
+    signature: [],
+  }
+  const msg = await txHash(tx)
+  tx.signature = Array.from(nacl.sign.detached(msg, keyPair.secretKey))
+  return tx
+}
+
+export async function submitDeployTx(tx) {
+  const r = await window.fetch(`${getApiUrl()}/submit_tx`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(tx),
+  })
+  const text = await r.text()
+  return parseSubmitTxResponse(text, r.ok)
 }
 
 export async function buildSignedTx({ from, to, valueWei, payload = [], gasLimit = 21000, chainId = 1 }) {
   const kp = loadWalletKeyPair()
   if (!kp) throw new Error('No wallet — create one on /wallet')
   const { nonce } = await fetchBalance(from)
+  const extra = Array.isArray(payload) ? payload : Array.from(fromHex(String(payload).replace(/^0x/, '')))
   const tx = {
     sender: Array.from(fromHex(from.replace(/^0x/, ''))),
     to: to ? Array.from(fromHex(to.replace(/^0x/, ''))) : [],
@@ -183,13 +220,39 @@ export async function buildSignedTx({ from, to, valueWei, payload = [], gasLimit
     gas_limit: gasLimit,
     max_fee_per_gas: 1e9,
     max_priority_fee_per_gas: 1e9,
-    payload: Array.isArray(payload) ? payload : Array.from(fromHex(String(payload).replace(/^0x/, ''))),
+    payload: payloadWithPubKey(kp.publicKey, extra),
     chain_id: chainId,
     signature: [],
   }
   const msg = await txHash(tx)
   tx.signature = Array.from(nacl.sign.detached(msg, kp.secretKey))
   return tx
+}
+
+export function receiptStatus(receipt) {
+  if (!receipt) return 'pending'
+  if (receipt.success === true) return 'confirmed'
+  if (receipt.success === false) return 'failed'
+  return 'failed'
+}
+
+export function parseSubmitTxResponse(text, ok = true) {
+  let data
+  try {
+    data = JSON.parse(text)
+  } catch {
+    if (!ok) throw new Error(text)
+    const hash = text.replace(/^"|"$/g, '')
+    if (!hash) throw new Error('Empty response from submit_tx')
+    return { status: 'success', hash }
+  }
+  if (data.status?.includes('already in mempool')) {
+    return { status: data.status, hash: data.hash || '', alreadyPending: true }
+  }
+  if (data.status?.startsWith('error')) throw new Error(data.status)
+  if (!ok) throw new Error(data.status || text)
+  if (!data.hash) throw new Error(data.status || 'No transaction hash returned')
+  return data
 }
 
 export async function submitTx(tx) {
@@ -199,8 +262,8 @@ export async function submitTx(tx) {
     body: JSON.stringify(tx),
   })
   const text = await r.text()
-  if (!r.ok) throw new Error(text)
-  return text.replace(/^"|"$/g, '')
+  const data = parseSubmitTxResponse(text, r.ok)
+  return data.hash
 }
 
 export async function signAndSubmit(opts) {
@@ -316,4 +379,76 @@ export async function loadNftsFromChain(contract, viewer) {
     }
   }
   return nfts
+}
+
+/** Constant-product AMM quote (x·y=k). Fee in basis points (default 30 = 0.3%). */
+export function ammQuoteAmountOut(reserveIn, reserveOut, amountIn, feeBps = 30) {
+  const rin = BigInt(reserveIn)
+  const rout = BigInt(reserveOut)
+  const ain = BigInt(amountIn)
+  if (rin <= 0n || rout <= 0n || ain <= 0n) return 0n
+  const feeDenom = 10000n - BigInt(feeBps)
+  const amountInWithFee = (ain * feeDenom) / 10000n
+  return (amountInWithFee * rout) / (rin + amountInWithFee)
+}
+
+export async function listWasmContracts() {
+  const r = await window.fetch(`${getApiUrl()}/wasm/contracts`)
+  if (!r.ok) throw new Error(await r.text())
+  const d = await r.json()
+  return d.contracts || []
+}
+
+export async function deployWasm(name, wasmBase64) {
+  const r = await window.fetch(`${getApiUrl()}/deploy_wasm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, wasm: wasmBase64 }),
+  })
+  const d = await r.json()
+  if (d.status !== 'success') throw new Error(d.error || 'deploy failed')
+  return d
+}
+
+export async function callWasm(name, func, arg = 0) {
+  const r = await window.fetch(`${getApiUrl()}/call_wasm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, func, arg }),
+  })
+  const d = await r.json()
+  if (d.status !== 'success') throw new Error(d.error || 'call failed')
+  return d
+}
+
+export async function submitUserOperation(op) {
+  const r = await window.fetch(`${getApiUrl()}/submit_user_operation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(op),
+  })
+  return r.json()
+}
+
+export async function fetchPendingUserOps() {
+  const r = await window.fetch(`${getApiUrl()}/user_operations/pending`)
+  if (!r.ok) return 0
+  const d = await r.json()
+  return d.pending ?? 0
+}
+
+export async function mevCommit({ txHash, secret, sender, nonce }) {
+  const r = await window.fetch(`${getApiUrl()}/mev/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tx_hash: txHash.startsWith('0x') ? txHash : `0x${txHash}`,
+      secret: secret.startsWith('0x') ? secret : `0x${secret}`,
+      sender,
+      nonce,
+    }),
+  })
+  const d = await r.json()
+  if (d.commitment && !d.commitment.startsWith('0x')) d.commitment = `0x${d.commitment}`
+  return d
 }

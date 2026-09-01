@@ -206,9 +206,9 @@ mod tests {
         let config = RewardConfig::default();
         let calc = RewardCalculator::new(config);
 
-        let stake = 100_000_000_000_000_000_000u64; // 100 tokens
+        let stake = 10_000_000_000_000_000_000u64; // 10 tokens
         let penalty = calc.calculate_slash_penalty(stake);
 
-        assert_eq!(penalty, 5_000_000_000_000_000_000); // 5% of 100 tokens
+        assert_eq!(penalty, 500_000_000_000_000_000); // 5% of 10 tokens
     }
 }

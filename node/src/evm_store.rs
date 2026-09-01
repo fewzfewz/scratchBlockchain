@@ -151,7 +151,7 @@ mod tests {
 
     #[test]
     fn chain_store_evm_roundtrip() {
-        let inner: Arc<dyn storage::KeyValueStore> = Arc::new(MemDb::new());
+        let inner = Arc::new(MemDb::new());
         let chain = Arc::new(ChainStore::new(inner));
         let store = ChainStoreEvmStore::new(chain);
         let addr = Address::from_slice(&[1u8; 20]);
