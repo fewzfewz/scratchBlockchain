@@ -6,12 +6,13 @@ import {
   DEFI_POOL, fetchBalance, fetchGasPrice, signAndSubmit,
   scanDeployedContracts, walletAddress, weiToNbl,
   nblToWei, encodeTransfer, erc20Balance, loadWalletKeyPair, estimateGas,
+  ammQuoteAmountOut,
 } from '../lib/chain.js'
 
 export default function DeFiPage() {
   const [amountIn, setAmountIn] = useState('1.0')
-  const [poolLiquidity, setPoolLiquidity] = useState('—')
-  const [userBalance, setUserBalance] = useState('—')
+  const [poolLiquidityWei, setPoolLiquidityWei] = useState(0n)
+  const [userBalanceWei, setUserBalanceWei] = useState(0n)
   const [baseFee, setBaseFee] = useState('—')
   const [swapMode, setSwapMode] = useState('native')
   const [tokenOut, setTokenOut] = useState('')
@@ -30,18 +31,18 @@ export default function DeFiPage() {
         fetchBalance(pool),
         fetchGasPrice(),
       ])
-      setPoolLiquidity(weiToNbl(poolBal.balance))
+      setPoolLiquidityWei(BigInt(poolBal.balance || 0))
       setBaseFee(gas.base_fee)
       if (addr) {
         const ub = await fetchBalance(addr)
-        setUserBalance(weiToNbl(ub.balance))
+        setUserBalanceWei(BigInt(ub.balance || 0))
       }
       const list = await scanDeployedContracts()
       const erc20s = list.filter((c) => c.type === 'ERC20' || c.name?.includes('ERC20'))
       setContracts(erc20s)
       if (erc20s[0] && !tokenOut) setTokenOut(erc20s[0].address)
     } catch {
-      setPoolLiquidity('0')
+      setPoolLiquidityWei(0n)
     }
   }, [addr, tokenOut])
 
@@ -123,7 +124,16 @@ export default function DeFiPage() {
   useEffect(() => {
     if (!tokenOut || !addr) return
     erc20Balance(tokenOut, addr).then(setTokenBal).catch(() => setTokenBal(null))
-  }, [tokenOut, addr, userBalance])
+  }, [tokenOut, addr, userBalanceWei])
+
+  const poolLiquidity = weiToNbl(poolLiquidityWei)
+  const userBalance = weiToNbl(userBalanceWei)
+  const amountInWei = nblToWei(amountIn || '0')
+  const estimatedOut = ammQuoteAmountOut(
+    userBalanceWei || 1n,
+    poolLiquidityWei || 1n,
+    amountInWei,
+  )
 
   return (
     <PageShell variant="default">
@@ -187,6 +197,12 @@ export default function DeFiPage() {
           <input value={recipient} onChange={(e) => setRecipient(e.target.value)}
             placeholder="Recipient (optional — defaults to pool)"
             className="w-full px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
+
+          <div className="px-4 py-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30 text-sm">
+            <span className="text-slate-500">AMM estimate (0.3% fee): </span>
+            <span className="font-mono font-semibold text-emerald-500">{weiToNbl(estimatedOut)} NBL</span>
+            <span className="text-xs text-slate-400 block mt-1">Constant-product quote using wallet ↔ pool reserves</span>
+          </div>
 
           <div className="flex gap-3">
             <button type="button" disabled={submitting} onClick={executeSwap}

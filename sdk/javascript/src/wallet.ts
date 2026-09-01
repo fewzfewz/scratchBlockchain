@@ -213,6 +213,13 @@ export class ConnectedWallet {
     });
   }
 
+  async executeProposal(proposalId: number): Promise<any> {
+    return this.submitGovernanceAction({
+      action: "execute",
+      proposal_id: proposalId,
+    });
+  }
+
   getClient(): ModularClient {
     return this.client;
   }

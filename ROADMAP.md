@@ -4,7 +4,7 @@
 
 **Last Updated**: September 2026  
 **Node RPC**: `http://localhost:8545`  
-**Frontend SPA**: `http://localhost:5173` (16 pages, dark/light mode)  
+**Frontend SPA**: `http://localhost:5173` (19 pages incl. WASM, Advanced, NFT; dark/light mode)  
 **API Docs**: Interactive Swagger UI at `/api-docs`
 
 This document outlines the journey from our current development codebase to a fully functional public mainnet.
@@ -40,7 +40,7 @@ This document outlines the journey from our current development codebase to a fu
 - [x] **Wallet** — Ed25519 key generation, address derivation, tx signing, balance/nonce queries
 - [x] **Explorer** — Dashboard, validators list, staking tab
 - [x] **Faucet** — Direct node RPC integration, no separate backend process
-- [x] **Governance** — Proposal creation/voting with light/dark mode
+- [x] **Governance** — Proposal creation/voting/**execution**, software-upgrade hook → runtime manager
 - [x] **API Docs** — Interactive Swagger UI (core endpoints; new routes in README)
 - [x] **Docs** — Human-readable reference with curl examples
 - [x] **Dark/Light Theme** — Toggle persisted in localStorage, CSS variables
@@ -181,6 +181,7 @@ This document outlines the journey from our current development codebase to a fu
 **Priority**: 🟡 HIGH
 
 ### 13.2 Python SDK
+- [x] **Minimal RPC client**: `sdk/python/` — stdlib `NebulaClient` (health, governance, WASM, bridge)
 - [ ] **Async/Await Support**: Modern Python patterns
 - [ ] **Account Management**: Key generation and signing
 - [ ] **PyPI Package**: Easy installation

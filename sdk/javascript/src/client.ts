@@ -264,6 +264,11 @@ export class ModularClient extends EventEmitter {
     return connected.vote(req.proposalId, choice as "yes" | "no" | "abstain");
   }
 
+  async executeProposal(proposalId: number, wallet: Wallet): Promise<any> {
+    const connected = wallet.connect(this.provider);
+    return connected.executeProposal(proposalId);
+  }
+
   async getVotes(_proposalId: number): Promise<GovVote[]> {
     const proposal = await this.getProposal(_proposalId);
     if (!proposal || !proposal.voters) return [];

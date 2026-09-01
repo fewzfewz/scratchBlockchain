@@ -380,3 +380,75 @@ export async function loadNftsFromChain(contract, viewer) {
   }
   return nfts
 }
+
+/** Constant-product AMM quote (x·y=k). Fee in basis points (default 30 = 0.3%). */
+export function ammQuoteAmountOut(reserveIn, reserveOut, amountIn, feeBps = 30) {
+  const rin = BigInt(reserveIn)
+  const rout = BigInt(reserveOut)
+  const ain = BigInt(amountIn)
+  if (rin <= 0n || rout <= 0n || ain <= 0n) return 0n
+  const feeDenom = 10000n - BigInt(feeBps)
+  const amountInWithFee = (ain * feeDenom) / 10000n
+  return (amountInWithFee * rout) / (rin + amountInWithFee)
+}
+
+export async function listWasmContracts() {
+  const r = await window.fetch(`${getApiUrl()}/wasm/contracts`)
+  if (!r.ok) throw new Error(await r.text())
+  const d = await r.json()
+  return d.contracts || []
+}
+
+export async function deployWasm(name, wasmBase64) {
+  const r = await window.fetch(`${getApiUrl()}/deploy_wasm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, wasm: wasmBase64 }),
+  })
+  const d = await r.json()
+  if (d.status !== 'success') throw new Error(d.error || 'deploy failed')
+  return d
+}
+
+export async function callWasm(name, func, arg = 0) {
+  const r = await window.fetch(`${getApiUrl()}/call_wasm`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name, func, arg }),
+  })
+  const d = await r.json()
+  if (d.status !== 'success') throw new Error(d.error || 'call failed')
+  return d
+}
+
+export async function submitUserOperation(op) {
+  const r = await window.fetch(`${getApiUrl()}/submit_user_operation`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(op),
+  })
+  return r.json()
+}
+
+export async function fetchPendingUserOps() {
+  const r = await window.fetch(`${getApiUrl()}/user_operations/pending`)
+  if (!r.ok) return 0
+  const d = await r.json()
+  return d.pending ?? 0
+}
+
+export async function mevCommit({ txHash, secret, sender, nonce }) {
+  const r = await window.fetch(`${getApiUrl()}/mev/commit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      tx_hash: txHash.startsWith('0x') ? txHash : `0x${txHash}`,
+      secret: secret.startsWith('0x') ? secret : `0x${secret}`,
+      sender,
+      nonce,
+    }),
+  })
+  const d = await r.json()
+  if (d.commitment && !d.commitment.startsWith('0x')) d.commitment = `0x${d.commitment}`
+  return d
+}

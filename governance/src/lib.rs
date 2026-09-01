@@ -985,6 +985,32 @@ impl ChainGovernance {
         Ok(())
     }
 
+    /// Mark a passed proposal as executed after its voting period ends.
+    pub fn execute_proposal(
+        &mut self,
+        _executor: Address,
+        proposal_id: u64,
+        current_block: u64,
+    ) -> Result<(), String> {
+        let idx = self
+            .proposals
+            .iter()
+            .position(|p| p.id == proposal_id)
+            .ok_or("Proposal not found")?;
+        if self.proposals[idx].status == ProposalStatus::Executed {
+            return Err("Proposal already executed".into());
+        }
+        let resolved = self.resolve_status(&self.proposals[idx], current_block);
+        if resolved != ProposalStatus::Passed {
+            return Err(format!(
+                "Proposal cannot be executed (resolved status: {:?})",
+                resolved
+            ));
+        }
+        self.proposals[idx].status = ProposalStatus::Executed;
+        Ok(())
+    }
+
     /// Current status of a proposal. Tally-based outcomes only resolve after
     /// the voting period has ended; until then a proposal is Active.
     pub fn resolve_status(&self, proposal: &Proposal, current_block: u64) -> ProposalStatus {
@@ -1063,6 +1089,13 @@ impl ChainGovernance {
                 let choice = VoteChoice::from_str(choice_str).ok_or("Invalid choice")?;
                 self.vote(proposal_id, sender, choice, voting_power, current_block)
             }
+            "execute" => {
+                let proposal_id = value
+                    .get("proposal_id")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("Missing proposal_id")?;
+                self.execute_proposal(sender, proposal_id, current_block)
+            }
             "propose" => {
                 let title = value
                     .get("title")
@@ -1107,7 +1140,7 @@ impl ChainGovernance {
         };
         matches!(
             value.get("action").and_then(|a| a.as_str()),
-            Some("vote") | Some("propose")
+            Some("vote") | Some("propose") | Some("execute")
         )
     }
 
@@ -1266,9 +1299,39 @@ mod chain_governance_tests {
     #[test]
     fn test_is_governance_payload() {
         assert!(ChainGovernance::is_governance_payload(
-            br#"{"action":"vote","proposal_id":1,"choice":"no"}"#
+            br#"{"action":"execute","proposal_id":1}"#
         ));
         assert!(!ChainGovernance::is_governance_payload(b""));
         assert!(!ChainGovernance::is_governance_payload(b"not json"));
+    }
+
+    #[test]
+    fn test_execute_passed_proposal() {
+        let mut gov = setup();
+        gov.propose(
+            addr(1),
+            "Execute me",
+            "D",
+            ProposalType::TextProposal {
+                title: "Execute me".into(),
+                description: "D".into(),
+            },
+            0,
+        )
+        .unwrap();
+        gov.vote(1, addr(1), VoteChoice::Yes, 1_000_000, 0).unwrap();
+        gov.vote(1, addr(2), VoteChoice::Yes, 800_000, 0).unwrap();
+        gov.vote(1, addr(3), VoteChoice::No, 400_000, 0).unwrap();
+        let end = gov.get_proposal(1).unwrap().end_block;
+        assert_eq!(
+            gov.resolve_status(gov.get_proposal(1).unwrap(), end),
+            ProposalStatus::Passed
+        );
+        gov.execute_proposal(addr(4), 1, end).unwrap();
+        assert_eq!(
+            gov.get_proposal(1).unwrap().status,
+            ProposalStatus::Executed
+        );
+        assert!(gov.execute_proposal(addr(4), 1, end).is_err());
     }
 }

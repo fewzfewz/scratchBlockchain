@@ -458,11 +458,12 @@ function Dashboard({ proposals, treasury, validators, govParams, onTabChange }) 
   );
 }
 
-function Proposals({ proposals, onVote, connected }) {
+function Proposals({ proposals, onVote, onExecute, connected }) {
   const [filter, setFilter] = useState("All");
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState(null);
   const [voting, setVoting] = useState(null);
+  const [executing, setExecuting] = useState(null);
   const [toast, setToast] = useState(null);
   const filters = ["All", "Active", "Pending", "Passed", "Rejected", "Executed"];
 
@@ -492,6 +493,19 @@ function Proposals({ proposals, onVote, connected }) {
       showToast(`Vote failed: ${e.message}`);
     } finally {
       setVoting(null);
+    }
+  };
+
+  const handleExecute = async (proposalId) => {
+    if (!onExecute) return;
+    setExecuting(proposalId);
+    try {
+      const hash = await onExecute(proposalId);
+      showToast(`Execution submitted for #${proposalId} (tx ${hash.slice(0, 8)}...${hash.slice(-6)})`);
+    } catch (e) {
+      showToast(`Execute failed: ${e.message}`);
+    } finally {
+      setExecuting(null);
     }
   };
 
@@ -632,6 +646,22 @@ function Proposals({ proposals, onVote, connected }) {
               );
             })()}
           </div>
+
+          {selected.status === "Passed" && !selected.executed && onExecute && (
+            <div className="space-y-3 border-t border-slate-200 dark:border-slate-700/50 pt-4">
+              <p className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                This proposal passed — execute on-chain{connected ? "" : " (connect wallet first)"}
+              </p>
+              <button
+                onClick={() => handleExecute(selected.id)}
+                disabled={executing === selected.id || !connected}
+                className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-purple-600 hover:from-violet-500 hover:to-purple-500 text-white text-sm font-medium transition-all disabled:opacity-50"
+              >
+                {executing === selected.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Rocket className="w-4 h-4" />}
+                Execute proposal
+              </button>
+            </div>
+          )}
 
           {selected.status === "Active" && (
             <div className="space-y-3">
@@ -1107,6 +1137,14 @@ export default function Governance() {
     return submitGovTx(activeWallet, { action: "vote", proposal_id: proposalId, choice }, RPC_URL);
   };
 
+  const handleExecute = async (proposalId) => {
+    const activeWallet = wallet || loadWallet();
+    if (!activeWallet) {
+      throw new Error("Create a wallet on the Wallet page before executing");
+    }
+    return submitGovTx(activeWallet, { action: "execute", proposal_id: proposalId }, RPC_URL);
+  };
+
   const submitProposal = async (proposal) => {
     const activeWallet = wallet || loadWallet();
     if (!activeWallet) {
@@ -1204,7 +1242,7 @@ export default function Governance() {
               : <Dashboard proposals={proposals} treasury={treasury} validators={validators} govParams={govParams} onTabChange={setActiveTab} />
           )}
           {activeTab === "proposals" && (
-            <Proposals proposals={proposals} onVote={handleVote} connected={!!wallet} />
+            <Proposals proposals={proposals} onVote={handleVote} onExecute={handleExecute} connected={!!wallet} />
           )}
           {activeTab === "create" && (
             <CreateProposal onSubmit={submitProposal} connected={!!wallet} />

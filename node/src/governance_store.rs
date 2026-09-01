@@ -14,6 +14,8 @@ use storage::ChainStore;
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+use crate::runtime_upgrade::RuntimeVersion;
+
 /// Trie key under which the serialized governance state lives.
 pub const GOVERNANCE_KEY: &[u8] = b"governance";
 
@@ -147,6 +149,17 @@ pub async fn apply_extrinsics(
                     power
                 );
                 changed = true;
+                if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+                    if value.get("action").and_then(|a| a.as_str()) == Some("execute") {
+                        if let Some(id) = value.get("proposal_id").and_then(|v| v.as_u64()) {
+                            if let Err(e) =
+                                on_proposal_executed(trie, &state, id, current_block).await
+                            {
+                                warn!("Post-execute hook failed for proposal {}: {}", id, e);
+                            }
+                        }
+                    }
+                }
             }
             Err(e) => warn!(
                 "Governance transaction rejected at block {}: {}",
@@ -159,6 +172,69 @@ pub async fn apply_extrinsics(
         let data = serde_json::to_vec(&state)?;
         trie.lock().await.insert(GOVERNANCE_KEY, &data)?;
     }
+    Ok(())
+}
+
+fn parse_spec_version(version: &str) -> u32 {
+    version
+        .split('.')
+        .filter_map(|part| part.trim().split('-').next()?.parse().ok())
+        .next()
+        .unwrap_or(1)
+}
+
+fn parse_code_hash(hash: &str) -> Result<[u8; 32], String> {
+    let bytes = hex::decode(hash.trim_start_matches("0x")).map_err(|e| e.to_string())?;
+    if bytes.len() != 32 {
+        return Err("Software upgrade hash must be 32 bytes".into());
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
+}
+
+/// Side effects when a governance proposal is marked executed on-chain.
+async fn on_proposal_executed(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+    state: &ChainGovernance,
+    proposal_id: u64,
+    current_block: u64,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let Some(proposal) = state.get_proposal(proposal_id) else {
+        return Ok(());
+    };
+    let ProposalType::SoftwareUpgrade { version, hash } = &proposal.proposal_type else {
+        return Ok(());
+    };
+
+    let code_hash = parse_code_hash(hash).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let current = crate::runtime_upgrade_store::current_version(trie).await?;
+    let parsed = parse_spec_version(version);
+    let spec_version = parsed.max(current.spec_version.saturating_add(1));
+
+    let new_version = RuntimeVersion {
+        spec_name: current.spec_name.clone(),
+        impl_name: current.impl_name.clone(),
+        authoring_version: current.authoring_version,
+        spec_version,
+        impl_version: spec_version,
+    };
+    let activation_height = current_block.saturating_add(10);
+
+    let upgrade_id = crate::runtime_upgrade_store::propose_upgrade(
+        trie,
+        new_version.clone(),
+        code_hash,
+        activation_height,
+        proposal.proposer,
+    )
+    .await?;
+    crate::runtime_upgrade_store::approve_upgrade(trie, upgrade_id).await?;
+
+    info!(
+        "Software upgrade proposal {} executed — runtime upgrade {} approved for height {} (spec v{})",
+        proposal_id, upgrade_id, activation_height, spec_version
+    );
     Ok(())
 }
 
