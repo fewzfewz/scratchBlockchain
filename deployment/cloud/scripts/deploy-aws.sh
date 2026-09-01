@@ -92,6 +92,7 @@ ansible-playbook -i inventory.yml playbook.yml \
   -e "chain_id=modular-testnet-1" \
   -e "data_dir=/data/blockchain" \
   -e "genesis_path=../configs/genesis.json" \
+  -e "node_binary_path=${NODE_BINARY_PATH:-$PROJECT_ROOT/target/release/node}" \
   -e "bootstrap_nodes=['/dns4/$BOOTSTRAP_IP/tcp/26656']"
 
 # ---- Step 6: Health check ----
@@ -103,10 +104,10 @@ sleep 10
 for name in "bootstrap:$BOOTSTRAP_IP" "validator1:$VALIDATOR1_IP" "validator2:$VALIDATOR2_IP" "validator3:$VALIDATOR3_IP" "validator4:$VALIDATOR4_IP" "rpc1:$RPC1_IP" "rpc2:$RPC2_IP"; do
   label="${name%%:*}"
   ip="${name##*:}"
-  if curl -sf "http://$ip:26657/health" > /dev/null 2>&1; then
+  if curl -sf "http://$ip:8545/health" > /dev/null 2>&1; then
     echo "  $label ($ip): HEALTHY"
   else
-    echo "  $label ($ip): UNHEALTHY"
+    echo "  $label ($ip): UNHEALTHY (expected :8545/health)"
   fi
 done
 

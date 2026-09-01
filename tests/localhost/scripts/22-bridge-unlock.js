@@ -47,11 +47,15 @@ async function test22_BridgeUnlock() {
     if (unlock.status !== 'unlock_queued') throw new Error(`Unexpected status: ${unlock.status}`);
     console.log(`3. ✅ Unlock queued for ${unlock.eth_recipient.slice(0, 10)}...`);
 
+    const pending = await fetchJson('http://localhost:8545/bridge/pending_unlocks');
+    if ((pending.count || 0) < 1) throw new Error('No pending unlocks in queue');
+    console.log(`4. ✅ Pending unlocks: ${pending.count}`);
+
     const status = await fetchJson('http://localhost:8545/bridge/status');
-    if ((status.processed_unlocks || 0) < 1) {
-      throw new Error('processed_unlocks not incremented');
+    if ((status.pending_unlocks || 0) < 1) {
+      throw new Error('bridge/status pending_unlocks not incremented');
     }
-    console.log(`4. ✅ Bridge status: ${status.processed_unlocks} unlock(s) processed`);
+    console.log(`5. ✅ Bridge status: ${status.pending_unlocks} pending`);
 
     passBanner('Nebula Lock → ETH Unlock');
   } catch (e) {

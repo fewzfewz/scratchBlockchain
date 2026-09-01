@@ -1,4 +1,5 @@
 pub mod block_producer;
+pub mod bridge_queue;
 pub mod circuit_breaker;
 pub mod evm_store;
 pub mod faucet;

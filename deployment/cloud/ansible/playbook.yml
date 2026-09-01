@@ -4,10 +4,11 @@
   become: yes
   gather_facts: yes
   vars:
-    chain_id: "modular-testnet-1"
-    node_version: "latest"
+    chain_id: "{{ lookup('env', 'CHAIN_ID') | default('modular-testnet-1', true) }}"
+    node_version: "{{ lookup('env', 'NODE_VERSION') | default('latest', true) }}"
     data_dir: "/data/blockchain"
-    genesis_path: "../configs/genesis.json"
+    genesis_path: "{{ playbook_dir }}/../configs/genesis.json"
+    node_binary_path: "{{ lookup('env', 'NODE_BINARY_PATH') | default('', true) }}"
 
   tasks:
     - name: Install system dependencies
@@ -48,38 +49,25 @@
         state: directory
         mode: "0755"
 
-    - name: Download node binary
-      get_url:
-        url: "https://github.com/your-org/modular-blockchain/releases/download/{{ node_version }}/modular-node-linux-amd64.tar.gz"
-        dest: "/tmp/modular-node.tar.gz"
-      when: node_version != "source"
-
-    - name: Extract binary
-      unarchive:
-        src: "/tmp/modular-node.tar.gz"
-        dest: "/usr/local/bin"
-        remote_src: yes
-      when: node_version != "source"
-
-    - name: Copy genesis file
+    - name: Copy locally built node binary
       copy:
-        src: "{{ genesis_path }}"
-        dest: "{{ data_dir }}/genesis.json"
-        mode: "0644"
+        src: "{{ node_binary_path }}"
+        dest: "/usr/local/bin/modular-node"
+        mode: "0755"
+      when: node_binary_path | length > 0
 
-    - name: Create systemd service
-      template:
-        src: "modular-node.service.j2"
-        dest: "/etc/systemd/system/modular-node.service"
-        mode: "0644"
-      notify: restart modular-node
+    - name: Download node binary from release
+      get_url:
+        url: "https://github.com/fewzfewz/scratchBlockchain/releases/download/{{ node_version }}/modular-node-linux-amd64"
+        dest: "/usr/local/bin/modular-node"
+        mode: "0755"
+      when: node_binary_path | length == 0 and node_version != "source"
 
-    - name: Enable and start service
-      systemd:
-        name: modular-node
-        enabled: yes
-        state: started
-        daemon_reload: yes
+    - name: Deploy node via role
+      include_role:
+        name: node
+      vars:
+        genesis_src: "{{ genesis_path }}"
 
   handlers:
     - name: restart modular-node

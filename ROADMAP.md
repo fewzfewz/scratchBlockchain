@@ -93,9 +93,11 @@ This document outlines the journey from our current development codebase to a fu
 **Status**: Code exists in `interop/src/`, needs live deployment and testing
 
 ### 10.1 Ethereum Bridge
+- [x] **Local bridge RPC** — `/bridge/mint`, `/bridge/unlock`, `/bridge/pending_unlocks`
+- [x] **ETH relayer daemon** — `interop/scripts/eth-relayer-daemon.js`
 - [/] **Bridge Code**: Written in `interop/src/` (contract, relayer, messaging)
-- [ ] **Deployment**: Deploy bridge contracts on Ethereum
-- [ ] **Test**: End-to-end bridge testing
+- [ ] **Deployment**: Deploy bridge contracts on Ethereum Sepolia/mainnet
+- [ ] **Test**: End-to-end live ETH unlock with funded bridge contract
 - [ ] **Security Audit**: External review of bridge contracts
 
 **Estimated Time**: 4-6 weeks  
@@ -126,7 +128,7 @@ This document outlines the journey from our current development codebase to a fu
 ### 11.2 Runtime Upgrades
 - [x] **Runtime upgrade manager** — persisted in state trie, activated on block finalize
 - [x] **RPC** — `GET /runtime/version`, `/runtime/upgrades`, `POST /runtime/propose`, `/runtime/approve`
-- [ ] **Governance-linked auto-approve** — SoftwareUpgrade proposals auto-approve runtime upgrades
+- [x] **Governance-linked auto-approve** — SoftwareUpgrade execute → runtime upgrade store
 - [ ] **Rollback Mechanism**: Revert failed upgrades on mainnet
 
 **Estimated Time**: 4-5 weeks  
@@ -200,9 +202,9 @@ This document outlines the journey from our current development codebase to a fu
 
 ---
 
-## 📊 Phase 14: Testnet Campaign
+## Phase 14: Testnet Campaign
 
-**Status**: Infrastructure configured (Docker), not deployed publicly
+**Status**: Cloud scaffolding + ansible hardening; public deploy not yet live
 
 ### 14.1 Public Testnet Launch
 - [ ] **Faucet Service**: Distribute test tokens

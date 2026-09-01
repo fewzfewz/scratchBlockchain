@@ -15,6 +15,7 @@
 //! ## CORS
 //! CORS headers are enabled to allow web wallets and explorers to connect.
 
+use crate::bridge_queue::{BridgeUnlockQueue, PendingUnlock};
 use crate::governance_store;
 use crate::tx_pool::TxPool;
 use common::types::{Block, Transaction};
@@ -221,6 +222,12 @@ struct BridgeUnlockRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct BridgeUnlockAckRequest {
+    nebula_tx_hash: String,
+    eth_tx_hash: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
 struct RuntimeProposeRequest {
     spec_version: u32,
     activation_height: u64,
@@ -242,6 +249,7 @@ struct BridgeStatusResponse {
     eth_rpc_configured: bool,
     processed_mints: usize,
     processed_unlocks: usize,
+    pending_unlocks: usize,
     chain_id: u64,
 }
 
@@ -316,7 +324,8 @@ impl RpcServer {
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let bridge_minted: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
-        let bridge_unlocked: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>> =
+            Arc::new(Mutex::new(BridgeUnlockQueue::new()));
 
         // Rate limiter: requests/second per IP (configurable via node config)
         let rl = NonZeroU32::new(self.rate_limit).unwrap_or(NonZeroU32::new(200).unwrap());
@@ -747,15 +756,42 @@ impl RpcServer {
             .and(warp::get())
             .and(with_arc(state_trie.clone()))
             .and(with_arc(bridge_minted.clone()))
-            .and(with_arc(bridge_unlocked.clone()))
+            .and(with_arc(bridge_unlock_queue.clone()))
             .and(warp::any().map(move || chain_id))
             .and_then(
                 |_,
                  state_trie: Arc<Mutex<PatriciaTrie>>,
                  bridge_minted: Arc<Mutex<HashSet<String>>>,
-                 bridge_unlocked: Arc<Mutex<HashSet<String>>>,
+                 bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
                  chain_id: u64| async move {
-                    handle_bridge_status(state_trie, bridge_minted, bridge_unlocked, chain_id).await
+                    handle_bridge_status(state_trie, bridge_minted, bridge_unlock_queue, chain_id)
+                        .await
+                },
+            );
+
+        // GET /bridge/pending_unlocks — relayer queue (Nebula lock → ETH unlock)
+        let bridge_pending_unlocks = warp::path!("bridge" / "pending_unlocks")
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(bridge_unlock_queue.clone()))
+            .and_then(
+                |_, bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>| async move {
+                    handle_bridge_pending_unlocks(bridge_unlock_queue).await
+                },
+            );
+
+        // POST /bridge/unlock/ack — relayer confirms ETH unlock submitted
+        let bridge_unlock_ack = warp::path!("bridge" / "unlock" / "ack")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(bridge_unlock_queue.clone()))
+            .and_then(
+                |_,
+                 req: BridgeUnlockAckRequest,
+                 bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>| async move {
+                    handle_bridge_unlock_ack(req, bridge_unlock_queue).await
                 },
             );
 
@@ -783,13 +819,13 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(chain_store.clone()))
-            .and(with_arc(bridge_unlocked.clone()))
+            .and(with_arc(bridge_unlock_queue.clone()))
             .and_then(
                 |_,
                  req: BridgeUnlockRequest,
                  chain_store: Arc<ChainStore>,
-                 bridge_unlocked: Arc<Mutex<HashSet<String>>>| async move {
-                    handle_bridge_unlock(req, chain_store, bridge_unlocked).await
+                 bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>| async move {
+                    handle_bridge_unlock(req, chain_store, bridge_unlock_queue).await
                 },
             );
 
@@ -831,6 +867,8 @@ impl RpcServer {
             .or(bridge_status)
             .or(bridge_mint)
             .or(bridge_unlock)
+            .or(bridge_pending_unlocks)
+            .or(bridge_unlock_ack)
             .or(fee_history)
             .or(validators)
             .or(delegations)
@@ -1411,7 +1449,7 @@ fn deterministic_address(label: &str) -> String {
 async fn handle_bridge_status(
     state_trie: Arc<Mutex<PatriciaTrie>>,
     bridge_minted: Arc<Mutex<HashSet<String>>>,
-    bridge_unlocked: Arc<Mutex<HashSet<String>>>,
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
     chain_id: u64,
 ) -> Result<impl warp::Reply, Infallible> {
     let validators_count = {
@@ -1424,7 +1462,9 @@ async fn handle_bridge_status(
             .unwrap_or(0)
     };
     let processed_mints = bridge_minted.lock().await.len();
-    let processed_unlocks = bridge_unlocked.lock().await.len();
+    let queue = bridge_unlock_queue.lock().await;
+    let processed_unlocks = queue.processed_count();
+    let pending_unlocks = queue.pending().len();
     let eth_rpc_configured = std::env::var("ETH_RPC_URL").is_ok();
 
     Ok(warp::reply::json(&BridgeStatusResponse {
@@ -1435,8 +1475,42 @@ async fn handle_bridge_status(
         eth_rpc_configured,
         processed_mints,
         processed_unlocks,
+        pending_unlocks,
         chain_id,
     }))
+}
+
+async fn handle_bridge_pending_unlocks(
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let queue = bridge_unlock_queue.lock().await;
+    Ok(warp::reply::json(&serde_json::json!({
+        "pending": queue.pending(),
+        "count": queue.pending().len(),
+    })))
+}
+
+async fn handle_bridge_unlock_ack(
+    req: BridgeUnlockAckRequest,
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let hash_clean = req
+        .nebula_tx_hash
+        .trim()
+        .trim_start_matches("0x")
+        .to_lowercase();
+    let mut queue = bridge_unlock_queue.lock().await;
+    if queue.ack(&hash_clean) {
+        Ok(warp::reply::json(&serde_json::json!({
+            "status": "acknowledged",
+            "nebula_tx_hash": format!("0x{}", hash_clean),
+            "eth_tx_hash": req.eth_tx_hash,
+        })))
+    } else {
+        Ok(warp::reply::json(&serde_json::json!({
+            "error": "Pending unlock not found",
+        })))
+    }
 }
 
 async fn verify_eth_lock_tx(
@@ -1730,7 +1804,7 @@ fn verify_nebula_lock_tx(
 async fn handle_bridge_unlock(
     req: BridgeUnlockRequest,
     chain_store: Arc<ChainStore>,
-    bridge_unlocked: Arc<Mutex<HashSet<String>>>,
+    bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
 ) -> Result<impl warp::Reply, Infallible> {
     let hash_clean = req.nebula_tx_hash.trim().trim_start_matches("0x").to_lowercase();
     let hash_bytes = match hex::decode(&hash_clean) {
@@ -1747,10 +1821,17 @@ async fn handle_bridge_unlock(
     };
 
     {
-        let unlocked = bridge_unlocked.lock().await;
-        if unlocked.contains(&hash_clean) {
+        let queue = bridge_unlock_queue.lock().await;
+        if queue.is_processed(&hash_clean) {
             return Ok(warp::reply::json(&serde_json::json!({
                 "error": "Nebula lock already processed for unlock",
+            })));
+        }
+        if queue.is_pending(&hash_clean) {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "status": "unlock_queued",
+                "nebula_tx_hash": format!("0x{}", hash_clean),
+                "note": "Already pending for relayer",
             })));
         }
     }
@@ -1776,9 +1857,7 @@ async fn handle_bridge_unlock(
             .unwrap_or_default()
     });
 
-    if eth_recipient.is_empty()
-        || parse_address_20(&eth_recipient).is_none()
-    {
+    if eth_recipient.is_empty() || parse_address_20(&eth_recipient).is_none() {
         return Ok(warp::reply::json(&serde_json::json!({
             "error": "Missing or invalid eth_recipient",
         })));
@@ -1789,15 +1868,35 @@ async fn handle_bridge_unlock(
         .or_else(|| std::env::var("ETH_RPC_URL").ok())
         .unwrap_or_default();
 
-    let mut eth_unlock_submitted = false;
-    if !eth_rpc.is_empty() {
-        // Relayer would call Bridge.unlock on Ethereum; we verify RPC reachability here.
-        if let Ok(true) = verify_eth_rpc_reachable(&eth_rpc).await {
-            eth_unlock_submitted = true;
-        }
-    }
+    let eth_rpc_ok = if !eth_rpc.is_empty() {
+        verify_eth_rpc_reachable(&eth_rpc).await.unwrap_or(false)
+    } else {
+        false
+    };
 
-    bridge_unlocked.lock().await.insert(hash_clean.clone());
+    let source_chain: u32 = std::env::var("NEBULA_CHAIN_ID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+    let dest_chain: u32 = std::env::var("ETH_CHAIN_ID")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let message_id = u64::from_le_bytes(hash_bytes[..8].try_into().unwrap_or([0u8; 8]));
+
+    let pending = PendingUnlock {
+        nebula_tx_hash: hash_clean.clone(),
+        eth_recipient: eth_recipient.clone(),
+        amount: tx.value.to_string(),
+        sender: format!("0x{}", hex::encode(&tx.sender)),
+        nonce: tx.nonce,
+        message_id,
+        source_chain,
+        dest_chain,
+        block_height,
+    };
+
+    bridge_unlock_queue.lock().await.enqueue(pending);
 
     Ok(warp::reply::json(&serde_json::json!({
         "status": "unlock_queued",
@@ -1805,9 +1904,12 @@ async fn handle_bridge_unlock(
         "eth_recipient": eth_recipient,
         "amount": tx.value.to_string(),
         "block_height": block_height,
+        "message_id": message_id,
+        "source_chain": source_chain,
+        "dest_chain": dest_chain,
         "eth_rpc_configured": !eth_rpc.is_empty(),
-        "eth_unlock_submitted": eth_unlock_submitted,
-        "note": "Nebula lock verified; relayer should submit unlock on Ethereum Bridge.sol",
+        "eth_rpc_reachable": eth_rpc_ok,
+        "note": "Relayer should poll GET /bridge/pending_unlocks and submit Bridge.unlockTokens on Ethereum",
     })))
 }
 

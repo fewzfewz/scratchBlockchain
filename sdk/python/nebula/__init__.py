@@ -2,4 +2,9 @@
 
 from nebula.client import NebulaClient
 
-__all__ = ["NebulaClient"]
+try:
+    from nebula.wallet import Wallet
+except ImportError:
+    Wallet = None  # type: ignore
+
+__all__ = ["NebulaClient", "Wallet"]

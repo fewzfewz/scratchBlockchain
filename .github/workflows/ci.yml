@@ -97,6 +97,7 @@ jobs:
           node 02-state-queries.js
           node 11-create-proposal.js
           node 12-vote-proposal.js
+          node 13-execute-proposal.js
           node 16-stake-tokens.js
           node 21-bridge-lock.js
           node 22-bridge-unlock.js

@@ -8,6 +8,10 @@ Type=simple
 User=ubuntu
 Group=ubuntu
 WorkingDirectory={{ data_dir }}
+Environment="RUST_LOG=info"
+Environment="ETH_RPC_URL={{ eth_rpc_url | default('') }}"
+Environment="NEBULA_CHAIN_ID={{ nebula_chain_id | default('100') }}"
+Environment="ETH_CHAIN_ID={{ eth_chain_id | default('1') }}"
 ExecStart=/usr/local/bin/modular-node start --config {{ data_dir }}/config.toml --genesis {{ data_dir }}/genesis.json
 Restart=always
 RestartSec=10
