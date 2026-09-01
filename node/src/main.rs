@@ -750,6 +750,7 @@ impl Node {
                 // Apply on-chain governance actions included in this block
                 if let Err(e) = node::governance_store::apply_extrinsics(
                     &self.state_trie,
+                    &self.chain_store,
                     &block.extrinsics,
                     block.header.slot,
                 )
@@ -1085,6 +1086,7 @@ impl Node {
         // Apply on-chain governance actions included in this block
         if let Err(e) = node::governance_store::apply_extrinsics(
             &self.state_trie,
+            &self.chain_store,
             &block.extrinsics,
             block.header.slot,
         )

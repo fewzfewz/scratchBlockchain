@@ -344,6 +344,15 @@ impl BlockExecutor {
                 Bytes::from(tx.payload.clone())
             };
 
+            let caller = Address::from_slice(&tx.sender);
+            let (native_bal, native_nonce) = Self::load_account_state(&self.chain_store, &tx.sender);
+            if let Err(e) = self
+                .evm
+                .prepare_native_account(caller, native_bal, native_nonce)
+            {
+                warn!("Failed to sync EVM account for {}: {}", hex::encode(&tx.sender[..6]), e);
+            }
+
             let stx = SignedTransaction {
                 caller: Address::from_slice(&tx.sender),
                 to: tx.to.map(|a| Address::from_slice(&a)),

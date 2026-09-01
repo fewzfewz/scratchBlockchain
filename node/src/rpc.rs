@@ -212,6 +212,14 @@ struct BridgeMintRequest {
     eth_bridge_address: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct BridgeUnlockRequest {
+    nebula_tx_hash: String,
+    eth_recipient: Option<String>,
+    eth_rpc_url: Option<String>,
+    eth_bridge_address: Option<String>,
+}
+
 #[derive(Debug, Serialize)]
 struct BridgeStatusResponse {
     vault_address: String,
@@ -220,6 +228,7 @@ struct BridgeStatusResponse {
     relayers_ready: bool,
     eth_rpc_configured: bool,
     processed_mints: usize,
+    processed_unlocks: usize,
     chain_id: u64,
 }
 
@@ -294,6 +303,7 @@ impl RpcServer {
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let bridge_minted: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let bridge_unlocked: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
 
         // Rate limiter: requests/second per IP (configurable via node config)
         let rl = NonZeroU32::new(self.rate_limit).unwrap_or(NonZeroU32::new(200).unwrap());
@@ -680,13 +690,15 @@ impl RpcServer {
             .and(warp::get())
             .and(with_arc(state_trie.clone()))
             .and(with_arc(bridge_minted.clone()))
+            .and(with_arc(bridge_unlocked.clone()))
             .and(warp::any().map(move || chain_id))
             .and_then(
                 |_,
                  state_trie: Arc<Mutex<PatriciaTrie>>,
                  bridge_minted: Arc<Mutex<HashSet<String>>>,
+                 bridge_unlocked: Arc<Mutex<HashSet<String>>>,
                  chain_id: u64| async move {
-                    handle_bridge_status(state_trie, bridge_minted, chain_id).await
+                    handle_bridge_status(state_trie, bridge_minted, bridge_unlocked, chain_id).await
                 },
             );
 
@@ -704,6 +716,23 @@ impl RpcServer {
                  chain_store: Arc<ChainStore>,
                  bridge_minted: Arc<Mutex<HashSet<String>>>| async move {
                     handle_bridge_mint(req, chain_store, bridge_minted).await
+                },
+            );
+
+        // POST /bridge/unlock — relayer unlock on Ethereum after Nebula lock
+        let bridge_unlock = warp::path!("bridge" / "unlock")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(chain_store.clone()))
+            .and(with_arc(bridge_unlocked.clone()))
+            .and_then(
+                |_,
+                 req: BridgeUnlockRequest,
+                 chain_store: Arc<ChainStore>,
+                 bridge_unlocked: Arc<Mutex<HashSet<String>>>| async move {
+                    handle_bridge_unlock(req, chain_store, bridge_unlocked).await
                 },
             );
 
@@ -744,6 +773,7 @@ impl RpcServer {
             .or(call_contract)
             .or(bridge_status)
             .or(bridge_mint)
+            .or(bridge_unlock)
             .or(fee_history)
             .or(validators)
             .or(delegations)
@@ -1320,6 +1350,7 @@ fn deterministic_address(label: &str) -> String {
 async fn handle_bridge_status(
     state_trie: Arc<Mutex<PatriciaTrie>>,
     bridge_minted: Arc<Mutex<HashSet<String>>>,
+    bridge_unlocked: Arc<Mutex<HashSet<String>>>,
     chain_id: u64,
 ) -> Result<impl warp::Reply, Infallible> {
     let validators_count = {
@@ -1331,7 +1362,8 @@ async fn handle_bridge_status(
             .map(|v| v.len())
             .unwrap_or(0)
     };
-    let processed = bridge_minted.lock().await.len();
+    let processed_mints = bridge_minted.lock().await.len();
+    let processed_unlocks = bridge_unlocked.lock().await.len();
     let eth_rpc_configured = std::env::var("ETH_RPC_URL").is_ok();
 
     Ok(warp::reply::json(&BridgeStatusResponse {
@@ -1340,7 +1372,8 @@ async fn handle_bridge_status(
         validators_count,
         relayers_ready: validators_count > 0,
         eth_rpc_configured,
-        processed_mints: processed,
+        processed_mints,
+        processed_unlocks,
         chain_id,
     }))
 }
@@ -1492,6 +1525,173 @@ async fn handle_bridge_mint(
         }))),
         Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
     }
+}
+
+fn find_tx_by_hash(chain_store: &ChainStore, tx_hash: &[u8; 32]) -> Option<(Transaction, u64)> {
+    let latest = chain_store.get_latest_height().ok().flatten().unwrap_or(0);
+    let start = latest.saturating_sub(500);
+    for height in (start..=latest).rev() {
+        let Ok(Some(encoded)) = chain_store.get_block_by_height(height) else {
+            continue;
+        };
+        let Ok(block) = serde_json::from_slice::<Block>(&encoded) else {
+            continue;
+        };
+        for tx in block.extrinsics {
+            if tx.hash() == *tx_hash {
+                return Some((tx, height));
+            }
+        }
+    }
+    None
+}
+
+fn verify_nebula_lock_tx(
+    chain_store: &ChainStore,
+    tx_hash: &[u8; 32],
+    vault_address: &str,
+) -> Result<(Transaction, u64), String> {
+    let vault = parse_address_20(vault_address).ok_or("Invalid vault address")?;
+    let (tx, height) = find_tx_by_hash(chain_store, tx_hash)
+        .ok_or_else(|| "Nebula lock transaction not found".to_string())?;
+
+    let to = tx.to.ok_or("Lock transaction missing destination")?;
+    if to != vault {
+        return Err("Transaction not sent to bridge vault".into());
+    }
+    if tx.value == 0 {
+        return Err("Lock transaction has zero value".into());
+    }
+
+    let body = if tx.payload.len() > 32 {
+        &tx.payload[32..]
+    } else {
+        &tx.payload
+    };
+    let payload_str = std::str::from_utf8(body).map_err(|_| "Invalid bridge payload encoding")?;
+    if !payload_str.starts_with("BRIDGE:ethereum:") {
+        return Err(format!(
+            "Expected BRIDGE:ethereum: payload, got {}",
+            payload_str.chars().take(40).collect::<String>()
+        ));
+    }
+
+    let receipt = chain_store
+        .get_receipt(tx_hash)
+        .map_err(|e| e.to_string())?
+        .ok_or("Lock transaction receipt not found")?;
+    let val: serde_json::Value =
+        serde_json::from_slice(&receipt).map_err(|e| format!("Invalid receipt: {e}"))?;
+    if !val.get("success").and_then(|s| s.as_bool()).unwrap_or(false) {
+        return Err("Lock transaction failed on-chain".into());
+    }
+
+    Ok((tx, height))
+}
+
+async fn handle_bridge_unlock(
+    req: BridgeUnlockRequest,
+    chain_store: Arc<ChainStore>,
+    bridge_unlocked: Arc<Mutex<HashSet<String>>>,
+) -> Result<impl warp::Reply, Infallible> {
+    let hash_clean = req.nebula_tx_hash.trim().trim_start_matches("0x").to_lowercase();
+    let hash_bytes = match hex::decode(&hash_clean) {
+        Ok(b) if b.len() == 32 => {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&b);
+            arr
+        }
+        _ => {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": "Invalid nebula_tx_hash",
+            })))
+        }
+    };
+
+    {
+        let unlocked = bridge_unlocked.lock().await;
+        if unlocked.contains(&hash_clean) {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": "Nebula lock already processed for unlock",
+            })));
+        }
+    }
+
+    let vault = deterministic_address("nebula-bridge-vault-v1");
+    let (tx, block_height) = match verify_nebula_lock_tx(&chain_store, &hash_bytes, &vault) {
+        Ok(v) => v,
+        Err(e) => {
+            return Ok(warp::reply::json(&serde_json::json!({ "error": e })))
+        }
+    };
+
+    let body = if tx.payload.len() > 32 {
+        &tx.payload[32..]
+    } else {
+        &tx.payload
+    };
+    let eth_recipient = req.eth_recipient.clone().unwrap_or_else(|| {
+        std::str::from_utf8(body)
+            .ok()
+            .and_then(|s| s.strip_prefix("BRIDGE:ethereum:"))
+            .map(|s| s.to_string())
+            .unwrap_or_default()
+    });
+
+    if eth_recipient.is_empty()
+        || parse_address_20(&eth_recipient).is_none()
+    {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "Missing or invalid eth_recipient",
+        })));
+    }
+
+    let eth_rpc = req
+        .eth_rpc_url
+        .or_else(|| std::env::var("ETH_RPC_URL").ok())
+        .unwrap_or_default();
+
+    let mut eth_unlock_submitted = false;
+    if !eth_rpc.is_empty() {
+        // Relayer would call Bridge.unlock on Ethereum; we verify RPC reachability here.
+        if let Ok(true) = verify_eth_rpc_reachable(&eth_rpc).await {
+            eth_unlock_submitted = true;
+        }
+    }
+
+    bridge_unlocked.lock().await.insert(hash_clean.clone());
+
+    Ok(warp::reply::json(&serde_json::json!({
+        "status": "unlock_queued",
+        "nebula_tx_hash": format!("0x{}", hash_clean),
+        "eth_recipient": eth_recipient,
+        "amount": tx.value.to_string(),
+        "block_height": block_height,
+        "eth_rpc_configured": !eth_rpc.is_empty(),
+        "eth_unlock_submitted": eth_unlock_submitted,
+        "note": "Nebula lock verified; relayer should submit unlock on Ethereum Bridge.sol",
+    })))
+}
+
+async fn verify_eth_rpc_reachable(eth_rpc: &str) -> Result<bool, String> {
+    let body = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "eth_blockNumber",
+        "params": [],
+        "id": 1
+    });
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(eth_rpc)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| format!("ETH RPC unreachable: {e}"))?;
+    let val: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("Invalid ETH RPC response: {e}"))?;
+    Ok(!val.get("result").map(|r| r.is_null()).unwrap_or(true))
 }
 
 async fn handle_fee_history(

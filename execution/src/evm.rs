@@ -357,6 +357,38 @@ impl EvmExecutor {
         Ok(())
     }
 
+    /// Mirror native-chain balance/nonce into the EVM account before execution.
+    pub fn prepare_native_account(
+        &mut self,
+        caller: Address,
+        native_balance: u128,
+        native_nonce: u64,
+    ) -> Result<()> {
+        let existing = self.db.basic(caller)?;
+        let evm_balance = existing
+            .as_ref()
+            .map(|a| a.balance)
+            .unwrap_or(U256::ZERO);
+        let native = U256::from(native_balance);
+        let balance = if evm_balance > native {
+            evm_balance
+        } else {
+            native
+        };
+        let evm_nonce = existing.as_ref().map(|a| a.nonce).unwrap_or(0);
+        let nonce = native_nonce.max(evm_nonce);
+        self.db.insert_account_info(
+            caller,
+            AccountInfo {
+                balance,
+                nonce,
+                code_hash: revm::primitives::KECCAK_EMPTY,
+                code: existing.and_then(|a| a.code),
+            },
+        );
+        Ok(())
+    }
+
     // FIX: Add transaction validation before execution
     pub fn validate_transaction(&mut self, tx: &SignedTransaction) -> Result<()> {
         // 1. Check chain ID

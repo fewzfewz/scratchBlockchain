@@ -112,10 +112,20 @@ async fn seed_governance(
     Ok(state)
 }
 
+/// Strip the 32-byte Ed25519 public key prefix wallet txs prepend to payloads.
+fn payload_body(payload: &[u8]) -> &[u8] {
+    if payload.len() > 32 {
+        &payload[32..]
+    } else {
+        payload
+    }
+}
+
 /// Apply any governance transactions in a block's extrinsics and persist the
 /// updated state. Non-governance transactions are ignored here.
 pub async fn apply_extrinsics(
     trie: &Arc<Mutex<PatriciaTrie>>,
+    chain_store: &Arc<ChainStore>,
     extrinsics: &[common::types::Transaction],
     current_block: u64,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -123,11 +133,12 @@ pub async fn apply_extrinsics(
     let mut changed = false;
 
     for tx in extrinsics {
-        if !ChainGovernance::is_governance_payload(&tx.payload) {
+        let body = payload_body(&tx.payload);
+        if !ChainGovernance::is_governance_payload(body) {
             continue;
         }
-        let power = voter_power(trie, &tx.sender).await;
-        match state.apply_payload(tx.sender, &tx.payload, power, current_block) {
+        let power = voter_power(trie, chain_store, &tx.sender).await;
+        match state.apply_payload(tx.sender, body, power, current_block) {
             Ok(()) => {
                 info!(
                     "Governance action applied at block {} (voter {} power {})",
@@ -151,16 +162,45 @@ pub async fn apply_extrinsics(
     Ok(())
 }
 
-/// Voting power of an account: its staked (and delegated) balance, resolved
-/// from the consensus-state `b"validators"` trie entry. The validator set is
-/// identical on every node, so vote weights agree across the network — unlike
-/// raw account balances, some of which are only credited on a single node.
-pub async fn voter_power(trie: &Arc<Mutex<PatriciaTrie>>, address: &Address) -> u128 {
-    validator_stakes(trie)
+/// Voting power of an account: validator self-stake + delegations to them,
+/// else delegated stake as delegator, else native token balance (1 wei = 1 vote).
+pub async fn voter_power(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+    chain_store: &Arc<ChainStore>,
+    address: &Address,
+) -> u128 {
+    if let Some((_, power)) = validator_stakes(trie)
         .await
-        .iter()
+        .into_iter()
         .find(|(addr, _)| addr == address)
-        .map(|(_, power)| *power)
+    {
+        return power;
+    }
+
+    let delegator_hex = format!("0x{}", hex::encode(address));
+    let key = [b"delegations/", delegator_hex.as_bytes()].concat();
+    if let Ok(Some(encoded)) = chain_store.get_state(&key) {
+        if let Ok(list) = serde_json::from_slice::<Vec<serde_json::Value>>(&encoded) {
+            let delegated: u128 = list
+                .iter()
+                .filter_map(|e| e.get("amount")?.as_str()?.parse::<u128>().ok())
+                .sum();
+            if delegated > 0 {
+                return delegated;
+            }
+        }
+    }
+
+    native_balance(chain_store, address)
+}
+
+fn native_balance(chain_store: &ChainStore, address: &Address) -> u128 {
+    chain_store
+        .get_state(address)
+        .ok()
+        .flatten()
+        .and_then(|encoded| serde_json::from_slice::<serde_json::Value>(&encoded).ok())
+        .and_then(|acc| acc.get("balance")?.as_str()?.parse().ok())
         .unwrap_or(0)
 }
 
@@ -433,4 +473,33 @@ pub async fn load_consensus_validators(
             })
         })
         .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_body_strips_ed25519_prefix() {
+        let mut payload = vec![0u8; 32];
+        payload.extend_from_slice(br#"{"action":"vote"}"#);
+        assert_eq!(payload_body(&payload), br#"{"action":"vote"}"#);
+    }
+
+    #[tokio::test]
+    async fn voter_power_uses_native_balance_for_regular_accounts() {
+        let inner = Arc::new(storage::MemDb::new());
+        let chain_store = Arc::new(ChainStore::new(inner.clone()));
+        let trie = Arc::new(Mutex::new(PatriciaTrie::new(inner).unwrap()));
+        let addr = [9u8; 20];
+        let account = serde_json::json!({
+            "balance": "5000000000000000000",
+            "nonce": 0,
+        });
+        chain_store
+            .put_state(&addr, &serde_json::to_vec(&account).unwrap())
+            .unwrap();
+        let power = voter_power(&trie, &chain_store, &addr).await;
+        assert_eq!(power, 5_000_000_000_000_000_000);
+    }
 }

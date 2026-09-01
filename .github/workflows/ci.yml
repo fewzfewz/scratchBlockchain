@@ -2,9 +2,9 @@ name: Rust CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, feat/production-readiness ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, feat/production-readiness ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -96,8 +96,10 @@ jobs:
           node 01-send-transaction.js
           node 02-state-queries.js
           node 11-create-proposal.js
+          node 12-vote-proposal.js
           node 16-stake-tokens.js
           node 21-bridge-lock.js
+          node 22-bridge-unlock.js
           node 40-load-test.js
 
       - name: Stop testnet
