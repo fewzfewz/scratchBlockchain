@@ -389,3 +389,28 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod devnet_genesis_tests {
+    use super::*;
+
+    /// The local devnet genesis must parse and tolerate one validator being
+    /// down: every 3-of-4 subset holds more than 2/3 of the stake.
+    #[test]
+    fn local_devnet_genesis_tolerates_one_validator_down() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deployment/local/configs/genesis.json"
+        );
+        let genesis = GenesisConfig::load_from_file(path).unwrap();
+        assert_eq!(genesis.validators.len(), 4);
+        let total: u128 = genesis.validators.iter().map(|v| v.stake).sum();
+        for down in &genesis.validators {
+            assert!(
+                crate::consensus_types::is_quorum(total - down.stake, total),
+                "chain halts without validator {}",
+                down.public_key
+            );
+        }
+    }
+}

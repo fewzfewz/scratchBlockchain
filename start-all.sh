@@ -87,7 +87,7 @@ fi
 echo ""
 echo "▶ [2/6] Starting Docker stack (validators, RPC, Hardhat, monitoring)..."
 
-COMPOSE_SERVICES=(hardhat validator1 validator2 validator3 rpc1 rpc2 prometheus alertmanager grafana faucet nginx)
+COMPOSE_SERVICES=(hardhat validator1 validator2 validator3 validator4 rpc1 rpc2 prometheus alertmanager grafana faucet nginx)
 if [ "$LOCAL_FRONTEND" = false ]; then
   COMPOSE_SERVICES+=(frontend)
 fi

@@ -36,9 +36,10 @@ mkdir -p configs
 
 # Write validator keys
 echo "Writing validator keys..."
-echo "a71ac7c754d1e66871151f3a5f2529777fb828fa576918cade292acf38293f3f" > configs/validator1_key.json
-echo "6114eb98616e2f4faaa91e35e1fc5f176275dfd29ff1085a4600860ecee49bc4" > configs/validator2_key.json
-echo "a298b2f7f33061444d38d828f4562962d3281387ab08acf54a05f6229b98bb58" > configs/validator3_key.json
+echo '{"secret_key": "a71ac7c754d1e66871151f3a5f2529777fb828fa576918cade292acf38293f3f"}' > configs/validator1_key.json
+echo '{"secret_key": "6114eb98616e2f4faaa91e35e1fc5f176275dfd29ff1085a4600860ecee49bc4"}' > configs/validator2_key.json
+echo '{"secret_key": "a298b2f7f33061444d38d828f4562962d3281387ab08acf54a05f6229b98bb58"}' > configs/validator3_key.json
+echo '{"secret_key": "98173297e4f994b25bbf0386ad460102d18d504fd6e6836a03168bf175193ef6"}' > configs/validator4_key.json
 
 # Create genesis config
 cat > configs/genesis.toml << 'EOF'
@@ -74,6 +75,12 @@ address = "0x3333333333333333333333333333333333333333"
 stake = "600000"
 commission_rate = "0.10"
 public_key = "ec77526bdb058b2684570107a3581ccfe8cec4e03dfd5ac409213f181e66b93a"
+
+[[validators]]
+address = "0x4444444444444444444444444444444444444444"
+stake = "1000000"
+commission_rate = "0.10"
+public_key = "1f382a97836bd59994ca9e52541b0368bede3aabde53bebc310c5b1001074ac1"
 
 [[accounts]]
 address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -166,6 +173,36 @@ chain_id = "modular-testnet-1"
 p2p_port = 26656
 rpc_port = 26657
 bootstrap_nodes = ["validator1:26656"]
+
+[consensus]
+block_time_ms = 3000
+max_validators = 100
+
+[validator]
+enabled = true
+commission_rate = "0.10"
+
+[storage]
+data_dir = "/data"
+
+[api]
+enabled = true
+address = "0.0.0.0:8545"
+cors_origins = ["*"]
+dev_mode = true
+
+[metrics]
+enabled = true
+address = "0.0.0.0:9090"
+EOF
+
+# Validator 4 config
+cat > configs/validator4.toml << 'EOF'
+[network]
+chain_id = "modular-testnet-1"
+p2p_port = 26656
+rpc_port = 26657
+bootstrap_nodes = ["validator1:26656", "validator2:26656", "validator3:26656"]
 
 [consensus]
 block_time_ms = 3000

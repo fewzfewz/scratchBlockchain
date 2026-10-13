@@ -93,6 +93,33 @@
             "stake": 600000000000000000000000,
             "commission_rate": 0.1,
             "public_key": "ec77526bdb058b2684570107a3581ccfe8cec4e03dfd5ac409213f181e66b93a"
+        },
+        {
+            "address": [
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68,
+                68
+            ],
+            "stake": 1000000000000000000000000,
+            "commission_rate": 0.1,
+            "public_key": "1f382a97836bd59994ca9e52541b0368bede3aabde53bebc310c5b1001074ac1"
         }
     ],
     "accounts": [
@@ -151,6 +178,6 @@
     ],
     "app_state": {
         "total_supply": 15000000000,
-        "total_stake": 2400000
+        "total_stake": 3400000
     }
 }

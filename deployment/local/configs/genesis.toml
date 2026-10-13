@@ -31,6 +31,12 @@ stake = "600000000000000000000000"
 commission_rate = "0.10"
 public_key = "ec77526bdb058b2684570107a3581ccfe8cec4e03dfd5ac409213f181e66b93a"
 
+[[validators]]
+address = "0x4444444444444444444444444444444444444444"
+stake = "1000000000000000000000000"
+commission_rate = "0.10"
+public_key = "1f382a97836bd59994ca9e52541b0368bede3aabde53bebc310c5b1001074ac1"
+
 [[accounts]]
 address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 balance = "10000000000"

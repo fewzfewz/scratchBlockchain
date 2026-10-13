@@ -176,6 +176,43 @@ services:
       start_period: 15s
     restart: unless-stopped
 
+  # Validator 4
+  validator4:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: validator4
+    ports:
+      - "26664:26656"
+      - "26665:26657"
+      - "8550:8545"
+      - "9097:9090"
+    volumes:
+      - validator4_data:/data
+      - ./configs/validator4.toml:/config.toml:ro
+      - ./configs/validator4_key.json:/data/validator_key.json:ro
+      - ./configs/genesis.json:/genesis.json:ro
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    environment:
+      - VALIDATOR_NAME=validator4
+      - RUST_LOG=info
+      - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+    command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
+    networks:
+      testnet:
+        aliases:
+          - validator4
+    depends_on:
+      - validator1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    restart: unless-stopped
+
   # RPC Node 1 (Public)
   rpc1:
     build:
@@ -363,6 +400,7 @@ volumes:
   validator1_data:
   validator2_data:
   validator3_data:
+  validator4_data:
   rpc1_data:
   rpc2_data:
   prometheus_data:

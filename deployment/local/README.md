@@ -10,7 +10,7 @@ Docker Compose stack for the full Nebula testnet.
 
 This will:
 1. Build `target/release/node`
-2. Start Docker: 3 validators, 2 RPC nodes, Hardhat (ETH), frontend, Prometheus, Grafana, nginx
+2. Start Docker: 4 validators, 2 RPC nodes, Hardhat (ETH), frontend, Prometheus, Grafana, nginx
 3. Wait for Nebula RPC (`8545`) and Hardhat (`9545`)
 4. Deploy `Bridge.sol` and write `frontend/public/bridge-config.json`
 5. Print all URLs
@@ -27,7 +27,7 @@ This will:
 |------|---------|
 | **5173** | Frontend (React + 3D UI) |
 | **8545** | Nebula RPC (validator1 — use this in the wallet) |
-| **8546–8549** | Other node RPC ports |
+| **8546–8550** | Other node RPC ports (validator2, validator3, rpc1, rpc2, validator4) |
 | **9545** | Hardhat / Ethereum (Bridge.sol) |
 | **3002** | Grafana (`admin` / `admin`) |
 | **9095** | Prometheus |
