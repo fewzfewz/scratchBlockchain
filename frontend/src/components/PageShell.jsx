@@ -1,8 +1,4 @@
-import BlockchainScene from './BlockchainScene.jsx'
-
-export default function PageShell({ children, variant = 'default', className = '' }) {
-  const isHero = variant === 'hero'
-
+export default function PageShell({ children, className = '' }) {
   return (
     <div className={`relative min-h-screen overflow-hidden ${className}`}>
       {/* Aurora */}
@@ -13,11 +9,7 @@ export default function PageShell({ children, variant = 'default', className = '
       <div className="absolute -bottom-32 left-1/4 w-[34rem] h-[34rem] rounded-full opacity-15 animate-float-slow pointer-events-none"
         style={{ background: 'radial-gradient(circle, rgba(52,211,153,0.35), transparent 70%)' }} />
 
-      {isHero ? (
-        <BlockchainScene className="absolute inset-0 z-0 opacity-90 dark:opacity-75" />
-      ) : (
-        <div className="absolute inset-0 particle-field pointer-events-none" />
-      )}
+      <div className="absolute inset-0 particle-field pointer-events-none" />
 
       <div className="absolute inset-0 bg-grid pointer-events-none z-[1]" />
       <div className="relative z-10">{children}</div>

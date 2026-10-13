@@ -192,7 +192,7 @@ export default function BridgePage() {
   }
 
   return (
-    <PageShell variant="default">
+    <PageShell>
       <div className="max-w-3xl mx-auto px-4 py-10">
         <AnimatedSection className="text-center mb-8">
           <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white mb-4 shadow-lg shadow-emerald-500/30">

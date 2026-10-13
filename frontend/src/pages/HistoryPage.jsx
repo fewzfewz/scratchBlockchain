@@ -49,7 +49,7 @@ export default function HistoryPage() {
   const copy = (t) => navigator.clipboard?.writeText(t)
 
   return (
-    <PageShell variant="default">
+    <PageShell>
       <div className="max-w-4xl mx-auto px-4 py-10 animate-fade-in">
         <header className="text-center mb-8">
           <div className="flex items-center justify-center gap-3 mb-2">

@@ -43,7 +43,7 @@ export default function Explorer() {
   }, [])
 
   return (
-    <PageShell variant="default">
+    <PageShell>
       <div className="max-w-5xl mx-auto px-4 py-10 animate-fade-in">
         {/* ── Header ─────────────────────────────────────────────── */}
         <header className="text-center mb-8">

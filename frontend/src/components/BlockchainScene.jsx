@@ -81,7 +81,7 @@ function SceneContent() {
 export default function BlockchainScene({ className = '' }) {
   return (
     <div className={`pointer-events-none ${className}`} aria-hidden>
-      <Canvas camera={{ position: [0, 0, 5.5], fov: 42 }} dpr={[1, 1.75]} gl={{ alpha: true, antialias: true }}>
+      <Canvas camera={{ position: [0, 0, 7], fov: 42 }} dpr={[1, 1.75]} gl={{ alpha: true, antialias: true }}>
         <Suspense fallback={null}>
           <SceneContent />
         </Suspense>

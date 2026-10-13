@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, lazy, Suspense } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Compass, Wallet, Droplets, Vote, BookOpen, FileCode, ExternalLink,
@@ -8,6 +8,9 @@ import {
 } from 'lucide-react'
 import PageShell from '../components/PageShell.jsx'
 import AnimatedSection, { StaggerGrid } from '../components/AnimatedSection.jsx'
+
+// three.js is large; load it only for the hero card, after first paint.
+const BlockchainScene = lazy(() => import('../components/BlockchainScene.jsx'))
 
 const API_URL = () => localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
 
@@ -94,9 +97,9 @@ export default function Home() {
   ]
 
   return (
-    <PageShell variant="hero">
+    <PageShell>
       <div className="max-w-7xl mx-auto px-4 pt-16 pb-20">
-        {/* Hero — text left, 3D shows through PageShell on all viewports */}
+        {/* Hero — text left, 3D scene in a card on large screens */}
         <div className="grid lg:grid-cols-2 gap-12 items-center mb-20 min-h-[420px]">
           <AnimatedSection className="text-center lg:text-left">
             <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass-strong text-xs font-medium text-slate-600 dark:text-slate-300 mb-6 animate-scale-in">
@@ -107,7 +110,7 @@ export default function Home() {
 
             <h1 className="text-5xl md:text-6xl xl:text-7xl font-bold tracking-tight text-slate-900 dark:text-white mb-6 hero-text-glow">
               Modular blockchain
-              <span className="block mt-2 bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500 bg-clip-text text-transparent animate-shimmer bg-[length:200%_100%]">
+              <span className="block mt-2 bg-gradient-to-r from-cyan-400 via-blue-500 to-violet-500 bg-clip-text text-transparent text-shimmer">
                 in 3D motion.
               </span>
             </h1>
@@ -138,12 +141,13 @@ export default function Home() {
             </StaggerGrid>
           </AnimatedSection>
 
-          <div className="hidden lg:block h-[380px] rounded-3xl glass-strong border border-cyan-500/20 animate-scale-in overflow-hidden relative">
-            <div className="absolute inset-0 flex items-center justify-center">
-              <p className="text-xs text-slate-400/80 text-center px-6">
-                Interactive 3D scene — block core, validator ring & chain satellites
-              </p>
-            </div>
+          <div className="hidden lg:block h-[420px] rounded-3xl glass-strong border border-cyan-500/20 animate-scale-in overflow-hidden relative">
+            <Suspense fallback={<div className="absolute inset-0 animate-pulse bg-slate-200/30 dark:bg-slate-800/30" />}>
+              <BlockchainScene className="absolute inset-0" />
+            </Suspense>
+            <p className="absolute bottom-4 inset-x-0 text-xs text-slate-400/80 text-center px-6">
+              Block core · validator ring · chain satellites
+            </p>
           </div>
         </div>
 
