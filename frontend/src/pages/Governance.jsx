@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
-import nacl from "tweetnacl";
+import { signTx } from "../lib/chain.js";
 import {
   BarChart3, Vote, FileText, PlusCircle, Wallet, TrendingUp,
   TrendingDown, Clock, CheckCircle, XCircle, AlertTriangle,
@@ -33,23 +33,6 @@ function loadWallet() {
   return null;
 }
 
-const sha256b = async (data) => new Uint8Array(await crypto.subtle.digest("SHA-256", data));
-
-const govTxHash = async (tx) => {
-  let h = new Uint8Array(0);
-  const ap = (b) => { const a = new Uint8Array(h.length + b.length); a.set(h); a.set(b, h.length); h = a };
-  ap(new Uint8Array(tx.sender.slice(0, 20)));
-  const nb = new Uint8Array(8); new DataView(nb.buffer).setBigUint64(0, BigInt(tx.nonce), true); ap(nb);
-  ap(new Uint8Array(tx.payload));
-  const gb = new Uint8Array(8); new DataView(gb.buffer).setBigUint64(0, BigInt(tx.gas_limit), true); ap(gb);
-  const fb = new Uint8Array(8); new DataView(fb.buffer).setBigUint64(0, BigInt(tx.max_fee_per_gas), true); ap(fb);
-  const pb = new Uint8Array(8); new DataView(pb.buffer).setBigUint64(0, BigInt(tx.max_priority_fee_per_gas), true); ap(pb);
-  if (tx.chain_id) { const cb = new Uint8Array(8); new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true); ap(cb) }
-  if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)));
-  const vb = new Uint8Array(8); new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true); ap(vb);
-  return await sha256b(h);
-};
-
 const buildGovTx = (wallet, payloadObj, nonceVal) => ({
   sender: Array.from(fromHex(wallet.address.replace("0x", ""))),
   to: null,
@@ -58,7 +41,7 @@ const buildGovTx = (wallet, payloadObj, nonceVal) => ({
   gas_limit: 21000,
   max_fee_per_gas: 1e9,
   max_priority_fee_per_gas: 1e9,
-  payload: [...Array.from(wallet.publicKey), ...Array.from(new TextEncoder().encode(JSON.stringify(payloadObj)))],
+  payload: Array.from(new TextEncoder().encode(JSON.stringify(payloadObj))),
   chain_id: 1,
   signature: [],
 });
@@ -69,10 +52,7 @@ async function submitGovTx(wallet, payloadObj, apiUrl) {
     const r = await window.fetch(`${apiUrl}/balance/${wallet.address}`);
     if (r.ok) { const d = await r.json(); nonce = d.nonce || 0; }
   } catch { /* keep nonce 0 */ }
-  const tx = buildGovTx(wallet, payloadObj, nonce);
-  const msg = await govTxHash(tx);
-  const sig = nacl.sign.detached(msg, wallet.secretKey);
-  tx.signature = Array.from(sig);
+  const tx = await signTx(buildGovTx(wallet, payloadObj, nonce), wallet);
   const res = await window.fetch(`${apiUrl}/submit_tx`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

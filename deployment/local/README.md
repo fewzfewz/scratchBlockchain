@@ -52,3 +52,25 @@ Requires Hardhat running on port **9545** (not 8545 — that is Nebula).
 ## Environment
 
 Nebula nodes inside Docker receive `ETH_RPC_URL=http://hardhat:9545` for `/bridge/mint` ETH tx verification.
+
+## Dev mode and the admin token
+
+The node configs in `configs/` set `api.dev_mode = true`. That turns on routes that change state directly, without going through consensus:
+
+- **Dev routes** (open in dev mode): `/faucet/request`, `/deploy_wasm`
+- **Admin routes**: `/validators/register`, `/delegate`, `/runtime/propose`, `/runtime/approve`, `/bridge/mint`, `/bridge/unlock`, `/bridge/unlock/ack`, `/connect_peer`
+
+To protect the admin routes, set `NODE_API_ADMIN_TOKEN=<token>` on the nodes. Then pass the token from each client:
+
+- **Relayer and test scripts:** set `NEBULA_ADMIN_TOKEN`
+- **Browser:** run `localStorage.setItem('nebula_admin_token', '<token>')`
+
+When `dev_mode` is off (the default), every one of these routes returns 404. `/bridge/mint` also has these rules:
+
+- It always requires an `eth_tx_hash`.
+- It only checks Ethereum through the node's own `ETH_RPC_URL`.
+- It stores each processed hash on disk, so the same Ethereum transaction can't mint twice, even after a restart.
+
+## Upgrading from an older devnet
+
+The transaction and header hash formats changed in Phase 1, and transactions now carry a `public_key` field. Blocks from an existing devnet won't decode under the new formats. Before starting again, wipe the node data volumes with `docker compose down -v`.

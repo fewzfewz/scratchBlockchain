@@ -1,5 +1,6 @@
 const { fetchJson, passBanner, failAndExit } = require('./lib/helpers');
 const { fundAddress } = require('./lib/faucet');
+const { adminHeaders } = require('./lib/tx-sign');
 const { generateWallet } = require('./lib/gov-tx');
 
 async function test17_Unstake() {
@@ -16,14 +17,14 @@ async function test17_Unstake() {
     const amount = '500000000000000000';
     await fetchJson('http://localhost:8545/delegate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders(),
       body: JSON.stringify({ delegator: wallet.address, validator, amount }),
     });
     console.log('1. ✅ Delegated 0.5 NBL');
 
     await fetchJson('http://localhost:8545/delegate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders(),
       body: JSON.stringify({
         delegator: wallet.address,
         validator,

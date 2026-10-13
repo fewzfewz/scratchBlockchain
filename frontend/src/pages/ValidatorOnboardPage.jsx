@@ -4,7 +4,7 @@ import {
   Shield, CheckCircle, AlertCircle, Server, Cpu, Wifi, ExternalLink,
   Copy, RefreshCw, BookOpen, Activity, Gauge,
 } from 'lucide-react'
-import { walletAddress } from '../lib/chain.js'
+import { adminHeaders, walletAddress } from '../lib/chain.js'
 
 const API_URL = 'http://localhost:8545'
 const GRAFANA_URL = 'http://localhost:3002/d/validator-onboarding/validator-onboarding'
@@ -64,7 +64,7 @@ export default function ValidatorOnboardPage() {
     try {
       const r = await window.fetch(`${API_URL}/validators/register`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: adminHeaders(),
         body: JSON.stringify({
           address: registerAddr,
           public_key: pub,

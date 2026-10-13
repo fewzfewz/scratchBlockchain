@@ -19,6 +19,9 @@ data_dir = "/data"
 enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
+# Local devnet only: exposes faucet / validator-register / bridge-relayer routes.
+# Set NODE_API_ADMIN_TOKEN to require a bearer token on admin routes.
+dev_mode = true
 
 [metrics]
 enabled = true

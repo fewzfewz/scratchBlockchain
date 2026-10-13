@@ -73,7 +73,7 @@ var ModularClient = class extends EventEmitter {
   }
   // Transactions
   async sendTransaction(tx) {
-    const response = await this.provider.request("submit_tx", [tx]);
+    const response = await this.provider.request("submit_tx", [toWireTransaction(tx)]);
     if (response.status && response.status.startsWith("error")) {
       throw new Error(response.status);
     }
@@ -297,6 +297,28 @@ var ModularClient = class extends EventEmitter {
     return this.provider;
   }
 };
+var hexToByteArray = (hex) => {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const out = [];
+  for (let i = 0; i < clean.length; i += 2)
+    out.push(parseInt(clean.slice(i, i + 2), 16));
+  return out;
+};
+function toWireTransaction(tx) {
+  return {
+    sender: hexToByteArray(tx.sender),
+    nonce: tx.nonce,
+    public_key: hexToByteArray(tx.publicKey),
+    payload: hexToByteArray(tx.payload),
+    signature: hexToByteArray(tx.signature),
+    gas_limit: tx.gasLimit,
+    max_fee_per_gas: tx.maxFeePerGas,
+    max_priority_fee_per_gas: tx.maxPriorityFeePerGas,
+    chain_id: tx.chainId,
+    to: tx.to === null ? null : hexToByteArray(tx.to),
+    value: tx.value
+  };
+}
 
 // src/wallet.ts
 import { ed25519 } from "@noble/curves/ed25519";
@@ -308,6 +330,32 @@ function uint64LE(value) {
   const view = new DataView(buf);
   view.setBigUint64(0, BigInt(value), true);
   return new Uint8Array(buf);
+}
+function concatBytes(parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+var TX_DOMAIN = new TextEncoder().encode("NEBULA_TX_V1");
+function transactionSigningBytes(tx) {
+  return concatBytes([
+    TX_DOMAIN,
+    tx.sender,
+    uint64LE(tx.nonce),
+    tx.publicKey,
+    uint64LE(tx.payload.length),
+    tx.payload,
+    uint64LE(tx.gasLimit),
+    uint64LE(tx.maxFeePerGas),
+    uint64LE(tx.maxPriorityFeePerGas),
+    tx.chainId !== null ? concatBytes([Uint8Array.of(1), uint64LE(tx.chainId)]) : Uint8Array.of(0),
+    tx.to !== null ? concatBytes([Uint8Array.of(1), tx.to]) : Uint8Array.of(0),
+    uint64LE(tx.value)
+  ]);
 }
 var Wallet = class _Wallet {
   constructor(privateKey) {
@@ -353,32 +401,27 @@ var Wallet = class _Wallet {
     const chainId = tx.chainId ?? 1;
     const to = tx.to ?? null;
     const value = Number(tx.value ?? 0);
-    const parts = [
-      hexToBytes(sender.startsWith("0x") ? sender.slice(2) : sender),
-      uint64LE(nonce),
-      rawPayload,
-      uint64LE(gasLimit),
-      uint64LE(maxFeePerGas),
-      uint64LE(maxPriorityFeePerGas)
-    ];
-    if (chainId !== null)
-      parts.push(uint64LE(chainId));
-    if (to !== null) {
-      parts.push(hexToBytes(to.startsWith("0x") ? to.slice(2) : to));
-    }
-    parts.push(uint64LE(value));
-    const total = parts.reduce((sum, p) => sum + p.length, 0);
-    const message = new Uint8Array(total);
-    let offset = 0;
-    for (const p of parts) {
-      message.set(p, offset);
-      offset += p.length;
-    }
+    const senderBytes = hexToBytes(sender.startsWith("0x") ? sender.slice(2) : sender);
+    const pubKeyBytes = hexToBytes(this.publicKey);
+    const toBytes = to !== null ? hexToBytes(to.startsWith("0x") ? to.slice(2) : to) : null;
+    const message = transactionSigningBytes({
+      sender: senderBytes,
+      nonce,
+      publicKey: pubKeyBytes,
+      payload: rawPayload,
+      gasLimit,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      chainId,
+      to: toBytes,
+      value
+    });
     const hash = sha256(message);
     const signatureBytes = ed25519.sign(hash, this.privateKey);
     return {
       sender,
       nonce,
+      publicKey: "0x" + this.publicKey,
       payload: "0x" + bytesToHex(rawPayload),
       signature: "0x" + bytesToHex(signatureBytes),
       gasLimit,
@@ -438,13 +481,9 @@ var ConnectedWallet = class {
   /** Submit a signed governance action (propose / vote) via POST /submit_tx. */
   async submitGovernanceAction(action) {
     const nonce = await this.getNonce();
-    const pubKey = hexToBytes(this.wallet.getPublicKey());
     const body = new TextEncoder().encode(JSON.stringify(action));
-    const payload = new Uint8Array(pubKey.length + body.length);
-    payload.set(pubKey, 0);
-    payload.set(body, pubKey.length);
     return this.sendTransaction({
-      data: "0x" + bytesToHex(payload),
+      data: "0x" + bytesToHex(body),
       gasLimit: 21e3,
       chainId: 1,
       nonce

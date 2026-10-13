@@ -1,5 +1,6 @@
 const { fetchJson, passBanner, failAndExit } = require('./lib/helpers');
 const { fundAddress } = require('./lib/faucet');
+const { adminHeaders } = require('./lib/tx-sign');
 const { generateWallet } = require('./lib/gov-tx');
 
 async function test18_RegisterValidator() {
@@ -14,7 +15,7 @@ async function test18_RegisterValidator() {
 
     await fetchJson('http://localhost:8545/validators/register', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders(),
       body: JSON.stringify({
         address: wallet.address,
         public_key: wallet.address,

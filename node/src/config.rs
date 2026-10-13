@@ -166,6 +166,17 @@ pub struct ApiConfig {
     /// API rate limit (requests per minute, default: 1000)
     #[serde(default = "default_rate_limit")]
     pub rate_limit: u32,
+
+    /// Expose dev-only RPC routes that write state outside consensus (faucet,
+    /// validator registration, delegation, bridge relayer, runtime upgrades).
+    /// Local devnets only — never enable on a shared network. Default: false.
+    #[serde(default)]
+    pub dev_mode: bool,
+
+    /// Bearer token for admin routes in dev mode. Unset means admin routes are
+    /// open to anyone who can reach the RPC port (a warning is logged).
+    #[serde(default)]
+    pub admin_token: Option<String>,
 }
 
 /// Metrics configuration
@@ -215,6 +226,8 @@ impl Default for ApiConfig {
             address: default_api_address(),
             cors_origins: Vec::new(),
             rate_limit: default_rate_limit(),
+            dev_mode: false,
+            admin_token: None,
         }
     }
 }
@@ -414,6 +427,14 @@ impl NodeConfig {
             self.logging.level = val;
         }
 
+        // API overrides
+        if let Ok(val) = env::var("NODE_API_DEV_MODE") {
+            self.api.dev_mode = val.parse().unwrap_or(false);
+        }
+        if let Ok(val) = env::var("NODE_API_ADMIN_TOKEN") {
+            self.api.admin_token = Some(val).filter(|t| !t.is_empty());
+        }
+
         // Validator overrides
         if let Ok(val) = env::var("NODE_VALIDATOR_ENABLED") {
             self.validator.enabled = val.parse().unwrap_or(false);
@@ -494,6 +515,8 @@ impl NodeConfig {
                 address: "127.0.0.1".to_string(),
                 cors_origins: vec!["http://localhost:3000".to_string()],
                 rate_limit: 1000,
+                dev_mode: true,
+                admin_token: None,
             },
             metrics: MetricsConfig {
                 enabled: false,

@@ -134,15 +134,6 @@ async fn seed_governance(
     Ok(state)
 }
 
-/// Strip the 32-byte Ed25519 public key prefix wallet txs prepend to payloads.
-fn payload_body(payload: &[u8]) -> &[u8] {
-    if payload.len() > 32 {
-        &payload[32..]
-    } else {
-        payload
-    }
-}
-
 /// Apply any governance transactions in a block's extrinsics and persist the
 /// updated state. Non-governance transactions are ignored here.
 pub async fn apply_extrinsics(
@@ -155,7 +146,7 @@ pub async fn apply_extrinsics(
     let mut changed = false;
 
     for tx in extrinsics {
-        let body = payload_body(&tx.payload);
+        let body = tx.payload.as_slice();
         if !ChainGovernance::is_governance_payload(body) {
             continue;
         }
@@ -572,13 +563,6 @@ pub async fn load_consensus_validators(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn payload_body_strips_ed25519_prefix() {
-        let mut payload = vec![0u8; 32];
-        payload.extend_from_slice(br#"{"action":"vote"}"#);
-        assert_eq!(payload_body(&payload), br#"{"action":"vote"}"#);
-    }
 
     #[tokio::test]
     async fn voter_power_uses_native_balance_for_regular_accounts() {

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
 import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Fingerprint, Coins, Fuel, Sliders, ShieldAlert, Droplets, FlaskConical, Plus, Check, History } from 'lucide-react'
 import PageShell from '../components/PageShell.jsx'
+import { signTx, txHash } from '../lib/chain.js'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b }
@@ -266,25 +267,8 @@ export default function WalletPage() {
       to: Array.from(fromHex(to.replace('0x', ''))),
       nonce: nonceVal, value: amountInWei,
       gas_limit: gasLimit, max_fee_per_gas: 1e9, max_priority_fee_per_gas: 1e9,
-      payload: Array.from(keyPair.publicKey), chain_id: 1, signature: [],
+      payload: [], chain_id: 1, signature: [],
     }
-  }
-
-  const sha256 = async (data) => new Uint8Array(await crypto.subtle.digest('SHA-256', data))
-
-  const txHash = async (tx) => {
-    let h = new Uint8Array(0)
-    const ap = (b) => { const a = new Uint8Array(h.length + b.length); a.set(h); a.set(b, h.length); h = a }
-    ap(new Uint8Array(tx.sender.slice(0, 20)))
-    const nb = new Uint8Array(8); new DataView(nb.buffer).setBigUint64(0, BigInt(tx.nonce), true); ap(nb)
-    ap(new Uint8Array(tx.payload))
-    const gb = new Uint8Array(8); new DataView(gb.buffer).setBigUint64(0, BigInt(tx.gas_limit), true); ap(gb)
-    const fb = new Uint8Array(8); new DataView(fb.buffer).setBigUint64(0, BigInt(tx.max_fee_per_gas), true); ap(fb)
-    const pb = new Uint8Array(8); new DataView(pb.buffer).setBigUint64(0, BigInt(tx.max_priority_fee_per_gas), true); ap(pb)
-    if (tx.chain_id) { const cb = new Uint8Array(8); new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true); ap(cb) }
-    if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)))
-    const vb = new Uint8Array(8); new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true); ap(vb)
-    return sha256(h)
   }
 
   const addTxToHistory = (hash, toAddr, amt) => {
@@ -325,10 +309,7 @@ export default function WalletPage() {
     try {
       showMsg('Preparing transaction...', 'info')
       const n = await fetchNonce()
-      const tx = createTx(recipient, amt, n)
-      const msg = await txHash(tx)
-      const sig = nacl.sign.detached(msg, keyPair.secretKey)
-      tx.signature = Array.from(sig)
+      const tx = await signTx(createTx(recipient, amt, n), keyPair)
       showMsg('Sending...', 'info')
       const r = await window.fetch(`${apiUrl}/submit_tx`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },

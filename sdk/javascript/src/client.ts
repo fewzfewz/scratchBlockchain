@@ -112,8 +112,8 @@ export class ModularClient extends EventEmitter {
 
   // Transactions
   async sendTransaction(tx: Transaction): Promise<any> {
-    // POST to /submit_tx with the full Transaction JSON
-    const response = await this.provider.request("submit_tx", [tx]);
+    // POST to /submit_tx in the node's wire format (snake_case, byte arrays)
+    const response = await this.provider.request("submit_tx", [toWireTransaction(tx)]);
     if (response.status && response.status.startsWith("error")) {
       throw new Error(response.status);
     }
@@ -389,4 +389,28 @@ export class ModularClient extends EventEmitter {
   getProvider(): Provider {
     return this.provider;
   }
+}
+
+const hexToByteArray = (hex: string): number[] => {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const out: number[] = [];
+  for (let i = 0; i < clean.length; i += 2) out.push(parseInt(clean.slice(i, i + 2), 16));
+  return out;
+};
+
+/** Convert an SDK transaction to the JSON shape the node's `Transaction` deserializes. */
+export function toWireTransaction(tx: Transaction): Record<string, unknown> {
+  return {
+    sender: hexToByteArray(tx.sender),
+    nonce: tx.nonce,
+    public_key: hexToByteArray(tx.publicKey),
+    payload: hexToByteArray(tx.payload),
+    signature: hexToByteArray(tx.signature),
+    gas_limit: tx.gasLimit,
+    max_fee_per_gas: tx.maxFeePerGas,
+    max_priority_fee_per_gas: tx.maxPriorityFeePerGas,
+    chain_id: tx.chainId,
+    to: tx.to === null ? null : hexToByteArray(tx.to),
+    value: tx.value,
+  };
 }

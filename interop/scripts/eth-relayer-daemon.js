@@ -73,7 +73,13 @@ async function processPending(cfg, ethProvider, bridge, relayerWallets) {
 
       await fetchJson(`${NEBULA_RPC}/bridge/unlock/ack`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          // Required when the node runs with NODE_API_ADMIN_TOKEN.
+          ...(process.env.NEBULA_ADMIN_TOKEN
+            ? { Authorization: `Bearer ${process.env.NEBULA_ADMIN_TOKEN}` }
+            : {}),
+        },
         body: JSON.stringify({
           nebula_tx_hash: entry.nebula_tx_hash.startsWith('0x')
             ? entry.nebula_tx_hash

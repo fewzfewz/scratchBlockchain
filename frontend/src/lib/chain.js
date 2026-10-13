@@ -80,6 +80,19 @@ export function saveContract(entry) {
   localStorage.setItem(CONTRACTS_KEY, JSON.stringify(list.slice(0, 50)))
 }
 
+/**
+ * Headers for dev-mode admin routes (validator register, bridge mint, …).
+ * Nodes started with NODE_API_ADMIN_TOKEN require it; set it in the browser via
+ * localStorage.setItem('nebula_admin_token', '<token>').
+ */
+export function adminHeaders() {
+  const token = localStorage.getItem('nebula_admin_token')
+  return {
+    'Content-Type': 'application/json',
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  }
+}
+
 export async function fetchJson(path, opts) {
   const r = await window.fetch(`${getApiUrl()}${path}`, opts)
   if (!r.ok) throw new Error(await r.text())
@@ -137,64 +150,71 @@ export function walletAddress() {
   return a ? (a.startsWith('0x') ? a : '0x' + a) : ''
 }
 
-export async function txHash(tx) {
-  let h = new Uint8Array(0)
-  const ap = (b) => {
-    const a = new Uint8Array(h.length + b.length)
-    a.set(h)
-    a.set(b, h.length)
-    h = a
-  }
-  ap(new Uint8Array(tx.sender.slice(0, 20)))
-  const nb = new Uint8Array(8)
-  new DataView(nb.buffer).setBigUint64(0, BigInt(tx.nonce), true)
-  ap(nb)
-  ap(new Uint8Array(tx.payload))
-  const gb = new Uint8Array(8)
-  new DataView(gb.buffer).setBigUint64(0, BigInt(tx.gas_limit), true)
-  ap(gb)
-  const fb = new Uint8Array(8)
-  new DataView(fb.buffer).setBigUint64(0, BigInt(tx.max_fee_per_gas), true)
-  ap(fb)
-  const pb = new Uint8Array(8)
-  new DataView(pb.buffer).setBigUint64(0, BigInt(tx.max_priority_fee_per_gas), true)
-  ap(pb)
-  if (tx.chain_id) {
-    const cb = new Uint8Array(8)
-    new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true)
-    ap(cb)
-  }
-  if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)))
-  const vb = new Uint8Array(8)
-  new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true)
-  ap(vb)
-  return sha256(h)
+const u64le = (v) => {
+  const b = new Uint8Array(8)
+  new DataView(b.buffer).setBigUint64(0, BigInt(v), true)
+  return b
 }
 
-/** Prepend Ed25519 public key — required by the native executor for signature verification. */
-export function payloadWithPubKey(pubKeyBytes, extra = []) {
-  const pub = Array.from(pubKeyBytes)
-  const rest = Array.isArray(extra) ? extra : Array.from(extra)
-  if (rest.length >= 32 && rest.slice(0, 32).every((b, i) => b === pub[i])) return rest
-  return [...pub, ...rest]
+const concatBytes = (parts) => {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0))
+  let off = 0
+  for (const p of parts) {
+    out.set(p, off)
+    off += p.length
+  }
+  return out
+}
+
+const TX_DOMAIN = new TextEncoder().encode('NEBULA_TX_V1')
+
+/**
+ * Canonical tx hash — must match Rust `Transaction::hash` (common/src/types.rs):
+ * domain tag, length-prefixed payload, and presence tags on chain_id / to.
+ */
+export async function txHash(tx) {
+  const payload = new Uint8Array(tx.payload || [])
+  const hasTo = Array.isArray(tx.to) ? tx.to.length > 0 : !!tx.to
+  return sha256(
+    concatBytes([
+      TX_DOMAIN,
+      new Uint8Array(tx.sender.slice(0, 20)),
+      u64le(tx.nonce),
+      new Uint8Array(tx.public_key),
+      u64le(payload.length),
+      payload,
+      u64le(tx.gas_limit),
+      u64le(tx.max_fee_per_gas),
+      u64le(tx.max_priority_fee_per_gas),
+      tx.chain_id != null ? concatBytes([Uint8Array.of(1), u64le(tx.chain_id)]) : Uint8Array.of(0),
+      hasTo ? concatBytes([Uint8Array.of(1), new Uint8Array(tx.to.slice(0, 20))]) : Uint8Array.of(0),
+      u64le(tx.value),
+    ]),
+  )
+}
+
+/** Attach the signer's public key and an Ed25519 signature over `txHash(tx)`. */
+export async function signTx(tx, keyPair) {
+  tx.public_key = Array.from(keyPair.publicKey)
+  const msg = await txHash(tx)
+  tx.signature = Array.from(nacl.sign.detached(msg, keyPair.secretKey))
+  return tx
 }
 
 export async function buildSignedDeployTx({ keyPair, from, bytecodeHex, nonce, gasLimit = 500000, chainId = 1 }) {
-  const bytecodePayload = Array.from(fromHex(String(bytecodeHex).replace(/^0x/, '')))
   const tx = {
     sender: Array.from(fromHex(from.replace(/^0x/, ''))),
+    to: null,
     nonce,
     value: 0,
     gas_limit: gasLimit,
     max_fee_per_gas: 1e9,
     max_priority_fee_per_gas: 1e9,
-    payload: payloadWithPubKey(keyPair.publicKey, bytecodePayload),
+    payload: Array.from(fromHex(String(bytecodeHex).replace(/^0x/, ''))),
     chain_id: chainId,
     signature: [],
   }
-  const msg = await txHash(tx)
-  tx.signature = Array.from(nacl.sign.detached(msg, keyPair.secretKey))
-  return tx
+  return signTx(tx, keyPair)
 }
 
 export async function submitDeployTx(tx) {
@@ -211,22 +231,19 @@ export async function buildSignedTx({ from, to, valueWei, payload = [], gasLimit
   const kp = loadWalletKeyPair()
   if (!kp) throw new Error('No wallet — create one on /wallet')
   const { nonce } = await fetchBalance(from)
-  const extra = Array.isArray(payload) ? payload : Array.from(fromHex(String(payload).replace(/^0x/, '')))
   const tx = {
     sender: Array.from(fromHex(from.replace(/^0x/, ''))),
-    to: to ? Array.from(fromHex(to.replace(/^0x/, ''))) : [],
+    to: to ? Array.from(fromHex(to.replace(/^0x/, ''))) : null,
     nonce,
     value: Number(valueWei),
     gas_limit: gasLimit,
     max_fee_per_gas: 1e9,
     max_priority_fee_per_gas: 1e9,
-    payload: payloadWithPubKey(kp.publicKey, extra),
+    payload: Array.isArray(payload) ? payload : Array.from(fromHex(String(payload).replace(/^0x/, ''))),
     chain_id: chainId,
     signature: [],
   }
-  const msg = await txHash(tx)
-  tx.signature = Array.from(nacl.sign.detached(msg, kp.secretKey))
-  return tx
+  return signTx(tx, kp)
 }
 
 export function receiptStatus(receipt) {

@@ -122,6 +122,7 @@ data_dir = "/data"
 enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
+dev_mode = true
 
 [metrics]
 enabled = true
@@ -151,6 +152,7 @@ data_dir = "/data"
 enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
+dev_mode = true
 
 [metrics]
 enabled = true
@@ -180,6 +182,7 @@ data_dir = "/data"
 enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
+dev_mode = true
 
 [metrics]
 enabled = true
@@ -207,6 +210,7 @@ data_dir = "/data"
 enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
+dev_mode = true
 
 [metrics]
 enabled = true
@@ -233,6 +237,7 @@ data_dir = "/data"
 enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
+dev_mode = true
 
 [metrics]
 enabled = true

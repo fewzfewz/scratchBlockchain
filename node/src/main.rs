@@ -399,11 +399,14 @@ impl Node {
         // ================================================================
         // 6. Initialize Transaction Pool (MEV + account abstraction)
         // ================================================================
+        // Numeric chain ID signed into every tx. Non-numeric config values
+        // (e.g. "modular-testnet-1") fall back to 1, which clients default to.
+        let chain_id: u64 = config.network.chain_id.parse().unwrap_or(1);
         let mempool_config = mempool::MempoolConfig {
             max_capacity: (config.security.max_tx_per_block * 2),
             max_per_sender: 100,
             min_fee_per_gas: 1_000_000_000,
-            chain_id: Some(1),
+            chain_id: Some(chain_id),
         };
         let validator_pubkeys: Vec<Vec<u8>> =
             validators.iter().map(|v| v.public_key.clone()).collect();
@@ -443,7 +446,6 @@ impl Node {
         // ================================================================
         // 9. Initialize Block Executor
         // ================================================================
-        let chain_id: u64 = config.network.chain_id.parse().unwrap_or(1);
         let evm_store = Arc::new(ChainStoreEvmStore::new(chain_store.clone()));
         let block_executor = BlockExecutor::new(
             EvmExecutor::with_store(evm_store.clone(), chain_id),
@@ -525,16 +527,30 @@ impl Node {
             slashing_tracker.clone(),
             config.api.rate_limit,
             chain_id,
-        );
+        )
+        .with_security(node::rpc::RpcSecurity {
+            dev_mode: config.api.dev_mode,
+            admin_token: config.api.admin_token.clone(),
+            cors_origins: config.api.cors_origins.clone(),
+        });
+        if config.api.dev_mode {
+            warn!(
+                "⚠️ RPC dev mode: faucet, validator registration, delegation, bridge \
+                 relayer and runtime-upgrade routes write state outside consensus. \
+                 Never enable this on a shared network."
+            );
+            if config.api.admin_token.is_none() {
+                warn!("⚠️ No api.admin_token set: admin routes are open to anyone who can reach the RPC port");
+            }
+        }
 
         let rpc_port = config.network.rpc_port;
-        let enable_cors = !config.api.cors_origins.is_empty();
         let rpc_server = Arc::new(rpc_server);
         tokio::spawn({
             let rpc_server = rpc_server.clone();
             async move {
                 info!("🔌 RPC server listening on port {}", rpc_port);
-                rpc_server.run(rpc_port, enable_cors).await;
+                rpc_server.run(rpc_port).await;
             }
         });
 
@@ -545,7 +561,7 @@ impl Node {
                     let rpc_server = rpc_server.clone();
                     async move {
                         info!("🔌 API server listening on port {}", api_port);
-                        rpc_server.run(api_port, enable_cors).await;
+                        rpc_server.run(api_port).await;
                     }
                 });
             } else {

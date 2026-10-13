@@ -119,7 +119,7 @@ pub async fn create_test_node(
     );
 
     tokio::spawn(async move {
-        rpc_server.run(rpc_port, None).await;
+        rpc_server.run(rpc_port).await;
     });
     */
 
@@ -178,6 +178,7 @@ pub async fn create_test_node(
 pub fn create_dummy_transaction() -> Transaction {
     Transaction {
         sender: [1; 20],
+        public_key: [0; 32],
         to: Some([2; 20]),
         nonce: 0,
         value: 100,

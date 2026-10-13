@@ -8,6 +8,11 @@ pub type Address = [u8; 20];
 pub type Signature = Vec<u8>; // Changed from [u8; 64] to avoid serde limit
 pub type PublicKey = [u8; 32];
 
+/// Domain tags keep transaction and header hashes from ever colliding with each
+/// other (or with any other signed message), and version the encodings.
+pub const TX_DOMAIN: &[u8] = b"NEBULA_TX_V1";
+pub const HEADER_DOMAIN: &[u8] = b"NEBULA_HEADER_V1";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Header {
     pub parent_hash: Hash,
@@ -36,14 +41,19 @@ impl Header {
         }
     }
 
+    /// Canonical, domain-separated header hash. Covers every field except the
+    /// proposer's signature (which is computed over this hash).
     pub fn hash(&self) -> Hash {
         let mut hasher = Sha256::new();
+        hasher.update(HEADER_DOMAIN);
         hasher.update(self.parent_hash);
         hasher.update(self.state_root);
         hasher.update(self.extrinsics_root);
         hasher.update(self.slot.to_le_bytes());
         hasher.update(self.epoch.to_le_bytes());
         hasher.update(self.validator_set_id.to_le_bytes());
+        hasher.update(self.gas_used.to_le_bytes());
+        hasher.update(self.base_fee.to_le_bytes());
         hasher.finalize().into()
     }
 }
@@ -53,6 +63,8 @@ impl Header {
 pub struct Transaction {
     pub sender: Address,
     pub nonce: u64,
+    /// Ed25519 key that signed the transaction; `sender` must be derived from it.
+    pub public_key: PublicKey,
     pub payload: Vec<u8>,
     pub signature: Vec<u8>,
 
@@ -68,20 +80,35 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    /// Compute transaction hash
+    /// Canonical transaction hash (the message that gets signed).
+    ///
+    /// Every variable-length field is length-prefixed and every optional field
+    /// carries a presence tag, so no two distinct transactions share an encoding
+    /// (e.g. `chain_id` cannot be stripped by shifting bytes into `payload`).
     pub fn hash(&self) -> Hash {
         let mut hasher = Sha256::new();
+        hasher.update(TX_DOMAIN);
         hasher.update(self.sender);
         hasher.update(self.nonce.to_le_bytes());
+        hasher.update(self.public_key);
+        hasher.update((self.payload.len() as u64).to_le_bytes());
         hasher.update(&self.payload);
         hasher.update(self.gas_limit.to_le_bytes());
         hasher.update(self.max_fee_per_gas.to_le_bytes());
         hasher.update(self.max_priority_fee_per_gas.to_le_bytes());
-        if let Some(chain_id) = self.chain_id {
-            hasher.update(chain_id.to_le_bytes());
+        match self.chain_id {
+            Some(chain_id) => {
+                hasher.update([1u8]);
+                hasher.update(chain_id.to_le_bytes());
+            }
+            None => hasher.update([0u8]),
         }
-        if let Some(to) = self.to {
-            hasher.update(to);
+        match self.to {
+            Some(to) => {
+                hasher.update([1u8]);
+                hasher.update(to);
+            }
+            None => hasher.update([0u8]),
         }
         hasher.update(self.value.to_le_bytes());
         hasher.finalize().into()
@@ -105,6 +132,14 @@ impl Transaction {
         verifying_key.verify(&message, &signature).is_ok()
     }
 
+    /// Set `public_key` and `sender` from `key`, then sign `self.hash()`.
+    pub fn sign_with(&mut self, key: &ed25519_dalek::SigningKey) {
+        use ed25519_dalek::Signer;
+        self.public_key = key.verifying_key().to_bytes();
+        self.sender = crate::crypto::derive_address_from_public_key(&self.public_key);
+        self.signature = key.sign(&self.hash()).to_bytes().to_vec();
+    }
+
     /// Create a simple transfer transaction with default gas values
     pub fn simple_transfer(
         sender: Address,
@@ -116,6 +151,7 @@ impl Transaction {
         Self {
             sender,
             nonce,
+            public_key: [0; 32],
             payload: vec![],
             signature: vec![],
             gas_limit: 21_000,
@@ -132,6 +168,7 @@ impl Transaction {
         Self {
             sender,
             nonce,
+            public_key: [0; 32],
             payload: vec![],
             signature: vec![0; 64],
             gas_limit: 21_000,
@@ -277,5 +314,69 @@ impl TransactionReceipt {
             to,
             contract_address: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_hash_commits_to_fee_fields() {
+        let header = Header::new([7; 32], 3);
+        let mut other = header.clone();
+        other.base_fee += 1;
+        assert_ne!(header.hash(), other.hash());
+        let mut other = header.clone();
+        other.gas_used += 1;
+        assert_ne!(header.hash(), other.hash());
+        // The proposer signature is over the hash, so it must not be part of it.
+        let mut signed = header.clone();
+        signed.signature = vec![1; 64];
+        assert_eq!(header.hash(), signed.hash());
+    }
+
+    #[test]
+    fn tx_hash_distinguishes_optional_fields() {
+        let mut a = Transaction::test_transaction([1; 20], 0);
+        a.to = None;
+        a.payload = [9u8; 20].to_vec();
+        let mut b = a.clone();
+        b.to = Some([9; 20]);
+        b.payload.clear();
+        assert_ne!(a.hash(), b.hash());
+    }
+
+    /// Fixed vectors shared with the JS clients (frontend `txHash`, SDK
+    /// `Wallet.signTransaction`). If this changes, every client must change too.
+    #[test]
+    fn tx_hash_matches_client_vectors() {
+        let tx = Transaction {
+            sender: [0x11; 20],
+            nonce: 7,
+            public_key: [0x22; 32],
+            payload: vec![1, 2, 3],
+            signature: vec![],
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 100_000_000,
+            chain_id: Some(1),
+            to: Some([0x33; 20]),
+            value: 5,
+        };
+        assert_eq!(
+            hex::encode(tx.hash()),
+            "3413644368542c163b3a62867bd5c0743479b00d5cb16a3a0629b2891d5c70b9"
+        );
+        let bare = Transaction {
+            chain_id: None,
+            to: None,
+            payload: vec![],
+            ..tx
+        };
+        assert_eq!(
+            hex::encode(bare.hash()),
+            "56ce5bd73e11baa36f745bdbc607a09e9d89c302d8a6676ea3c0731deea2f9cd"
+        );
     }
 }

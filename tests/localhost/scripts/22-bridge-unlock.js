@@ -4,6 +4,7 @@
  */
 const { fetchJson, sleep, passBanner, failAndExit } = require('./lib/helpers');
 const { fundAddress } = require('./lib/faucet');
+const { adminHeaders } = require('./lib/tx-sign');
 const { submitLockTx, generateWallet } = require('./lib/bridge-tx');
 
 async function waitReceipt(hash) {
@@ -36,7 +37,7 @@ async function test22_BridgeUnlock() {
 
     const unlock = await fetchJson('http://localhost:8545/bridge/unlock', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders(),
       body: JSON.stringify({
         nebula_tx_hash: lockHash.startsWith('0x') ? lockHash : `0x${lockHash}`,
         eth_recipient: ethRecipient,

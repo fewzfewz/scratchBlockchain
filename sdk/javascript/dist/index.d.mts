@@ -27,6 +27,8 @@ interface TransactionRequest {
 interface Transaction {
     sender: Address;
     nonce: number;
+    /** Ed25519 public key of the signer; `sender` is derived from it. */
+    publicKey: HexString;
     payload: HexString;
     signature: HexString;
     gasLimit: number;

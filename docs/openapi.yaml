@@ -881,6 +881,11 @@ components:
           type: integer
         max_priority_fee_per_gas:
           type: integer
+        public_key:
+          type: array
+          items:
+            type: integer
+          description: Signer's 32-byte Ed25519 public key; sender must equal the last 20 bytes of SHA-256(public_key)
         payload:
           type: array
           items:

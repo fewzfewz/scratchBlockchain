@@ -225,24 +225,14 @@ impl NativeExecutor {
         let signature = Signature::from_slice(&tx.signature)
             .map_err(|e| anyhow!("Invalid signature: {}", e))?;
 
-        // Recover or verify public key
-        // For native executor, we assume the sender is correct and just verify
-        // In production, you'd have the public key explicitly in the transaction
         let message = tx.hash();
-
-        // Try to extract public key from payload or use a known mapping
-        // This is simplified - a production system would have proper key recovery
-        if tx.payload.len() < 32 {
-            return Err(anyhow!("Payload too short - missing public key"));
-        }
-
-        let mut public_key_bytes = [0u8; 32];
-        public_key_bytes.copy_from_slice(&tx.payload[0..32]);
-        let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
+        let verifying_key = VerifyingKey::from_bytes(&tx.public_key)
             .map_err(|e| anyhow!("Invalid public key: {}", e))?;
-
         if verifying_key.verify(&message, &signature).is_err() {
             return Err(anyhow!("Invalid signature"));
+        }
+        if common::crypto::derive_address_from_public_key(&tx.public_key) != tx.sender {
+            return Err(anyhow!("Public key does not match sender"));
         }
 
         // 5. Validate sender - check nonce and balance with immutable borrow
@@ -330,50 +320,31 @@ pub fn init() {
 mod tests {
     use super::*;
     use common::types::{Account, Block, Header, Transaction};
-    use ed25519_dalek::{Signer, SigningKey};
+    use ed25519_dalek::SigningKey;
 
+    /// A transfer signed by `signing_key`; `sender` is derived from that key.
     fn create_signed_transaction(
-        sender: [u8; 20],
         nonce: u64,
         recipient: [u8; 20],
         amount: u128,
         signing_key: &SigningKey,
     ) -> Transaction {
-        let public_key = signing_key.verifying_key().to_bytes();
-
-        // Build payload: [pubkey(32)][recipient(20)][amount(16)]
-        let mut payload = Vec::new();
-        payload.extend_from_slice(&public_key);
-        payload.extend_from_slice(&recipient);
-        payload.extend_from_slice(&amount.to_le_bytes());
-
-        // Create unsigned transaction to get hash
-        let mut tx = Transaction {
-            sender,
-            nonce,
-            payload,
-            signature: vec![],
-            gas_limit: 30_000,
-            max_fee_per_gas: 1_000_000_000,
-            max_priority_fee_per_gas: 100_000_000,
-            chain_id: Some(1),
-            to: Some(recipient),
-            value: amount as u64,
-        };
-
-        // Sign the transaction hash
-        let message = tx.hash();
-        let signature = signing_key.sign(&message);
-        tx.signature = signature.to_bytes().to_vec();
-
+        let mut tx = Transaction::simple_transfer([0; 20], recipient, amount as u64, nonce, 1);
+        tx.gas_limit = 30_000;
+        tx.sign_with(signing_key);
         tx
+    }
+
+    fn sender_of(signing_key: &SigningKey) -> [u8; 20] {
+        common::crypto::derive_address_from_public_key(&signing_key.verifying_key().to_bytes())
     }
 
     #[test]
     fn test_native_executor_transfer() {
         let executor = NativeExecutor::new();
 
-        let sender = [1u8; 20];
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let sender = sender_of(&signing_key);
         let recipient = [2u8; 20];
         let mut state = HashMap::new();
         state.insert(
@@ -384,10 +355,7 @@ mod tests {
             },
         );
 
-        // Create a signing key for testing
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-
-        let tx = create_signed_transaction(sender, 0, recipient, 500, &signing_key);
+        let tx = create_signed_transaction(0, recipient, 500, &signing_key);
 
         let block = Block {
             header: Header::new([0; 32], 1),
@@ -409,7 +377,8 @@ mod tests {
     fn test_native_executor_insufficient_balance() {
         let executor = NativeExecutor::new();
 
-        let sender = [1u8; 20];
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let sender = sender_of(&signing_key);
         let recipient = [2u8; 20];
         let mut state = HashMap::new();
         state.insert(
@@ -420,8 +389,7 @@ mod tests {
             },
         );
 
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let tx = create_signed_transaction(sender, 0, recipient, 500, &signing_key);
+        let tx = create_signed_transaction(0, recipient, 500, &signing_key);
 
         let block = Block {
             header: Header::new([0; 32], 1),
@@ -435,7 +403,8 @@ mod tests {
     fn test_native_executor_invalid_signature() {
         let executor = NativeExecutor::new();
 
-        let sender = [1u8; 20];
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
+        let sender = sender_of(&signing_key);
         let recipient = [2u8; 20];
         let mut state = HashMap::new();
         state.insert(
@@ -447,8 +416,7 @@ mod tests {
         );
 
         // Create transaction with wrong signature
-        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-        let mut tx = create_signed_transaction(sender, 0, recipient, 500, &signing_key);
+        let mut tx = create_signed_transaction(0, recipient, 500, &signing_key);
 
         // Corrupt the signature
         if !tx.signature.is_empty() {

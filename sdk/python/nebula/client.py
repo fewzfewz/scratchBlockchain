@@ -11,9 +11,17 @@ from typing import Any, Optional
 class NebulaClient:
     """Lightweight RPC client (stdlib only — no extra dependencies)."""
 
-    def __init__(self, base_url: str = "http://localhost:8545", timeout: float = 30.0):
+    def __init__(
+        self,
+        base_url: str = "http://localhost:8545",
+        timeout: float = 30.0,
+        admin_token: Optional[str] = None,
+    ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        # Sent as a bearer token; needed for dev-mode admin routes (bridge
+        # mint/unlock, validator registration) on nodes with an admin token.
+        self.admin_token = admin_token
 
     def _request(
         self,
@@ -24,6 +32,8 @@ class NebulaClient:
         url = f"{self.base_url}{path}"
         data = None
         headers = {"Accept": "application/json"}
+        if self.admin_token:
+            headers["Authorization"] = f"Bearer {self.admin_token}"
         if body is not None:
             data = json.dumps(body).encode("utf-8")
             headers["Content-Type"] = "application/json"

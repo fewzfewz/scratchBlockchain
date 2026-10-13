@@ -144,23 +144,9 @@ impl Mempool {
             return Err(anyhow!("Invalid signature length: {}", tx.signature.len()));
         }
 
-        // Recover signer from signature and verify it matches tx.sender
-        // This prevents forgery attacks
-        let recovered_sender = self.recover_signer(tx)?;
-        if recovered_sender != tx.sender {
-            return Err(anyhow!("Signature does not match sender"));
-        }
-
-        // Check 2: Chain ID must match (prevent replay attacks across chains)
-        let expected_chain_id = self.config.chain_id;
-        let actual_chain_id = tx.chain_id;
-        if expected_chain_id.is_some() && expected_chain_id != actual_chain_id {
-            return Err(anyhow!(
-                "Chain ID mismatch: expected {:?}, got {:?}",
-                expected_chain_id,
-                actual_chain_id,
-            ));
-        }
+        // Check 2: Signature is valid, binds `public_key` to `sender`, and
+        // (when configured) covers the expected chain ID.
+        self.verify_signer(tx)?;
 
         // Check 3: Minimum fee requirement
         if tx.max_priority_fee_per_gas < self.config.min_fee_per_gas {
@@ -180,26 +166,23 @@ impl Mempool {
         Ok(())
     }
 
-    /// Recover the signer's public key from a transaction signature
-    /// Uses ed25519 signature verification
-    fn recover_signer(&self, tx: &Transaction) -> Result<[u8; 20]> {
-        use ed25519_dalek::Signature;
-
-        // Create message to verify (transaction hash without signature)
-        let _message = tx.hash();
-
-        // Parse signature
-        let _signature = Signature::from_slice(&tx.signature)
-            .map_err(|e| anyhow!("Invalid signature format: {}", e))?;
-
-        // Try to recover public key from signature (simplified - in production
-        // you'd have the public key stored with the transaction or recover it)
-        // For now, we assume the sender field is correct and just verify against it
-
-        // This is a placeholder - proper implementation would use signature recovery
-        // or have the public key explicitly included in the transaction
-
-        Ok(tx.sender)
+    /// Authenticate the transaction: the signature over `tx.hash()` must
+    /// verify under `tx.public_key`, and `sender` must be derived from it.
+    fn verify_signer(&self, tx: &Transaction) -> Result<()> {
+        match self.config.chain_id {
+            Some(chain_id) => {
+                common::validation::verify_tx_signature(tx, chain_id)?;
+            }
+            None => {
+                if !tx.verify(&tx.public_key) {
+                    return Err(anyhow!("Invalid signature"));
+                }
+                if common::crypto::derive_address_from_public_key(&tx.public_key) != tx.sender {
+                    return Err(anyhow!("Public key does not match sender"));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Add a transaction to the mempool with validation
@@ -533,16 +516,37 @@ impl MevMempool {
 mod tests {
     use super::*;
 
-    fn create_test_tx(nonce: u64, fee: u64, sender: [u8; 20]) -> Transaction {
-        let mut tx = Transaction::test_transaction(sender, nonce);
-        let mut sig = vec![nonce as u8; 32];
-        sig.extend_from_slice(&fee.to_le_bytes());
-        sig.extend_from_slice(&sender);
-        sig.resize(64, 0);
-        tx.signature = sig;
+    use ed25519_dalek::SigningKey;
+
+    /// A correctly signed tx from the account whose key is derived from `seed`.
+    fn create_test_tx(nonce: u64, fee: u64, seed: [u8; 20]) -> Transaction {
+        let key = SigningKey::from_bytes(&[seed[0]; 32]);
+        let mut tx = Transaction::test_transaction([0; 20], nonce);
         tx.max_priority_fee_per_gas = fee;
         tx.chain_id = Some(1);
+        tx.sign_with(&key);
         tx
+    }
+
+    #[test]
+    fn rejects_forged_or_mismatched_signatures() {
+        let mempool = Mempool::new(MempoolConfig::default());
+
+        let mut forged = create_test_tx(1, 1_000_000_000, [1; 20]);
+        forged.value = 1_000_000; // altered after signing
+        assert!(mempool.add_transaction(forged).is_err());
+
+        let mut wrong_sender = create_test_tx(1, 1_000_000_000, [1; 20]);
+        wrong_sender.sender = [9; 20];
+        assert!(mempool.add_transaction(wrong_sender).is_err());
+
+        let mut wrong_chain = Transaction::test_transaction([0; 20], 1);
+        wrong_chain.max_priority_fee_per_gas = 1_000_000_000;
+        wrong_chain.chain_id = Some(2);
+        wrong_chain.sign_with(&SigningKey::from_bytes(&[1; 32]));
+        assert!(mempool.add_transaction(wrong_chain).is_err());
+
+        assert_eq!(mempool.size(), 0);
     }
 
     #[test]
@@ -604,11 +608,12 @@ mod tests {
 
         assert_eq!(mempool.size(), 2);
 
+        let sender_addr = tx1.sender;
         mempool.remove_transactions(&[tx1]);
         assert_eq!(mempool.size(), 1);
 
         // Sender state should be updated
-        assert_eq!(mempool.get_sender_count(&sender), Some(1));
+        assert_eq!(mempool.get_sender_count(&sender_addr), Some(1));
     }
 
     #[test]

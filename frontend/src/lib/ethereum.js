@@ -9,6 +9,7 @@ import {
   toHex,
 } from 'viem'
 import { mainnet, sepolia, hardhat } from 'viem/chains'
+import { adminHeaders } from './chain.js'
 
 export const BRIDGE_ABI = [
   {
@@ -132,7 +133,7 @@ export async function requestNebulaMint({ recipient, amount, ethTxHash, ethRpcUr
   const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
   const r = await window.fetch(`${base}/bridge/mint`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminHeaders(),
     body: JSON.stringify({
       recipient,
       amount: amount?.toString(),

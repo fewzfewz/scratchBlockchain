@@ -29,6 +29,7 @@ fn benchmark_mempool_add(c: &mut Criterion) {
             
             let tx = Transaction {
                 sender: [0; 20],
+                public_key: [0; 32],
                 nonce: i,
                 payload: vec![],
                 signature,

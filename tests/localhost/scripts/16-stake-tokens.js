@@ -1,5 +1,6 @@
 const { fetchJson, passBanner, failAndExit } = require('./lib/helpers');
 const { fundAddress } = require('./lib/faucet');
+const { adminHeaders } = require('./lib/tx-sign');
 const { generateWallet } = require('./lib/gov-tx');
 
 async function test16_StakeTokens() {
@@ -19,7 +20,7 @@ async function test16_StakeTokens() {
     const amount = '1000000000000000000';
     await fetchJson('http://localhost:8545/delegate', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders(),
       body: JSON.stringify({
         delegator: wallet.address,
         validator,

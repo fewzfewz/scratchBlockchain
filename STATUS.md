@@ -52,11 +52,10 @@
 These must be fixed before any public testnet. Operational items further down come after them.
 
 - **Consensus safety**: quorum is `>= floor(2N/3)` instead of `> 2/3` (`consensus/src/bft.rs`); round jumps happen before signature checks; conflicting votes overwrite each other with no evidence; lock state is not persisted across restarts; synced blocks are not checked against a +2/3 commit certificate.
-- **Transaction authentication**: only native transfers verify signatures. EVM, governance and WASM transactions trust `tx.sender`, and the mempool does not verify either (`mempool/src/lib.rs` `recover_signer`).
-- **RPC writes state outside consensus**: `/bridge/mint` (mints without an ETH proof when `eth_tx_hash` is omitted), `/validators/register` (any stake, hot-reloaded into BFT), `/faucet/request`, `/delegate`, `/deploy_wasm`, `/runtime/propose`. None require authentication.
 - **No real state root**: the header `state_root` hashes only `parent_root + extrinsics_root`, and blocks are committed before that check runs.
-- **Hashing**: the transaction hash has no length prefixes, so `chain_id` can be stripped without breaking the signature. The header hash omits `base_fee` and `gas_used`.
-- **Rewards**: the default base reward (`1e19`) overflows `i64` and is never paid.
+- **Bridge trust**: in dev mode the relayer routes (`/bridge/mint`, `/bridge/unlock`) still credit balances outside consensus, and the ETH lock check accepts any successful tx with logs and trusts the requested amount.
+
+Fixed in Phase 1 (transactions carry an explicit `public_key`; tx/header hashes are domain-separated and canonical; the RPC, mempool and every executor branch verify signatures; governance/WASM txs consume nonces; state-writing RPC routes only exist with `api.dev_mode = true`, optionally behind `api.admin_token`). Rewards overflow fixed earlier.
 
 ## Mainnet blockers (operational)
 

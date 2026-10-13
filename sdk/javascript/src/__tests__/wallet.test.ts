@@ -1,4 +1,5 @@
-import { Wallet } from "../wallet";
+import { Wallet, transactionSigningBytes } from "../wallet";
+import { ed25519 } from "@noble/curves/ed25519";
 import { sha256 } from "@noble/hashes/sha256";
 import { hexToBytes, bytesToHex } from "@noble/hashes/utils";
 
@@ -73,5 +74,35 @@ describe("Wallet", () => {
     expect(tx.maxFeePerGas).toBe(2000000000);
     expect(tx.maxPriorityFeePerGas).toBe(500000000);
     expect(tx.signature).toMatch(/^0x[a-f0-9]{128}$/);
+  });
+
+  it("matches the node's canonical tx hash (shared vector with Rust)", () => {
+    const bytes = transactionSigningBytes({
+      sender: new Uint8Array(20).fill(0x11),
+      nonce: 7,
+      publicKey: new Uint8Array(32).fill(0x22),
+      payload: Uint8Array.of(1, 2, 3),
+      gasLimit: 21000,
+      maxFeePerGas: 1000000000,
+      maxPriorityFeePerGas: 100000000,
+      chainId: 1,
+      to: new Uint8Array(20).fill(0x33),
+      value: 5,
+    });
+    expect(bytesToHex(sha256(bytes))).toBe(
+      "3413644368542c163b3a62867bd5c0743479b00d5cb16a3a0629b2891d5c70b9",
+    );
+  });
+
+  it("signs with its public key and the signature verifies over the hash", async () => {
+    const wallet = Wallet.generate();
+    const tx = await wallet.signTransaction({ to: "0x" + "ab".repeat(20), value: 1, chainId: 1 });
+    expect(tx.publicKey).toBe("0x" + wallet.publicKey);
+    const ok = ed25519.verify(
+      hexToBytes(tx.signature.slice(2)),
+      hexToBytes(tx.hash!.slice(2)),
+      hexToBytes(wallet.publicKey),
+    );
+    expect(ok).toBe(true);
   });
 });

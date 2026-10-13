@@ -141,18 +141,10 @@ impl BlockExecutor {
         }
     }
 
-    fn payload_body(payload: &[u8]) -> &[u8] {
-        if payload.len() > 32 {
-            &payload[32..]
-        } else {
-            payload
-        }
-    }
-
-    /// A plain value transfer: the payload is only the sender's public key.
-    /// Anything with a body after the key (calldata, bytecode) goes to the EVM.
+    /// A plain value transfer has no payload. Anything with a payload
+    /// (calldata, bytecode) goes to the EVM.
     fn is_native_transfer(tx: &Transaction) -> bool {
-        tx.to.is_some() && tx.payload.len() == 32
+        tx.to.is_some() && tx.payload.is_empty()
     }
 
     /// Transactions whose receipt succeeded, i.e. that were authenticated and
@@ -167,8 +159,24 @@ impl BlockExecutor {
             .collect()
     }
 
-    fn load_account_state(chain_store: &ChainStore, addr: &[u8]) -> (u128, u64) {
-        if let Ok(Some(encoded)) = chain_store.get_state(addr) {
+    /// Account state as of the transactions already executed in this block:
+    /// the latest pending diff for `addr` wins over the committed store, so two
+    /// txs from one sender in the same block see each other's nonce bump.
+    fn load_account_state(
+        chain_store: &ChainStore,
+        pending: &StateDiff,
+        addr: &[u8],
+    ) -> (u128, u64) {
+        let pending_value = pending
+            .iter()
+            .rev()
+            .find(|(k, _)| k.as_slice() == addr)
+            .map(|(_, v)| v.clone());
+        let encoded = match pending_value {
+            Some(v) => v,
+            None => chain_store.get_state(addr).ok().flatten(),
+        };
+        if let Some(encoded) = encoded {
             if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
                 let balance = acc
                     .get("balance")
@@ -201,9 +209,30 @@ impl BlockExecutor {
         }
     }
 
+    /// Check the sender's nonce and consume it. Used by tx kinds that carry no
+    /// value (governance, WASM) so a signed tx cannot be replayed.
+    fn consume_nonce(
+        tx: &Transaction,
+        chain_store: &ChainStore,
+        pending: &StateDiff,
+    ) -> Result<StateDiff, String> {
+        let (balance, nonce) = Self::load_account_state(chain_store, pending, &tx.sender);
+        if nonce != tx.nonce {
+            return Err(format!(
+                "Invalid nonce: expected {}, got {}",
+                nonce, tx.nonce
+            ));
+        }
+        Ok(vec![(
+            tx.sender.to_vec(),
+            Some(Self::encode_account_state(balance, nonce + 1)),
+        )])
+    }
+
     fn execute_native_transfer(
         tx: &Transaction,
         chain_store: &ChainStore,
+        pending: &StateDiff,
     ) -> (TransactionReceipt, StateDiff) {
         let to = match tx.to {
             Some(to) => to,
@@ -215,7 +244,8 @@ impl BlockExecutor {
             }
         };
 
-        let (sender_balance, sender_nonce) = Self::load_account_state(chain_store, &tx.sender);
+        let (sender_balance, sender_nonce) =
+            Self::load_account_state(chain_store, pending, &tx.sender);
         if sender_nonce != tx.nonce {
             return (
                 Self::failed_receipt(format!(
@@ -238,7 +268,8 @@ impl BlockExecutor {
             );
         }
 
-        let (recipient_balance, recipient_nonce) = Self::load_account_state(chain_store, &to);
+        let (recipient_balance, recipient_nonce) =
+            Self::load_account_state(chain_store, pending, &to);
         let new_sender_balance = sender_balance - tx.value as u128 - gas_fee;
         let new_recipient_balance = recipient_balance + tx.value as u128;
 
@@ -299,8 +330,21 @@ impl BlockExecutor {
                 continue;
             }
 
-            let body = Self::payload_body(&tx.payload);
-            if ChainGovernance::is_governance_payload(body) {
+            let body = tx.payload.as_slice();
+            let is_governance = ChainGovernance::is_governance_payload(body);
+            let is_wasm = body.starts_with(execution::WASM_TX_PREFIX);
+            if is_governance || is_wasm {
+                match Self::consume_nonce(tx, &self.chain_store, &state_diffs) {
+                    Ok(diffs) => state_diffs.extend(diffs),
+                    Err(e) => {
+                        receipts.push(Self::failed_receipt(e));
+                        continue;
+                    }
+                }
+            }
+
+            if is_governance {
+                // Applied afterwards by governance_store::apply_extrinsics.
                 receipts.push(TransactionReceipt {
                     success: true,
                     gas_used: 21_000,
@@ -313,7 +357,7 @@ impl BlockExecutor {
             }
 
             // WASM contract call: payload `WASM:<name>:<func>:<arg>`
-            if body.starts_with(execution::WASM_TX_PREFIX) {
+            if is_wasm {
                 let receipt = Self::execute_wasm_tx(body, &self.chain_store);
                 receipts.push(receipt);
                 continue;
@@ -321,21 +365,18 @@ impl BlockExecutor {
 
             // Native Ed25519 transfer (wallet / SDK transactions)
             if Self::is_native_transfer(tx) {
-                let (receipt, diffs) = Self::execute_native_transfer(tx, &self.chain_store);
+                let (receipt, diffs) =
+                    Self::execute_native_transfer(tx, &self.chain_store, &state_diffs);
                 state_diffs.extend(diffs);
                 receipts.push(receipt);
                 continue;
             }
 
-            let evm_data = if tx.payload.len() > 32 {
-                Bytes::from(tx.payload[32..].to_vec())
-            } else {
-                Bytes::from(tx.payload.clone())
-            };
+            let evm_data = Bytes::from(tx.payload.clone());
 
             let caller = Address::from_slice(&tx.sender);
             let (native_bal, native_nonce) =
-                Self::load_account_state(&self.chain_store, &tx.sender);
+                Self::load_account_state(&self.chain_store, &state_diffs, &tx.sender);
             if let Err(e) = self
                 .evm
                 .prepare_native_account(caller, native_bal, native_nonce)
@@ -748,16 +789,11 @@ mod tests {
         assert_eq!(result.unwrap().extrinsics.len(), 0);
     }
 
-    fn governance_vote_tx(key: &ed25519_dalek::SigningKey) -> Transaction {
-        use ed25519_dalek::Signer;
-        let public_key = key.verifying_key().to_bytes();
-        let sender = common::crypto::derive_address_from_public_key(&public_key);
-        let mut payload = public_key.to_vec();
-        payload.extend_from_slice(br#"{"action":"vote","proposal_id":1,"choice":"yes"}"#);
-        let mut tx = Transaction::simple_transfer(sender, [0u8; 20], 0, 0, 1);
+    fn governance_vote_tx(key: &ed25519_dalek::SigningKey, nonce: u64) -> Transaction {
+        let mut tx = Transaction::simple_transfer([0u8; 20], [0u8; 20], 0, nonce, 1);
         tx.to = None;
-        tx.payload = payload;
-        tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
+        tx.payload = br#"{"action":"vote","proposal_id":1,"choice":"yes"}"#.to_vec();
+        tx.sign_with(key);
         tx
     }
 
@@ -766,8 +802,8 @@ mod tests {
     #[test]
     fn test_unauthenticated_txs_are_rejected() {
         let key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
-        let valid = governance_vote_tx(&key);
-        let mut forged = governance_vote_tx(&key);
+        let valid = governance_vote_tx(&key, 0);
+        let mut forged = governance_vote_tx(&key, 0);
         forged.signature = vec![7u8; 64]; // right sender + key, signature not by that key
 
         let evm = EvmExecutor::with_store(Arc::new(InMemoryStore::default()), 1);
@@ -786,5 +822,34 @@ mod tests {
             BlockExecutor::successful_txs(&block, &receipts),
             vec![valid]
         );
+    }
+
+    /// Governance and WASM txs carry no value, but must still consume a nonce
+    /// so a signed vote cannot be replayed (in the same block or a later one).
+    #[test]
+    fn test_governance_tx_replay_is_rejected() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
+        let first = governance_vote_tx(&key, 0);
+        let second = governance_vote_tx(&key, 1);
+
+        let evm = EvmExecutor::with_store(Arc::new(InMemoryStore::default()), 1);
+        let chain_store = Arc::new(ChainStore::new(Arc::new(MemDb::new())));
+        let mut executor = BlockExecutor::new(evm, chain_store);
+
+        let block = Block {
+            header: Header::new([0u8; 32], 1),
+            extrinsics: vec![first.clone(), first.clone(), second],
+        };
+        let receipts = executor.execute_and_commit(&block).unwrap();
+        assert!(receipts[0].success);
+        assert!(!receipts[1].success, "replay in the same block");
+        assert!(receipts[2].success, "next nonce sees the in-block bump");
+
+        let later = Block {
+            header: Header::new([0u8; 32], 2),
+            extrinsics: vec![first],
+        };
+        let receipts = executor.execute_and_commit(&later).unwrap();
+        assert!(!receipts[0].success, "replay in a later block");
     }
 }

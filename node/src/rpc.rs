@@ -210,6 +210,7 @@ struct BridgeMintRequest {
     recipient: String,
     amount: Option<String>,
     eth_tx_hash: Option<String>,
+    /// Ignored: the node only trusts its own `ETH_RPC_URL`.
     eth_rpc_url: Option<String>,
     eth_bridge_address: Option<String>,
 }
@@ -259,14 +260,101 @@ struct BridgeStatusResponse {
 // CORS Helper
 // ============================================================================
 
-/// Add CORS headers to allow web clients to access the API
-fn with_cors() -> warp::cors::Cors {
-    warp::cors()
-        .allow_any_origin()
+/// Build the CORS policy. `"*"` allows any origin; otherwise only the listed
+/// `http(s)://` origins are allowed. With no list, browsers are refused unless
+/// the node runs in dev mode.
+fn build_cors(origins: &[String], dev_mode: bool) -> warp::cors::Cors {
+    let base = warp::cors()
         .allow_methods(vec!["GET", "POST", "OPTIONS"])
         .allow_headers(vec!["Content-Type", "Authorization"])
-        .max_age(3600)
-        .build()
+        .max_age(3600);
+    let allow_any = origins.iter().any(|o| o == "*") || (origins.is_empty() && dev_mode);
+    if allow_any {
+        return base.allow_any_origin().build();
+    }
+    let valid: Vec<&str> = origins
+        .iter()
+        .map(|o| o.trim_end_matches('/'))
+        .filter(|o| o.starts_with("http://") || o.starts_with("https://"))
+        .collect();
+    base.allow_origins(valid).build()
+}
+
+// ============================================================================
+// Route access control
+// ============================================================================
+
+/// Who may call the RPC routes that write state directly, bypassing consensus.
+///
+/// Those routes only exist for local devnets: outside `dev_mode` they answer
+/// 404. When `admin_token` is set, admin routes also require
+/// `Authorization: Bearer <token>`.
+#[derive(Debug, Clone, Default)]
+pub struct RpcSecurity {
+    pub dev_mode: bool,
+    pub admin_token: Option<String>,
+    pub cors_origins: Vec<String>,
+}
+
+#[derive(Debug)]
+struct Unauthorized;
+impl warp::reject::Reject for Unauthorized {}
+
+/// Compare without short-circuiting, so response timing does not leak how
+/// much of the token a guess got right.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
+}
+
+fn bearer_matches(header: Option<&str>, token: &str) -> bool {
+    header
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .map(|given| constant_time_eq(given.trim().as_bytes(), token.as_bytes()))
+        .unwrap_or(false)
+}
+
+/// Gate for dev-only routes that are safe to expose on a devnet without a
+/// token (faucet, WASM deploy). 404 outside dev mode.
+fn dev_only(security: &RpcSecurity) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
+    let dev_mode = security.dev_mode;
+    warp::any()
+        .and_then(move || async move {
+            if dev_mode {
+                Ok(())
+            } else {
+                Err(warp::reject::not_found())
+            }
+        })
+        .untuple_one()
+}
+
+/// Gate for admin routes (validator registration, delegation, runtime
+/// upgrades, bridge relayer, peer dialing). 404 outside dev mode; 401 without
+/// the admin token when one is configured.
+fn admin_only(
+    security: &RpcSecurity,
+) -> impl Filter<Extract = (), Error = warp::Rejection> + Clone {
+    let dev_mode = security.dev_mode;
+    let token = security.admin_token.clone();
+    warp::header::optional::<String>("authorization")
+        .and_then(move |auth: Option<String>| {
+            let token = token.clone();
+            async move {
+                if !dev_mode {
+                    return Err(warp::reject::not_found());
+                }
+                match token {
+                    Some(t) if !bearer_matches(auth.as_deref(), &t) => {
+                        Err(warp::reject::custom(Unauthorized))
+                    }
+                    _ => Ok(()),
+                }
+            }
+        })
+        .untuple_one()
 }
 
 // ============================================================================
@@ -282,6 +370,7 @@ pub struct RpcServer {
     slashing_tracker: Arc<Mutex<SlashingTracker>>,
     rate_limit: u32,
     chain_id: u64,
+    security: RpcSecurity,
 }
 
 impl RpcServer {
@@ -305,10 +394,18 @@ impl RpcServer {
             slashing_tracker,
             rate_limit,
             chain_id,
+            security: RpcSecurity::default(),
         }
     }
 
-    pub async fn run(&self, port: u16, enable_cors: bool) {
+    /// Set dev-mode / admin-token / CORS policy. Defaults to the locked-down
+    /// production policy (no state-writing routes, no cross-origin access).
+    pub fn with_security(mut self, security: RpcSecurity) -> Self {
+        self.security = security;
+        self
+    }
+
+    pub async fn run(&self, port: u16) {
         use governor::clock::DefaultClock;
         use governor::state::keyed::DefaultKeyedStateStore;
         use governor::{Quota, RateLimiter};
@@ -322,6 +419,8 @@ impl RpcServer {
         let network_cmd_sender = self.network_cmd_sender.clone();
         let slashing_tracker = self.slashing_tracker.clone();
         let chain_id = self.chain_id;
+        let dev = dev_only(&self.security);
+        let admin = admin_only(&self.security);
 
         // Per-address faucet cooldown tracking (server-side, not client-enforced)
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> =
@@ -390,12 +489,14 @@ impl RpcServer {
             .and(warp::body::json())
             .and(with_arc(tx_pool.clone()))
             .and(with_arc(network_cmd_sender.clone()))
+            .and(warp::any().map(move || chain_id))
             .and_then(
                 |_,
                  tx: Transaction,
                  tx_pool: Arc<TxPool>,
-                 network_cmd_sender: mpsc::Sender<NetworkCommand>| async move {
-                    handle_submit_tx(tx, tx_pool, network_cmd_sender).await
+                 network_cmd_sender: mpsc::Sender<NetworkCommand>,
+                 chain_id: u64| async move {
+                    handle_submit_tx(tx, tx_pool, network_cmd_sender, chain_id).await
                 },
             );
 
@@ -488,6 +589,7 @@ impl RpcServer {
 
         // POST /delegate - Delegate stake to a validator
         let delegate_route = warp::path("delegate")
+            .and(admin.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -502,6 +604,7 @@ impl RpcServer {
 
         // POST /validators/register - Register a new validator (dynamic set)
         let register_validator = warp::path!("validators" / "register")
+            .and(admin.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -600,6 +703,7 @@ impl RpcServer {
 
         // POST /connect_peer - Connect to a peer by multiaddress
         let connect_peer = warp::path("connect_peer")
+            .and(admin.clone())
             .and(warp::post())
             .and(body_limit)
             .and(warp::body::json())
@@ -672,6 +776,7 @@ impl RpcServer {
 
         // POST /runtime/propose — propose a runtime upgrade (testnet admin)
         let runtime_propose = warp::path!("runtime" / "propose")
+            .and(admin.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -685,6 +790,7 @@ impl RpcServer {
 
         // POST /runtime/approve — approve a pending runtime upgrade
         let runtime_approve = warp::path!("runtime" / "approve")
+            .and(admin.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -698,6 +804,7 @@ impl RpcServer {
 
         // POST /faucet/request - Request test tokens (directly credits the account)
         let faucet_request = warp::path!("faucet" / "request")
+            .and(dev.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -715,6 +822,7 @@ impl RpcServer {
 
         // POST /deploy_wasm — deploy a WASM contract module
         let deploy_wasm = warp::path("deploy_wasm")
+            .and(dev.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -785,6 +893,7 @@ impl RpcServer {
 
         // POST /bridge/unlock/ack — relayer confirms ETH unlock submitted
         let bridge_unlock_ack = warp::path!("bridge" / "unlock" / "ack")
+            .and(admin.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -800,6 +909,7 @@ impl RpcServer {
 
         // POST /bridge/mint — relayer mint on Nebula after Ethereum lock
         let bridge_mint = warp::path!("bridge" / "mint")
+            .and(admin.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -817,6 +927,7 @@ impl RpcServer {
 
         // POST /bridge/unlock — relayer unlock on Ethereum after Nebula lock
         let bridge_unlock = warp::path!("bridge" / "unlock")
+            .and(admin.clone())
             .and(with_rate_limit.clone())
             .and(warp::post())
             .and(body_limit)
@@ -891,11 +1002,7 @@ impl RpcServer {
             .or(peers)
             .recover(handle_rejection);
 
-        let cors = if enable_cors {
-            with_cors()
-        } else {
-            warp::cors().allow_any_origin().build()
-        };
+        let cors = build_cors(&self.security.cors_origins, self.security.dev_mode);
         let routes_with_cors = routes.with(cors);
 
         tracing::info!("🚀 RPC server listening on 0.0.0.0:{}", port);
@@ -950,16 +1057,15 @@ async fn handle_submit_tx(
     tx: Transaction,
     tx_pool: Arc<TxPool>,
     network_cmd_sender: mpsc::Sender<NetworkCommand>,
+    chain_id: u64,
 ) -> Result<impl warp::Reply, Infallible> {
-    // Validate chain ID if present
-    if let Some(tx_chain_id) = tx.chain_id {
-        // In production, check against configured chain ID
-        if tx_chain_id != 1 {
-            return Ok(warp::reply::json(&SubmitTxResponse {
-                status: format!("error: invalid chain_id (expected 1, got {})", tx_chain_id),
-                hash: String::new(),
-            }));
-        }
+    // Reject unauthenticated txs up front with a clear message (the mempool
+    // checks again, and so does block execution).
+    if let Err(e) = common::validation::verify_tx_signature(&tx, chain_id) {
+        return Ok(warp::reply::json(&SubmitTxResponse {
+            status: format!("error: {}", e),
+            hash: String::new(),
+        }));
     }
 
     match tx_pool.add_transaction(tx.clone()) {
@@ -1689,6 +1795,10 @@ async fn credit_account_balance(
     Ok(balance.to_string())
 }
 
+/// State key prefix recording ETH lock txs that were already minted, so the
+/// replay check survives restarts.
+const BRIDGE_MINTED_PREFIX: &[u8] = b"bridge:minted:";
+
 async fn handle_bridge_mint(
     req: BridgeMintRequest,
     chain_store: Arc<ChainStore>,
@@ -1710,34 +1820,52 @@ async fn handle_bridge_mint(
         .and_then(|s| s.parse().ok())
         .unwrap_or(100_000_000_000_000_000_000u128);
 
-    if let Some(ref eth_hash) = req.eth_tx_hash {
-        let eth_hash_lower = eth_hash.to_lowercase();
-        {
-            let minted = bridge_minted.lock().await;
-            if minted.contains(&eth_hash_lower) {
-                return Ok(warp::reply::json(&serde_json::json!({
-                    "error": "ETH lock already processed",
-                })));
-            }
-        }
-
-        let eth_rpc = req
-            .eth_rpc_url
-            .or_else(|| std::env::var("ETH_RPC_URL").ok())
-            .unwrap_or_default();
-        if eth_rpc.is_empty() {
+    // Every mint must be backed by an Ethereum lock tx; there is no free mint.
+    let Some(eth_hash) = req.eth_tx_hash.as_deref() else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "eth_tx_hash is required",
+        })));
+    };
+    let eth_hash_lower = eth_hash.trim().to_lowercase();
+    let replay_key = [BRIDGE_MINTED_PREFIX, eth_hash_lower.as_bytes()].concat();
+    {
+        // Hold the lock across verify + record so two concurrent requests for
+        // the same ETH tx cannot both mint.
+        let mut minted = bridge_minted.lock().await;
+        let persisted = matches!(chain_store.get_state(&replay_key), Ok(Some(_)));
+        if persisted || minted.contains(&eth_hash_lower) {
             return Ok(warp::reply::json(&serde_json::json!({
-                "error": "ETH_RPC_URL not configured — set env or pass eth_rpc_url",
+                "error": "ETH lock already processed",
             })));
         }
 
+        // Only the node's own ETH endpoint is trusted: a caller-supplied URL
+        // could point at a fake node that reports any tx as a successful lock.
+        if req.eth_rpc_url.is_some() {
+            tracing::debug!("Ignoring caller-supplied eth_rpc_url for bridge mint");
+        }
+        let eth_rpc = std::env::var("ETH_RPC_URL").unwrap_or_default();
+        if eth_rpc.is_empty() {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": "ETH_RPC_URL not configured on the node",
+            })));
+        }
+        let bridge_address = std::env::var("ETH_BRIDGE_ADDRESS")
+            .ok()
+            .or(req.eth_bridge_address.clone());
+
         if let Err(e) =
-            verify_eth_lock_tx(&eth_rpc, &eth_hash_lower, req.eth_bridge_address.as_deref()).await
+            verify_eth_lock_tx(&eth_rpc, &eth_hash_lower, bridge_address.as_deref()).await
         {
             return Ok(warp::reply::json(&serde_json::json!({ "error": e })));
         }
 
-        bridge_minted.lock().await.insert(eth_hash_lower);
+        if let Err(e) = chain_store.put_state(&replay_key, b"1") {
+            return Ok(warp::reply::json(&serde_json::json!({
+                "error": format!("Failed to record ETH lock: {}", e),
+            })));
+        }
+        minted.insert(eth_hash_lower);
     }
 
     match credit_account_balance(&chain_store, &recipient, amount).await {
@@ -1788,11 +1916,7 @@ fn verify_nebula_lock_tx(
         return Err("Lock transaction has zero value".into());
     }
 
-    let body = if tx.payload.len() > 32 {
-        &tx.payload[32..]
-    } else {
-        &tx.payload
-    };
+    let body = tx.payload.as_slice();
     let payload_str = std::str::from_utf8(body).map_err(|_| "Invalid bridge payload encoding")?;
     if !payload_str.starts_with("BRIDGE:ethereum:") {
         return Err(format!(
@@ -1863,11 +1987,7 @@ async fn handle_bridge_unlock(
         Err(e) => return Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
     };
 
-    let body = if tx.payload.len() > 32 {
-        &tx.payload[32..]
-    } else {
-        &tx.payload
-    };
+    let body = tx.payload.as_slice();
     let eth_recipient = req.eth_recipient.clone().unwrap_or_else(|| {
         std::str::from_utf8(body)
             .ok()
@@ -2742,6 +2862,11 @@ async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infa
             warp::http::StatusCode::BAD_REQUEST,
             "Invalid query parameters".to_string(),
         )
+    } else if err.find::<Unauthorized>().is_some() {
+        (
+            warp::http::StatusCode::UNAUTHORIZED,
+            "Admin token required (Authorization: Bearer <token>)".to_string(),
+        )
     } else if err.find::<RateLimited>().is_some() {
         (
             warp::http::StatusCode::TOO_MANY_REQUESTS,
@@ -2760,4 +2885,72 @@ async fn handle_rejection(err: warp::Rejection) -> Result<impl warp::Reply, Infa
         warp::reply::json(&ErrorResponse { error: message }),
         status,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn status(
+        filter: impl Filter<Extract = (), Error = warp::Rejection> + Clone + Send + Sync + 'static,
+        auth: Option<&str>,
+    ) -> u16 {
+        let mut req = warp::test::request().path("/x");
+        if let Some(a) = auth {
+            req = req.header("authorization", a);
+        }
+        let route = warp::path("x")
+            .and(filter)
+            .map(warp::reply)
+            .recover(handle_rejection);
+        req.reply(&route).await.status().as_u16()
+    }
+
+    #[tokio::test]
+    async fn state_writing_routes_are_absent_outside_dev_mode() {
+        let prod = RpcSecurity::default();
+        assert_eq!(status(admin_only(&prod), None).await, 404);
+        assert_eq!(status(dev_only(&prod), None).await, 404);
+        // A token does not unlock admin routes on a non-dev node.
+        let prod_with_token = RpcSecurity {
+            admin_token: Some("s3cret".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            status(admin_only(&prod_with_token), Some("Bearer s3cret")).await,
+            404
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_routes_require_the_token_when_set() {
+        let dev = RpcSecurity {
+            dev_mode: true,
+            admin_token: Some("s3cret".into()),
+            ..Default::default()
+        };
+        assert_eq!(status(admin_only(&dev), None).await, 401);
+        assert_eq!(status(admin_only(&dev), Some("Bearer wrong")).await, 401);
+        assert_eq!(status(admin_only(&dev), Some("s3cret")).await, 401);
+        assert_eq!(status(admin_only(&dev), Some("Bearer s3cret")).await, 200);
+        // Dev-only routes (faucet, WASM deploy) stay open in dev mode.
+        assert_eq!(status(dev_only(&dev), None).await, 200);
+    }
+
+    #[tokio::test]
+    async fn dev_mode_without_token_is_open() {
+        let dev = RpcSecurity {
+            dev_mode: true,
+            ..Default::default()
+        };
+        assert_eq!(status(admin_only(&dev), None).await, 200);
+    }
+
+    #[test]
+    fn token_comparison() {
+        assert!(bearer_matches(Some("Bearer abc"), "abc"));
+        assert!(!bearer_matches(Some("Bearer abd"), "abc"));
+        assert!(!bearer_matches(Some("Bearer ab"), "abc"));
+        assert!(!bearer_matches(None, "abc"));
+    }
 }

@@ -104,10 +104,9 @@ impl TransactionValidator {
 
 /// Authenticate a transaction and return the signer's Ed25519 public key.
 ///
-/// Wire convention (SDK and frontend): the first 32 payload bytes are the
-/// sender's public key, the signature is over `tx.hash()`, and `sender` is the
-/// address derived from that key. `chain_id` is required, because a tx without
-/// one could be replayed on another chain.
+/// The signature must be over `tx.hash()` by `tx.public_key`, and `sender` must
+/// be the address derived from that key. `chain_id` is required, because a tx
+/// without one could be replayed on another chain.
 ///
 /// Every executor branch (native, EVM, WASM, governance) must call this before
 /// trusting `tx.sender`.
@@ -123,12 +122,7 @@ pub fn verify_tx_signature(tx: &Transaction, expected_chain_id: u64) -> Result<[
         }
     }
 
-    let public_key: [u8; 32] = tx
-        .payload
-        .get(..32)
-        .and_then(|b| b.try_into().ok())
-        .ok_or_else(|| anyhow!("Payload must start with the sender's 32-byte public key"))?;
-
+    let public_key = tx.public_key;
     if !tx.verify(&public_key) {
         return Err(anyhow!("Invalid signature"));
     }
@@ -150,7 +144,7 @@ mod signature_tests {
         let sender = crate::crypto::derive_address_from_public_key(&public_key);
         let mut tx = Transaction::simple_transfer(sender, [2u8; 20], 5, 0, 1);
         tx.chain_id = chain_id;
-        tx.payload = public_key.to_vec();
+        tx.public_key = public_key;
         tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
         tx
     }
@@ -181,9 +175,25 @@ mod signature_tests {
         tx.signature[0] ^= 0xFF;
         assert!(verify_tx_signature(&tx, 1).is_err());
 
-        let mut short = signed_tx(&key, Some(1));
-        short.payload.truncate(10);
-        assert!(verify_tx_signature(&short, 1).is_err());
+        // Swapping in another key breaks the sender binding even if it signs.
+        let other = SigningKey::from_bytes(&[4u8; 32]);
+        let mut swapped = signed_tx(&key, Some(1));
+        swapped.public_key = other.verifying_key().to_bytes();
+        swapped.signature = other.sign(&swapped.hash()).to_bytes().to_vec();
+        assert!(verify_tx_signature(&swapped, 1).is_err());
+    }
+
+    #[test]
+    fn signature_does_not_survive_chain_id_stripping() {
+        // Old encoding: dropping chain_id and appending its 8 bytes to the
+        // payload produced the same hash, so the signature stayed valid.
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let tx = signed_tx(&key, Some(1));
+        let mut stripped = tx.clone();
+        stripped.chain_id = None;
+        stripped.payload.extend_from_slice(&1u64.to_le_bytes());
+        assert_ne!(tx.hash(), stripped.hash());
+        assert!(!stripped.verify(&tx.public_key));
     }
 
     #[test]
@@ -210,6 +220,7 @@ mod tests {
         Transaction {
             sender: [1; 20],
             nonce,
+            public_key: [0; 32],
             payload: vec![],
             signature: vec![0; 64],
             gas_limit,
