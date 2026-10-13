@@ -813,6 +813,7 @@ mod tests {
         let block = Block {
             header: Header::new([0u8; 32], 1),
             extrinsics: vec![valid.clone(), forged],
+            commit: None,
         };
         let receipts = executor.execute_and_commit(&block).unwrap();
 
@@ -839,6 +840,7 @@ mod tests {
         let block = Block {
             header: Header::new([0u8; 32], 1),
             extrinsics: vec![first.clone(), first.clone(), second],
+            commit: None,
         };
         let receipts = executor.execute_and_commit(&block).unwrap();
         assert!(receipts[0].success);
@@ -848,6 +850,7 @@ mod tests {
         let later = Block {
             header: Header::new([0u8; 32], 2),
             extrinsics: vec![first],
+            commit: None,
         };
         let receipts = executor.execute_and_commit(&later).unwrap();
         assert!(!receipts[0].success, "replay in a later block");

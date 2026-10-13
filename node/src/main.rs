@@ -44,7 +44,7 @@ use common::crypto::SigningKey;
 use common::traits::Consensus;
 use common::types::Block;
 
-use consensus::bft::{BftEngine, BftEvent};
+use consensus::bft::{BftEngine, BftEvent, BftSafetyState};
 use consensus::slashing::{SlashingConfig, SlashingTracker};
 use consensus::{EnhancedConsensus, FinalityGadget, ValidatorInfo};
 
@@ -173,16 +173,27 @@ enum Commands {
     },
 }
 
-/// BFT state persistence for crash recovery
+/// BFT state persisted for crash recovery: the lock and the signing
+/// watermark. Written (atomically) before every signed vote or proposal is
+/// broadcast, so a restarted validator cannot vote against its lock or sign
+/// twice for the same height/round/step.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct BftPersistedState {
-    height: u64,
-    round: u64,
-    locked_block_hash: Option<[u8; 32]>,
-    locked_round: u64,
-    valid_block_hash: Option<[u8; 32]>,
-    valid_round: u64,
+    safety: BftSafetyState,
     last_saved: u64,
+}
+
+/// Load persisted BFT safety state. A missing or unreadable file (e.g. the
+/// pre-Phase-2 format) yields `None`.
+fn load_bft_state(path: &PathBuf) -> Option<BftSafetyState> {
+    let content = fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<BftPersistedState>(&content) {
+        Ok(state) => Some(state.safety),
+        Err(e) => {
+            warn!("Ignoring unreadable BFT state at {}: {}", path.display(), e);
+            None
+        }
+    }
 }
 
 /// Node statistics
@@ -431,12 +442,21 @@ impl Node {
         } else {
             (chain_tip + 1, chain_tip + 2)
         };
-        let bft_engine = Arc::new(Mutex::new(BftEngine::new(
+        let mut engine = BftEngine::new(
             public_key.clone(),
             validators.clone(),
             bft_start_height,
             signing_key.clone(),
-        )));
+        );
+        if let Some(saved) = load_bft_state(&bft_state_path) {
+            info!(
+                "🔐 Restored BFT safety state (last signed {:?}, locked: {})",
+                saved.last_signed,
+                saved.locked.is_some()
+            );
+            engine.restore_safety_state(saved);
+        }
+        let bft_engine = Arc::new(Mutex::new(engine));
 
         // ================================================================
         // 8. Initialize Finality Gadget
@@ -651,9 +671,6 @@ impl Node {
                     if let Err(e) = self.update_live_metrics().await {
                         warn!("Error updating metrics: {}", e);
                     }
-                    if let Err(e) = self.sync_validator_set().await {
-                        warn!("Validator set sync failed: {}", e);
-                    }
                 }
 
                 _ = sync_interval.tick() => {
@@ -697,6 +714,9 @@ impl Node {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match event {
             BftEvent::BroadcastVote(vote) => {
+                // Persist the lock + signing watermark before the vote leaves
+                // the node; if this fails, do not broadcast.
+                self.persist_bft_state().await?;
                 debug!("Broadcasting vote for round {}", vote.round);
                 self.network_cmd_sender
                     .send(NetworkCommand::BroadcastConsensusMessage(
@@ -706,6 +726,7 @@ impl Node {
             }
 
             BftEvent::BroadcastProposal(proposal) => {
+                self.persist_bft_state().await?;
                 info!("Broadcasting proposal for round {}", proposal.round);
                 self.network_cmd_sender
                     .send(NetworkCommand::BroadcastConsensusMessage(
@@ -728,8 +749,12 @@ impl Node {
                 // Calculate total fees
                 let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
 
-                // Get voters (simplified - in production, get from consensus)
-                let voters: Vec<Vec<u8>> = vec![];
+                // Validators whose precommits finalized the block.
+                let voters: Vec<Vec<u8>> = block
+                    .commit
+                    .as_ref()
+                    .map(|c| c.precommits.iter().map(|v| v.voter.clone()).collect())
+                    .unwrap_or_default();
 
                 // Track per-validator block production stats in the state trie
                 if let Err(e) = node::governance_store::record_block_stats(
@@ -845,11 +870,6 @@ impl Node {
             BftEvent::NewRound(height, round) => {
                 info!("🔄 New round: height={}, round={}", height, round);
 
-                // Persist BFT state periodically
-                if round % 10 == 0 {
-                    self.persist_bft_state().await?;
-                }
-
                 // Check if we're proposer
                 let is_proposer = {
                     let engine = self.bft_engine.lock().await;
@@ -894,6 +914,19 @@ impl Node {
                     _target_height
                 );
                 self.sync_requested = true;
+            }
+
+            BftEvent::Equivocation(evidence) => {
+                if evidence.is_valid() {
+                    let first = evidence.first.block_hash.unwrap_or([0u8; 32]);
+                    let second = evidence.second.block_hash.unwrap_or([0u8; 32]);
+                    self.slashing_tracker.lock().await.record_double_sign(
+                        evidence.first.voter.clone(),
+                        evidence.first.height,
+                        first,
+                        second,
+                    );
+                }
             }
 
             BftEvent::NeedBlock(_hash, _height) => {
@@ -1032,6 +1065,16 @@ impl Node {
     async fn apply_block(&mut self, block: &Block) -> Result<(), Box<dyn std::error::Error>> {
         // Verify block signature by a known validator
         let validators = self.get_validator_list().await?;
+        // Finality: a synced block must carry +2/3 precommits from the
+        // validator set. A proposer signature alone proves nothing — one
+        // validator key could otherwise feed us an arbitrary chain.
+        // (BFT height h finalizes block slot h - 1.)
+        let voters = match &block.commit {
+            Some(cert) => cert
+                .verify(&block.hash(), block.header.slot + 1, &validators)
+                .map_err(|e| format!("Invalid commit certificate: {}", e))?,
+            None => return Err("Block has no commit certificate".into()),
+        };
         let consensus = EnhancedConsensus::new(validators);
         if let Err(e) = consensus.verify_block(block) {
             warn!("Invalid block: {}", e);
@@ -1093,7 +1136,6 @@ impl Node {
         // Process rewards
         let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
         let proposer = proposer.unwrap_or_default();
-        let voters = vec![];
 
         let rewards = {
             let mut rm = self.reward_manager.lock().await;
@@ -1297,8 +1339,10 @@ impl Node {
             let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
             let slot = block.header.slot;
 
-            // Replacement of our current tip (handles genesis → produced block 0).
-            if slot == tip {
+            // Replacement of our current tip — only for slot 0 (the local
+            // genesis placeholder vs. the network's block 0). A finalized block
+            // is never replaced.
+            if slot == tip && tip == 0 {
                 let tip_hash = self.current_tip_hash()?;
                 if block.hash() != tip_hash {
                     if let Err(e) = self.apply_block(&block).await {
@@ -1311,6 +1355,9 @@ impl Node {
                     applied += 1;
                 }
                 continue;
+            }
+            if slot <= tip {
+                continue; // already have it
             }
 
             if slot != tip + 1 {
@@ -1421,8 +1468,16 @@ impl Node {
             return Ok(());
         }
         let mut engine = self.bft_engine.lock().await;
-        if engine.validator_count() != validators.len() {
-            let count = validators.len();
+        let mut incoming: Vec<(Vec<u8>, u128)> = validators
+            .iter()
+            .filter(|v| !v.slashed)
+            .map(|v| (v.public_key.clone(), v.stake))
+            .collect();
+        incoming.sort();
+        // Compare keys and stakes, not just the count: a swapped validator or a
+        // stake change alters what counts as a quorum.
+        if engine.validator_set() != incoming {
+            let count = incoming.len();
             engine.update_validator_set(validators.clone());
             drop(engine);
             self.finality_gadget
@@ -1495,22 +1550,25 @@ impl Node {
 
     /// Persist BFT state to disk
     async fn persist_bft_state(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let engine = self.bft_engine.lock().await;
+        let safety = self.bft_engine.lock().await.safety_state();
         let state = BftPersistedState {
-            height: engine.height,
-            round: engine.round,
-            locked_block_hash: None,
-            locked_round: 0,
-            valid_block_hash: None,
-            valid_round: 0,
+            safety,
             last_saved: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
         };
 
-        let content = serde_json::to_string_pretty(&state)?;
-        fs::write(&self.bft_state_path, content)?;
+        // Write-then-rename so a crash mid-write never leaves a torn file.
+        let content = serde_json::to_vec(&state)?;
+        let tmp = self.bft_state_path.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(&content)?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp, &self.bft_state_path)?;
         Ok(())
     }
 

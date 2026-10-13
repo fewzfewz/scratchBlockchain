@@ -185,11 +185,19 @@ impl Transaction {
 pub struct Block {
     pub header: Header,
     pub extrinsics: Vec<Transaction>,
+    /// +2/3 precommits that finalized this block. Not part of the block hash;
+    /// attached when the block is finalized so sync peers can verify finality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<crate::consensus_types::CommitCertificate>,
 }
 
 impl Block {
     pub fn new(header: Header, extrinsics: Vec<Transaction>) -> Self {
-        Self { header, extrinsics }
+        Self {
+            header,
+            extrinsics,
+            commit: None,
+        }
     }
 
     pub fn hash(&self) -> Hash {
@@ -200,6 +208,7 @@ impl Block {
         Self {
             header: Header::new([0; 32], 0),
             extrinsics: vec![],
+            commit: None,
         }
     }
 }

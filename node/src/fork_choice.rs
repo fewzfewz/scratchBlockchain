@@ -36,7 +36,6 @@ impl ForkChoice {
         block: &Block,
         block_store: &BlockStore,
     ) -> Result<ForkDecision, Box<dyn Error>> {
-        let block_hash = block.hash();
         let block_height = block.header.slot;
 
         // Get current finalized height from storage
@@ -52,21 +51,16 @@ impl ForkChoice {
             return Ok(ForkDecision::Accept);
         }
 
-        // Check if this block is on a competing fork
+        // A higher block is never a reason to reorg: finalized blocks are
+        // final, and a node that is behind catches up through sync, which
+        // checks each block's commit certificate. (This used to accept any
+        // higher chain, so one validator key could rewrite history.)
         if block_height > our_height {
-            // Potential fork with higher height
             warn!(
-                "Detected fork: incoming height {} > our height {}",
+                "Block {} is ahead of our tip {} — ignoring; sync will fetch certified blocks",
                 block_height, our_height
             );
-
-            // Check if the fork has higher finalized height
-            // For now, we'll accept any higher chain
-            // In production, verify the finality proofs
-            return Ok(ForkDecision::Reorg {
-                new_tip: block_hash,
-                new_height: block_height,
-            });
+            return Ok(ForkDecision::Ignore);
         }
 
         // Block is old or duplicate
@@ -158,8 +152,10 @@ mod tests {
         assert_eq!(decision, ForkDecision::Accept);
     }
 
+    /// Regression: a higher block used to trigger a reorg with no finality
+    /// check at all.
     #[test]
-    fn test_fork_choice_reorg() {
+    fn test_higher_block_does_not_reorg() {
         let mut fork_choice = ForkChoice::new();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test_reorg_db");
@@ -175,12 +171,7 @@ mod tests {
         let decision = fork_choice
             .handle_incoming_block(&block10, &block_store)
             .unwrap();
-        match decision {
-            ForkDecision::Reorg { new_height, .. } => {
-                assert_eq!(new_height, 10);
-            }
-            _ => panic!("Expected Reorg decision"),
-        }
+        assert!(matches!(decision, ForkDecision::Ignore));
     }
 
     #[test]

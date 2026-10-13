@@ -73,13 +73,14 @@ impl LightClientState {
     pub fn apply_update(&mut self, update: LightClientUpdate) -> Result<()> {
         // Verify sync committee participation (need 2/3+)
         let participation_count = update.sync_committee_bits.iter().filter(|&&b| b).count();
-        let threshold = (self.current_sync_committee.size() * 2) / 3;
+        let committee_size = self.current_sync_committee.size();
 
-        if participation_count < threshold {
+        // Strictly more than 2/3 of the committee.
+        if participation_count * 3 <= committee_size * 2 {
             return Err(anyhow::anyhow!(
-                "Insufficient sync committee participation: {} < {}",
+                "Insufficient sync committee participation: {} of {}",
                 participation_count,
-                threshold
+                committee_size
             ));
         }
 

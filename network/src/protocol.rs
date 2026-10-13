@@ -161,6 +161,7 @@ mod tests {
                 base_fee: 0,
             },
             extrinsics: vec![],
+            commit: None,
         }
     }
 

@@ -360,6 +360,7 @@ mod tests {
         let block = Block {
             header: Header::new([0; 32], 1),
             extrinsics: vec![tx],
+            commit: None,
         };
 
         executor.execute_block(&block, &mut state).unwrap();
@@ -394,6 +395,7 @@ mod tests {
         let block = Block {
             header: Header::new([0; 32], 1),
             extrinsics: vec![tx],
+            commit: None,
         };
 
         assert!(executor.execute_block(&block, &mut state).is_err());
@@ -426,6 +428,7 @@ mod tests {
         let block = Block {
             header: Header::new([0; 32], 1),
             extrinsics: vec![tx],
+            commit: None,
         };
 
         assert!(executor.execute_block(&block, &mut state).is_err());
