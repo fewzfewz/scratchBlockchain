@@ -66,7 +66,7 @@ impl TokenRegistry {
 
     /// Check if token is supported
     pub fn is_supported(&self, symbol: &str) -> bool {
-        self.tokens.get(symbol).map_or(false, |t| t.enabled)
+        self.tokens.get(symbol).is_some_and(|t| t.enabled)
     }
 
     /// Get all supported tokens

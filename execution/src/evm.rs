@@ -153,7 +153,7 @@ impl Database for EvmDb {
     }
 
     fn code_by_hash(&mut self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        Ok(self.store.get_code(&code_hash).unwrap_or(Bytecode::new()))
+        Ok(self.store.get_code(&code_hash).unwrap_or_default())
     }
 
     fn storage(&mut self, address: Address, index: U256) -> Result<U256, Self::Error> {
@@ -191,7 +191,7 @@ impl DatabaseRef for EvmDb {
     }
 
     fn code_by_hash(&self, code_hash: B256) -> Result<Bytecode, Self::Error> {
-        Ok(self.store.get_code(&code_hash).unwrap_or(Bytecode::new()))
+        Ok(self.store.get_code(&code_hash).unwrap_or_default())
     }
 
     fn storage(&self, address: Address, index: U256) -> Result<U256, Self::Error> {
@@ -252,9 +252,14 @@ impl DatabaseCommit for EvmDb {
 }
 
 // =============================================================================
-// Signed Transaction with validation
+// Authenticated transaction
 // =============================================================================
 
+/// An EVM call whose `caller` has already been authenticated.
+///
+/// The EVM layer does not check signatures. Callers (the node's block executor)
+/// must verify the native Ed25519 signature and derive `caller` from it before
+/// building one of these; see `common::validation::verify_tx_signature`.
 #[derive(Debug, Clone)]
 pub struct SignedTransaction {
     pub caller: Address,
@@ -265,10 +270,10 @@ pub struct SignedTransaction {
     pub gas_limit: u64,
     pub gas_price: U256,
     pub chain_id: u64,
-    pub signature: Option<[u8; 65]>, // r, s, v
 }
 
 impl SignedTransaction {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         caller: Address,
         to: Option<Address>,
@@ -288,26 +293,6 @@ impl SignedTransaction {
             gas_limit,
             gas_price,
             chain_id,
-            signature: None,
-        }
-    }
-
-    // FIX: Add signature verification
-    pub fn verify_signature(&self) -> Result<Address> {
-        match &self.signature {
-            Some(sig) => {
-                // Recover signer from signature
-                // This is simplified - use proper EIP-155 recovery
-                let mut hash = Vec::new();
-                hash.extend_from_slice(&self.nonce.to_le_bytes());
-                hash.extend_from_slice(&self.gas_limit.to_le_bytes());
-                hash.extend_from_slice(&self.gas_price.to_le_bytes::<32>());
-                hash.extend_from_slice(&self.chain_id.to_le_bytes());
-                // ... full implementation would include all fields
-
-                Ok(self.caller) // Placeholder
-            }
-            None => anyhow::bail!("Transaction not signed"),
         }
     }
 }
@@ -333,6 +318,10 @@ impl EvmExecutor {
             db: CacheDB::new(evm_db),
             chain_id,
         }
+    }
+
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
     }
 
     pub fn set_block_hash_provider<F>(&mut self, provider: F)
@@ -365,10 +354,7 @@ impl EvmExecutor {
         native_nonce: u64,
     ) -> Result<()> {
         let existing = self.db.basic(caller)?;
-        let evm_balance = existing
-            .as_ref()
-            .map(|a| a.balance)
-            .unwrap_or(U256::ZERO);
+        let evm_balance = existing.as_ref().map(|a| a.balance).unwrap_or(U256::ZERO);
         let native = U256::from(native_balance);
         let balance = if evm_balance > native {
             evm_balance
@@ -400,13 +386,7 @@ impl EvmExecutor {
             );
         }
 
-        // 2. Check signature
-        let recovered = tx.verify_signature()?;
-        if recovered != tx.caller {
-            anyhow::bail!("Signature verification failed");
-        }
-
-        // 3. Check nonce
+        // 2. Check nonce (the caller is authenticated upstream; see SignedTransaction)
         let account = self.db.basic(tx.caller)?;
         if let Some(acc) = account {
             if tx.nonce != acc.nonce {
@@ -419,7 +399,7 @@ impl EvmExecutor {
             );
         }
 
-        // 4. Check balance for gas + value
+        // 3. Check balance for gas + value
         let account = self.db.basic(tx.caller)?;
         let balance = account.map(|a| a.balance).unwrap_or(U256::ZERO);
         let total_cost = tx.value + (tx.gas_price * U256::from(tx.gas_limit));
@@ -598,8 +578,9 @@ pub struct TransactionReceipt {
 mod tests {
     use super::*;
 
-    const ALICE: &str = "0x0000000000000000000000000000000000000001";
-    const BOB: &str = "0x0000000000000000000000000000000000000002";
+    // Not 0x01..0x09: those are precompiles, and a call to one runs precompile code.
+    const ALICE: &str = "0x00000000000000000000000000000000000a11ce";
+    const BOB: &str = "0x0000000000000000000000000000000000000b0b";
 
     fn make_test_tx(caller: &str, to: Option<&str>, value: u64, nonce: u64) -> SignedTransaction {
         let caller_addr = Address::from_str(caller).unwrap();
@@ -610,7 +591,7 @@ mod tests {
             U256::from(value),
             vec![],
             nonce,
-            1_000_000,
+            21_000,
             U256::from(1),
             1,
         )
@@ -623,7 +604,11 @@ mod tests {
 
         let tx = make_test_tx(ALICE, Some(BOB), 100, 0);
         let receipt = executor.execute_transaction(tx).unwrap();
-        assert!(receipt.success, "Transfer should succeed");
+        assert!(
+            receipt.success,
+            "Transfer should succeed: {:?}",
+            receipt.revert_reason
+        );
     }
 
     #[test]
@@ -631,9 +616,10 @@ mod tests {
         let mut executor = EvmExecutor::new();
         executor.set_balance(ALICE, 1_000_000).unwrap();
 
-        let tx1 = make_test_tx(ALICE, Some(BOB), 100, 0);
+        // Bob starts empty; he can only pay for tx2 if tx1's transfer is visible.
+        let tx1 = make_test_tx(ALICE, Some(BOB), 100_000, 0);
         let r1 = executor.execute_transaction(tx1).unwrap();
-        assert!(r1.success);
+        assert!(r1.success, "{:?}", r1.revert_reason);
 
         let tx2 = make_test_tx(BOB, Some(ALICE), 50, 0);
         let r2 = executor.execute_transaction(tx2).unwrap();
@@ -643,9 +629,10 @@ mod tests {
     #[test]
     fn test_insufficient_balance_reverts() {
         let mut executor = EvmExecutor::new();
+        // Unaffordable txs (value + max gas) are rejected before execution.
         let tx = make_test_tx(ALICE, Some(BOB), 9999, 0);
-        let receipt = executor.execute_transaction(tx).unwrap();
-        assert!(!receipt.success, "Should fail with insufficient balance");
+        let err = executor.execute_transaction(tx).unwrap_err();
+        assert!(err.to_string().contains("Insufficient balance"));
     }
 
     #[test]

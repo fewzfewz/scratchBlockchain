@@ -223,6 +223,9 @@ impl WriteBatch {
 // ============================================================================
 
 /// Core database interface that all storage backends must implement
+/// Boxed iterator over `(key, value)` pairs from a column family.
+pub type KvIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
+
 pub trait KeyValueStore: Send + Sync {
     /// Get a value by key from the specified column family
     fn get(&self, cf: ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
@@ -242,10 +245,7 @@ pub trait KeyValueStore: Send + Sync {
 
     /// Iterate over all key-value pairs in a column family
     /// Returns an iterator that yields (key, value) pairs
-    fn iter(
-        &self,
-        cf: ColumnFamily,
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>>;
+    fn iter(&self, cf: ColumnFamily) -> Result<KvIter<'_>, Box<dyn Error>>;
 
     /// Iterate over a key range in a column family
     fn scan(
@@ -253,7 +253,7 @@ pub trait KeyValueStore: Send + Sync {
         cf: ColumnFamily,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>>;
+    ) -> Result<KvIter<'_>, Box<dyn Error>>;
 
     /// Flush all pending writes to disk
     /// Ensures data is persisted before returning
@@ -451,10 +451,7 @@ impl KeyValueStore for MemDb {
         Ok(())
     }
 
-    fn iter(
-        &self,
-        cf: ColumnFamily,
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+    fn iter(&self, cf: ColumnFamily) -> Result<KvIter<'_>, Box<dyn Error>> {
         let guard = self
             .store
             .read()
@@ -479,7 +476,7 @@ impl KeyValueStore for MemDb {
         cf: ColumnFamily,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+    ) -> Result<KvIter<'_>, Box<dyn Error>> {
         let guard = self
             .store
             .read()
@@ -733,10 +730,7 @@ pub mod rocks {
             Ok(())
         }
 
-        fn iter(
-            &self,
-            cf: ColumnFamily,
-        ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+        fn iter(&self, cf: ColumnFamily) -> Result<KvIter<'_>, Box<dyn Error>> {
             let handle = self.cf_handle(cf)?;
             let iter = self.db.iterator_cf(handle, IteratorMode::Start);
 
@@ -754,7 +748,7 @@ pub mod rocks {
             cf: ColumnFamily,
             start_key: &[u8],
             end_key: &[u8],
-        ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+        ) -> Result<KvIter<'_>, Box<dyn Error>> {
             let handle = self.cf_handle(cf)?;
             let end_key_owned = end_key.to_vec();
             let iter = self
@@ -890,9 +884,7 @@ impl ChainStore {
     }
 
     /// Iterate over all state keys
-    pub fn iter_state(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+    pub fn iter_state(&self) -> Result<KvIter<'_>, Box<dyn Error>> {
         self.inner.iter(ColumnFamily::State)
     }
 
@@ -987,7 +979,7 @@ impl ChainStore {
         batch.put(ColumnFamily::Blocks, hash.as_slice(), block_encoded);
         batch.put(
             ColumnFamily::BlockHeights,
-            &height.to_le_bytes(),
+            height.to_le_bytes(),
             hash.as_slice(),
         );
 
@@ -1005,7 +997,7 @@ impl ChainStore {
         }
 
         // 4. Update metadata (last!)
-        batch.put(ColumnFamily::Meta, b"latest_height", &height.to_le_bytes());
+        batch.put(ColumnFamily::Meta, b"latest_height", height.to_le_bytes());
 
         debug!(
             "Committing block {} with {} state changes, {} receipts",
@@ -1087,7 +1079,7 @@ mod tests {
         let mut batch = WriteBatch::new();
         batch.put(ColumnFamily::Blocks, b"block1", b"data1");
         batch.put(ColumnFamily::Receipts, b"tx1", b"receipt1");
-        batch.put(ColumnFamily::Meta, b"height", &42u64.to_le_bytes());
+        batch.put(ColumnFamily::Meta, b"height", 42u64.to_le_bytes());
 
         db.write_batch(batch).unwrap();
 

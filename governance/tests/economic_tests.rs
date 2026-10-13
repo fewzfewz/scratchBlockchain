@@ -1,7 +1,5 @@
 use common::types::Address;
-use governance::{
-    Delegation, InflationSchedule, SlashingReason, StakingContract, Treasury, ValidatorMetadata,
-};
+use governance::{InflationSchedule, SlashingReason, StakingContract, Treasury};
 
 #[test]
 fn test_inflation_schedule_halving() {
@@ -50,7 +48,7 @@ fn test_fee_burn_calculation() {
 
 #[test]
 fn test_staking_contract_register_validator() {
-    let mut contract = StakingContract::new(1000_000_000_000); // 1000 tokens min
+    let mut contract = StakingContract::new(1_000_000_000_000); // 1000 tokens min
 
     let validator_addr = Address::default();
     let pubkey = vec![1u8; 32];
@@ -59,19 +57,19 @@ fn test_staking_contract_register_validator() {
     let result = contract.register_validator(
         validator_addr,
         pubkey.clone(),
-        1000_000_000_000,
+        1_000_000_000_000,
         10, // 10% commission
     );
     assert!(result.is_ok());
 
     // Try to register same validator again
-    let result = contract.register_validator(validator_addr, pubkey, 1000_000_000_000, 10);
+    let result = contract.register_validator(validator_addr, pubkey, 1_000_000_000_000, 10);
     assert!(result.is_err());
 }
 
 #[test]
 fn test_staking_contract_min_stake() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = Address::default();
     let pubkey = vec![1u8; 32];
@@ -89,7 +87,7 @@ fn test_staking_contract_min_stake() {
 
 #[test]
 fn test_delegation() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = [1u8; 20];
     let delegator_addr = [2u8; 20];
@@ -97,7 +95,7 @@ fn test_delegation() {
 
     // Register validator
     contract
-        .register_validator(validator_addr, pubkey, 1000_000_000_000, 10)
+        .register_validator(validator_addr, pubkey, 1_000_000_000_000, 10)
         .unwrap();
 
     // Delegate to validator
@@ -113,7 +111,7 @@ fn test_delegation() {
 
 #[test]
 fn test_undelegation_and_unbonding() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = [1u8; 20];
     let delegator_addr = [2u8; 20];
@@ -121,7 +119,7 @@ fn test_undelegation_and_unbonding() {
 
     // Register and delegate
     contract
-        .register_validator(validator_addr, pubkey, 1000_000_000_000, 10)
+        .register_validator(validator_addr, pubkey, 1_000_000_000_000, 10)
         .unwrap();
     contract
         .delegate(delegator_addr, validator_addr, 500_000_000_000, 0)
@@ -149,14 +147,14 @@ fn test_undelegation_and_unbonding() {
 
 #[test]
 fn test_slashing_double_sign() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = [1u8; 20];
     let pubkey = vec![1u8; 32];
 
     // Register validator with 1000 tokens
     contract
-        .register_validator(validator_addr, pubkey, 1000_000_000_000, 10)
+        .register_validator(validator_addr, pubkey, 1_000_000_000_000, 10)
         .unwrap();
 
     // Slash for double sign (5%)
@@ -173,14 +171,14 @@ fn test_slashing_double_sign() {
 
 #[test]
 fn test_slashing_downtime() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = [1u8; 20];
     let pubkey = vec![1u8; 32];
 
     // Register validator
     contract
-        .register_validator(validator_addr, pubkey, 1000_000_000_000, 10)
+        .register_validator(validator_addr, pubkey, 1_000_000_000_000, 10)
         .unwrap();
 
     // Slash for downtime (0.1%)
@@ -194,14 +192,14 @@ fn test_slashing_downtime() {
 
 #[test]
 fn test_auto_slash_on_missed_blocks() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = [1u8; 20];
     let pubkey = vec![1u8; 32];
 
     // Register validator
     contract
-        .register_validator(validator_addr, pubkey, 1000_000_000_000, 10)
+        .register_validator(validator_addr, pubkey, 1_000_000_000_000, 10)
         .unwrap();
 
     let initial_treasury = contract.treasury_balance();
@@ -219,7 +217,7 @@ fn test_auto_slash_on_missed_blocks() {
 
 #[test]
 fn test_reward_distribution() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = [1u8; 20];
     let delegator_addr = [2u8; 20];
@@ -227,12 +225,12 @@ fn test_reward_distribution() {
 
     // Register validator with 1000 tokens, 10% commission
     contract
-        .register_validator(validator_addr, pubkey, 1000_000_000_000, 10)
+        .register_validator(validator_addr, pubkey, 1_000_000_000_000, 10)
         .unwrap();
 
     // Delegator stakes 1000 tokens
     contract
-        .delegate(delegator_addr, validator_addr, 1000_000_000_000, 0)
+        .delegate(delegator_addr, validator_addr, 1_000_000_000_000, 0)
         .unwrap();
 
     // Distribute 100 tokens block reward + 20 tokens fees
@@ -275,7 +273,7 @@ fn test_treasury_operations() {
 
 #[test]
 fn test_validator_sorting_by_total_stake() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let val1 = [1u8; 20];
     let val2 = [2u8; 20];
@@ -283,18 +281,18 @@ fn test_validator_sorting_by_total_stake() {
 
     // Register validators with different stakes
     contract
-        .register_validator(val1, vec![1u8; 32], 1000_000_000_000, 10)
+        .register_validator(val1, vec![1u8; 32], 1_000_000_000_000, 10)
         .unwrap();
     contract
-        .register_validator(val2, vec![2u8; 32], 2000_000_000_000, 10)
+        .register_validator(val2, vec![2u8; 32], 2_000_000_000_000, 10)
         .unwrap();
     contract
-        .register_validator(val3, vec![3u8; 32], 1500_000_000_000, 10)
+        .register_validator(val3, vec![3u8; 32], 1_500_000_000_000, 10)
         .unwrap(); // Above minimum
 
     // Add delegations to val3 to make it have highest total stake
     contract
-        .delegate([10u8; 20], val3, 3000_000_000_000, 0)
+        .delegate([10u8; 20], val3, 3_000_000_000_000, 0)
         .unwrap();
 
     let active = contract.get_active_validators();
@@ -310,7 +308,7 @@ fn test_validator_sorting_by_total_stake() {
 
 #[test]
 fn test_commission_rate_validation() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     let validator_addr = Address::default();
     let pubkey = vec![1u8; 32];
@@ -319,32 +317,32 @@ fn test_commission_rate_validation() {
     let result = contract.register_validator(
         validator_addr,
         pubkey.clone(),
-        1000_000_000_000,
+        1_000_000_000_000,
         150, // Invalid
     );
     assert!(result.is_err());
 
     // Valid commission rates
     for rate in [0, 10, 50, 100] {
-        let addr = [rate as u8; 20];
-        let result = contract.register_validator(addr, pubkey.clone(), 1000_000_000_000, rate);
+        let addr = [rate; 20];
+        let result = contract.register_validator(addr, pubkey.clone(), 1_000_000_000_000, rate);
         assert!(result.is_ok());
     }
 }
 
 #[test]
 fn test_max_validators_limit() {
-    let mut contract = StakingContract::new(1000_000_000_000);
+    let mut contract = StakingContract::new(1_000_000_000_000);
 
     // Register 100 validators (the maximum)
     for i in 0..100 {
         let addr = [i as u8; 20];
-        let result = contract.register_validator(addr, vec![i as u8; 32], 1000_000_000_000, 10);
+        let result = contract.register_validator(addr, vec![i as u8; 32], 1_000_000_000_000, 10);
         assert!(result.is_ok());
     }
 
     // Try to register 101st validator
-    let result = contract.register_validator([255u8; 20], vec![255u8; 32], 1000_000_000_000, 10);
+    let result = contract.register_validator([255u8; 20], vec![255u8; 32], 1_000_000_000_000, 10);
     assert!(result.is_err());
     assert!(result.unwrap_err().contains("Maximum validators"));
 }

@@ -88,6 +88,9 @@ impl Ord for PrioritizedTransaction {
     }
 }
 
+/// Per-sender `(pending tx count, next expected nonce)`.
+type SenderState = HashMap<[u8; 20], (usize, u64)>;
+
 /// Transaction pool for holding pending transactions
 pub struct Mempool {
     /// Priority queue of transactions (highest fee first)
@@ -99,7 +102,7 @@ pub struct Mempool {
 
     /// Track transaction count and next nonce per sender
     /// Key: sender address, Value: (count, next_expected_nonce)
-    sender_state: Arc<Mutex<HashMap<[u8; 20], (usize, u64)>>>,
+    sender_state: Arc<Mutex<SenderState>>,
 
     /// Configuration
     config: MempoolConfig,
@@ -415,114 +418,6 @@ pub fn init() {
     println!("Mempool initialized");
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn create_test_tx(nonce: u64, fee: u64, sender: [u8; 20]) -> Transaction {
-        let mut tx = Transaction::test_transaction(sender, nonce);
-        let mut sig = vec![nonce as u8; 32];
-        sig.extend_from_slice(&fee.to_le_bytes());
-        sig.extend_from_slice(&sender);
-        sig.resize(64, 0);
-        tx.signature = sig;
-        tx.max_priority_fee_per_gas = fee;
-        tx.chain_id = Some(1);
-        tx
-    }
-
-    #[test]
-    fn test_add_transaction() {
-        let mempool = Mempool::new(MempoolConfig::default());
-        let tx = create_test_tx(1, 1_000_000_000, [1; 20]);
-
-        assert!(mempool.add_transaction(tx).is_ok());
-        assert_eq!(mempool.size(), 1);
-    }
-
-    #[test]
-    fn test_priority_ordering() {
-        let mempool = Mempool::new(MempoolConfig::default());
-
-        let low_fee = create_test_tx(1, 1_000_000_000, [1; 20]);
-        let high_fee = create_test_tx(1, 3_000_000_000, [2; 20]);
-        let mid_fee = create_test_tx(1, 2_000_000_000, [3; 20]);
-
-        mempool.add_transaction(low_fee).unwrap();
-        mempool.add_transaction(high_fee).unwrap();
-        mempool.add_transaction(mid_fee).unwrap();
-
-        let batch = mempool.get_transactions(3);
-        assert_eq!(batch.len(), 3);
-        assert_eq!(batch[0].max_priority_fee_per_gas, 3_000_000_000);
-        assert_eq!(batch[1].max_priority_fee_per_gas, 2_000_000_000);
-        assert_eq!(batch[2].max_priority_fee_per_gas, 1_000_000_000);
-    }
-
-    #[test]
-    fn test_nonce_ordering() {
-        let mempool = Mempool::new(MempoolConfig::default());
-        let sender = [1; 20];
-
-        // Add in nonce order
-        let tx1 = create_test_tx(1, 1_000_000_000, sender);
-        let tx2 = create_test_tx(2, 2_000_000_000, sender);
-
-        mempool.add_transaction(tx1).unwrap();
-        mempool.add_transaction(tx2).unwrap();
-
-        // Should still return nonce 1 first
-        let batch = mempool.get_transactions(2);
-        assert_eq!(batch.len(), 1); // Only nonce 1 is ready
-        assert_eq!(batch[0].nonce, 1);
-    }
-
-    #[test]
-    fn test_remove_transactions() {
-        let mempool = Mempool::new(MempoolConfig::default());
-        let sender = [1; 20];
-
-        let tx1 = create_test_tx(1, 1_000_000_000, sender);
-        let tx2 = create_test_tx(2, 2_000_000_000, sender);
-
-        mempool.add_transaction(tx1.clone()).unwrap();
-        mempool.add_transaction(tx2.clone()).unwrap();
-
-        assert_eq!(mempool.size(), 2);
-
-        mempool.remove_transactions(&[tx1]);
-        assert_eq!(mempool.size(), 1);
-
-        // Sender state should be updated
-        assert_eq!(mempool.get_sender_count(&sender), Some(1));
-    }
-
-    #[test]
-    fn test_capacity_eviction() {
-        let config = MempoolConfig {
-            max_capacity: 2,
-            max_per_sender: 10,
-            min_fee_per_gas: 0,
-            chain_id: Some(1),
-        };
-        let mempool = Mempool::new(config);
-
-        let low_fee = create_test_tx(1, 1_000_000_000, [1; 20]);
-        let high_fee = create_test_tx(1, 3_000_000_000, [2; 20]);
-        let medium_fee = create_test_tx(1, 2_000_000_000, [3; 20]);
-
-        mempool.add_transaction(low_fee).unwrap();
-        mempool.add_transaction(high_fee).unwrap();
-        mempool.add_transaction(medium_fee).unwrap(); // Should evict low_fee
-
-        assert_eq!(mempool.size(), 2);
-
-        let batch = mempool.get_transactions(2);
-        assert_eq!(batch[0].max_priority_fee_per_gas, 3_000_000_000);
-        assert_eq!(batch[1].max_priority_fee_per_gas, 2_000_000_000);
-    }
-}
-
 // ============================================================================
 // MEV Integration - Private Mempool
 // ============================================================================
@@ -631,5 +526,113 @@ impl MevMempool {
     /// Snapshot of regular mempool transactions (for RPC listing).
     pub fn get_transactions(&mut self, max_count: usize) -> Vec<Transaction> {
         self.regular.get_transactions(max_count)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_tx(nonce: u64, fee: u64, sender: [u8; 20]) -> Transaction {
+        let mut tx = Transaction::test_transaction(sender, nonce);
+        let mut sig = vec![nonce as u8; 32];
+        sig.extend_from_slice(&fee.to_le_bytes());
+        sig.extend_from_slice(&sender);
+        sig.resize(64, 0);
+        tx.signature = sig;
+        tx.max_priority_fee_per_gas = fee;
+        tx.chain_id = Some(1);
+        tx
+    }
+
+    #[test]
+    fn test_add_transaction() {
+        let mempool = Mempool::new(MempoolConfig::default());
+        let tx = create_test_tx(1, 1_000_000_000, [1; 20]);
+
+        assert!(mempool.add_transaction(tx).is_ok());
+        assert_eq!(mempool.size(), 1);
+    }
+
+    #[test]
+    fn test_priority_ordering() {
+        let mempool = Mempool::new(MempoolConfig::default());
+
+        let low_fee = create_test_tx(1, 1_000_000_000, [1; 20]);
+        let high_fee = create_test_tx(1, 3_000_000_000, [2; 20]);
+        let mid_fee = create_test_tx(1, 2_000_000_000, [3; 20]);
+
+        mempool.add_transaction(low_fee).unwrap();
+        mempool.add_transaction(high_fee).unwrap();
+        mempool.add_transaction(mid_fee).unwrap();
+
+        let batch = mempool.get_transactions(3);
+        assert_eq!(batch.len(), 3);
+        assert_eq!(batch[0].max_priority_fee_per_gas, 3_000_000_000);
+        assert_eq!(batch[1].max_priority_fee_per_gas, 2_000_000_000);
+        assert_eq!(batch[2].max_priority_fee_per_gas, 1_000_000_000);
+    }
+
+    #[test]
+    fn test_nonce_ordering() {
+        let mempool = Mempool::new(MempoolConfig::default());
+        let sender = [1; 20];
+
+        // Add in nonce order
+        let tx1 = create_test_tx(1, 1_000_000_000, sender);
+        let tx2 = create_test_tx(2, 2_000_000_000, sender);
+
+        mempool.add_transaction(tx1).unwrap();
+        mempool.add_transaction(tx2).unwrap();
+
+        // Should still return nonce 1 first
+        let batch = mempool.get_transactions(2);
+        assert_eq!(batch.len(), 1); // Only nonce 1 is ready
+        assert_eq!(batch[0].nonce, 1);
+    }
+
+    #[test]
+    fn test_remove_transactions() {
+        let mempool = Mempool::new(MempoolConfig::default());
+        let sender = [1; 20];
+
+        let tx1 = create_test_tx(1, 1_000_000_000, sender);
+        let tx2 = create_test_tx(2, 2_000_000_000, sender);
+
+        mempool.add_transaction(tx1.clone()).unwrap();
+        mempool.add_transaction(tx2.clone()).unwrap();
+
+        assert_eq!(mempool.size(), 2);
+
+        mempool.remove_transactions(&[tx1]);
+        assert_eq!(mempool.size(), 1);
+
+        // Sender state should be updated
+        assert_eq!(mempool.get_sender_count(&sender), Some(1));
+    }
+
+    #[test]
+    fn test_capacity_eviction() {
+        let config = MempoolConfig {
+            max_capacity: 2,
+            max_per_sender: 10,
+            min_fee_per_gas: 0,
+            chain_id: Some(1),
+        };
+        let mempool = Mempool::new(config);
+
+        let low_fee = create_test_tx(1, 1_000_000_000, [1; 20]);
+        let high_fee = create_test_tx(1, 3_000_000_000, [2; 20]);
+        let medium_fee = create_test_tx(1, 2_000_000_000, [3; 20]);
+
+        mempool.add_transaction(low_fee).unwrap();
+        mempool.add_transaction(high_fee).unwrap();
+        mempool.add_transaction(medium_fee).unwrap(); // Should evict low_fee
+
+        assert_eq!(mempool.size(), 2);
+
+        let batch = mempool.get_transactions(2);
+        assert_eq!(batch[0].max_priority_fee_per_gas, 3_000_000_000);
+        assert_eq!(batch[1].max_priority_fee_per_gas, 2_000_000_000);
     }
 }

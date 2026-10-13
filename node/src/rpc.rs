@@ -21,7 +21,6 @@ use crate::tx_pool::TxPool;
 use common::types::{Block, Transaction};
 use consensus::slashing::SlashingTracker;
 use execution::account_abstraction::UserOperation;
-use execution::gas::calculate_next_base_fee;
 use governance::{ChainGovernance, Proposal, ProposalStatus};
 pub use network::NetworkCommand;
 use serde::{Deserialize, Serialize};
@@ -33,7 +32,7 @@ use storage::trie::PatriciaTrie;
 use storage::ChainStore;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use warp::{http::HeaderValue, Filter};
+use warp::Filter;
 
 /// Minimum time (seconds) between faucet drips to the same address.
 const FAUCET_COOLDOWN_SECS: u64 = 60;
@@ -167,9 +166,11 @@ struct GasPriceResponse {
 
 #[derive(Debug, Deserialize)]
 struct EstimateGasRequest {
+    #[allow(dead_code)] // accepted for API compatibility; not used yet
     from: String,
     to: String,
     data: String,
+    #[allow(dead_code)] // accepted for API compatibility; not used yet
     value: Option<String>,
     max_fee_per_gas: Option<String>,
 }
@@ -218,6 +219,7 @@ struct BridgeUnlockRequest {
     nebula_tx_hash: String,
     eth_recipient: Option<String>,
     eth_rpc_url: Option<String>,
+    #[allow(dead_code)] // accepted for API compatibility; not used yet
     eth_bridge_address: Option<String>,
 }
 
@@ -283,6 +285,7 @@ pub struct RpcServer {
 }
 
 impl RpcServer {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         tx_pool: Arc<TxPool>,
         chain_store: Arc<ChainStore>,
@@ -1572,8 +1575,12 @@ async fn handle_runtime_version(
     state_trie: Arc<Mutex<PatriciaTrie>>,
 ) -> Result<impl warp::Reply, Infallible> {
     match crate::runtime_upgrade_store::current_version(&state_trie).await {
-        Ok(version) => Ok(warp::reply::json(&serde_json::json!({ "version": version }))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e.to_string() }))),
+        Ok(version) => Ok(warp::reply::json(
+            &serde_json::json!({ "version": version }),
+        )),
+        Err(e) => Ok(warp::reply::json(
+            &serde_json::json!({ "error": e.to_string() }),
+        )),
     }
 }
 
@@ -1581,8 +1588,12 @@ async fn handle_runtime_upgrades(
     state_trie: Arc<Mutex<PatriciaTrie>>,
 ) -> Result<impl warp::Reply, Infallible> {
     match crate::runtime_upgrade_store::list_pending(&state_trie).await {
-        Ok(upgrades) => Ok(warp::reply::json(&serde_json::json!({ "upgrades": upgrades }))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e.to_string() }))),
+        Ok(upgrades) => Ok(warp::reply::json(
+            &serde_json::json!({ "upgrades": upgrades }),
+        )),
+        Err(e) => Ok(warp::reply::json(
+            &serde_json::json!({ "error": e.to_string() }),
+        )),
     }
 }
 
@@ -1595,7 +1606,9 @@ async fn handle_runtime_propose(
     let proposer = match parse_address_20(&req.proposer) {
         Some(a) => a,
         None => {
-            return Ok(warp::reply::json(&serde_json::json!({ "error": "Invalid proposer" })))
+            return Ok(warp::reply::json(
+                &serde_json::json!({ "error": "Invalid proposer" }),
+            ))
         }
     };
     let hash_bytes = hex::decode(req.code_hash.trim_start_matches("0x")).unwrap_or_default();
@@ -1794,7 +1807,11 @@ fn verify_nebula_lock_tx(
         .ok_or("Lock transaction receipt not found")?;
     let val: serde_json::Value =
         serde_json::from_slice(&receipt).map_err(|e| format!("Invalid receipt: {e}"))?;
-    if !val.get("success").and_then(|s| s.as_bool()).unwrap_or(false) {
+    if !val
+        .get("success")
+        .and_then(|s| s.as_bool())
+        .unwrap_or(false)
+    {
         return Err("Lock transaction failed on-chain".into());
     }
 
@@ -1806,7 +1823,11 @@ async fn handle_bridge_unlock(
     chain_store: Arc<ChainStore>,
     bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>>,
 ) -> Result<impl warp::Reply, Infallible> {
-    let hash_clean = req.nebula_tx_hash.trim().trim_start_matches("0x").to_lowercase();
+    let hash_clean = req
+        .nebula_tx_hash
+        .trim()
+        .trim_start_matches("0x")
+        .to_lowercase();
     let hash_bytes = match hex::decode(&hash_clean) {
         Ok(b) if b.len() == 32 => {
             let mut arr = [0u8; 32];
@@ -1839,9 +1860,7 @@ async fn handle_bridge_unlock(
     let vault = deterministic_address("nebula-bridge-vault-v1");
     let (tx, block_height) = match verify_nebula_lock_tx(&chain_store, &hash_bytes, &vault) {
         Ok(v) => v,
-        Err(e) => {
-            return Ok(warp::reply::json(&serde_json::json!({ "error": e })))
-        }
+        Err(e) => return Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
     };
 
     let body = if tx.payload.len() > 32 {
@@ -1888,7 +1907,7 @@ async fn handle_bridge_unlock(
         nebula_tx_hash: hash_clean.clone(),
         eth_recipient: eth_recipient.clone(),
         amount: tx.value.to_string(),
-        sender: format!("0x{}", hex::encode(&tx.sender)),
+        sender: format!("0x{}", hex::encode(tx.sender)),
         nonce: tx.nonce,
         message_id,
         source_chain,
@@ -2620,7 +2639,7 @@ async fn handle_slashing_events(
         .await
         .get_slashed_validators()
         .iter()
-        .map(|pk| hex::encode(pk))
+        .map(hex::encode)
         .collect();
     Ok(warp::reply::json(&serde_json::json!({
         "slashed_validators": slashed,

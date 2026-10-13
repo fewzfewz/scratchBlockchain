@@ -16,13 +16,13 @@
 use crate::tx_pool::TxPool;
 use common::crypto::SigningKey;
 use common::types::{Block, Header, Transaction};
-use consensus::{BftEngine, BftEvent, ValidatorInfo};
+use consensus::BftEngine;
 use execution::evm::{EvmExecutor, SignedTransaction, TransactionReceipt};
 use governance::ChainGovernance;
 use std::sync::Arc;
-use storage::{ChainStore, ColumnFamily, WriteBatch};
+use storage::ChainStore;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 /// Configuration for block production
 #[derive(Debug, Clone)]
@@ -46,6 +46,9 @@ impl Default for BlockProducerConfig {
         }
     }
 }
+
+/// State writes from one transaction: `(key, Some(value))` puts, `(key, None)` deletes.
+type StateDiff = Vec<(Vec<u8>, Option<Vec<u8>>)>;
 
 /// Block executor - wires BFT finalization → EVM execution → atomic storage
 ///
@@ -146,24 +149,35 @@ impl BlockExecutor {
         }
     }
 
-    fn is_native_ed25519_tx(tx: &Transaction) -> bool {
-        tx.signature.len() == 64 && tx.payload.len() >= 32
+    /// A plain value transfer: the payload is only the sender's public key.
+    /// Anything with a body after the key (calldata, bytecode) goes to the EVM.
+    fn is_native_transfer(tx: &Transaction) -> bool {
+        tx.to.is_some() && tx.payload.len() == 32
+    }
+
+    /// Transactions whose receipt succeeded, i.e. that were authenticated and
+    /// applied. Receipts are produced 1:1 with `block.extrinsics`.
+    pub fn successful_txs(block: &Block, receipts: &[TransactionReceipt]) -> Vec<Transaction> {
+        block
+            .extrinsics
+            .iter()
+            .zip(receipts)
+            .filter(|(_, r)| r.success)
+            .map(|(tx, _)| tx.clone())
+            .collect()
     }
 
     fn load_account_state(chain_store: &ChainStore, addr: &[u8]) -> (u128, u64) {
-        match chain_store.get_state(addr) {
-            Ok(Some(encoded)) => {
-                if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
-                    let balance = acc
-                        .get("balance")
-                        .and_then(|v| v.as_str())
-                        .and_then(|s| s.parse::<u128>().ok())
-                        .unwrap_or(0);
-                    let nonce = acc.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0);
-                    return (balance, nonce);
-                }
+        if let Ok(Some(encoded)) = chain_store.get_state(addr) {
+            if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
+                let balance = acc
+                    .get("balance")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u128>().ok())
+                    .unwrap_or(0);
+                let nonce = acc.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0);
+                return (balance, nonce);
             }
-            _ => {}
         }
         (0, 0)
     }
@@ -190,10 +204,7 @@ impl BlockExecutor {
     fn execute_native_transfer(
         tx: &Transaction,
         chain_store: &ChainStore,
-    ) -> (TransactionReceipt, Vec<(Vec<u8>, Option<Vec<u8>>)>) {
-        use common::crypto::derive_address_from_public_key;
-        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-
+    ) -> (TransactionReceipt, StateDiff) {
         let to = match tx.to {
             Some(to) => to,
             None => {
@@ -203,35 +214,6 @@ impl BlockExecutor {
                 );
             }
         };
-
-        let mut public_key = [0u8; 32];
-        public_key.copy_from_slice(&tx.payload[0..32]);
-
-        let verifying_key = match VerifyingKey::from_bytes(&public_key) {
-            Ok(key) => key,
-            Err(e) => {
-                return (Self::failed_receipt(format!("Invalid public key: {}", e)), vec![]);
-            }
-        };
-
-        let signature = match Signature::from_slice(&tx.signature) {
-            Ok(sig) => sig,
-            Err(e) => {
-                return (Self::failed_receipt(format!("Invalid signature: {}", e)), vec![]);
-            }
-        };
-
-        let message = tx.hash();
-        if verifying_key.verify(&message, &signature).is_err() {
-            return (Self::failed_receipt("Invalid signature"), vec![]);
-        }
-
-        if derive_address_from_public_key(&public_key) != tx.sender {
-            return (
-                Self::failed_receipt("Public key does not match sender"),
-                vec![],
-            );
-        }
 
         let (sender_balance, sender_nonce) = Self::load_account_state(chain_store, &tx.sender);
         if sender_nonce != tx.nonce {
@@ -309,7 +291,14 @@ impl BlockExecutor {
 
         let mut receipts = Vec::with_capacity(block.extrinsics.len());
         let mut state_diffs = Vec::new();
+        let chain_id = self.evm.chain_id();
         for tx in &block.extrinsics {
+            // Authenticate once, before any branch below trusts `tx.sender`.
+            if let Err(e) = common::validation::verify_tx_signature(tx, chain_id) {
+                receipts.push(Self::failed_receipt(e.to_string()));
+                continue;
+            }
+
             let body = Self::payload_body(&tx.payload);
             if ChainGovernance::is_governance_payload(body) {
                 receipts.push(TransactionReceipt {
@@ -331,7 +320,7 @@ impl BlockExecutor {
             }
 
             // Native Ed25519 transfer (wallet / SDK transactions)
-            if Self::is_native_ed25519_tx(tx) && tx.to.is_some() {
+            if Self::is_native_transfer(tx) {
                 let (receipt, diffs) = Self::execute_native_transfer(tx, &self.chain_store);
                 state_diffs.extend(diffs);
                 receipts.push(receipt);
@@ -345,12 +334,17 @@ impl BlockExecutor {
             };
 
             let caller = Address::from_slice(&tx.sender);
-            let (native_bal, native_nonce) = Self::load_account_state(&self.chain_store, &tx.sender);
+            let (native_bal, native_nonce) =
+                Self::load_account_state(&self.chain_store, &tx.sender);
             if let Err(e) = self
                 .evm
                 .prepare_native_account(caller, native_bal, native_nonce)
             {
-                warn!("Failed to sync EVM account for {}: {}", hex::encode(&tx.sender[..6]), e);
+                warn!(
+                    "Failed to sync EVM account for {}: {}",
+                    hex::encode(&tx.sender[..6]),
+                    e
+                );
             }
 
             let stx = SignedTransaction {
@@ -361,8 +355,7 @@ impl BlockExecutor {
                 nonce: tx.nonce,
                 gas_limit: tx.gas_limit,
                 gas_price: U256::from(tx.max_fee_per_gas),
-                chain_id: tx.chain_id.unwrap_or(1),
-                signature: None,
+                chain_id,
             };
 
             match self.evm.execute_transaction(stx) {
@@ -447,6 +440,7 @@ pub struct BlockProducer {
     current_slot: u64,
 
     /// Validator's address (for block signing)
+    #[allow(dead_code)]
     validator_address: [u8; 20],
 
     /// Block production configuration
@@ -633,11 +627,11 @@ impl BlockProducer {
             let mut next_level = Vec::new();
             for chunk in hashes.chunks(2) {
                 let mut hasher = Sha256::new();
-                hasher.update(&chunk[0]);
+                hasher.update(chunk[0]);
                 if chunk.len() > 1 {
-                    hasher.update(&chunk[1]);
+                    hasher.update(chunk[1]);
                 } else {
-                    hasher.update(&chunk[0]); // Duplicate for odd length
+                    hasher.update(chunk[0]); // Duplicate for odd length
                 }
                 next_level.push(hasher.finalize().into());
             }
@@ -752,5 +746,45 @@ mod tests {
         assert!(result.is_ok());
         // Unsigned tx should have been filtered before EVM
         assert_eq!(result.unwrap().extrinsics.len(), 0);
+    }
+
+    fn governance_vote_tx(key: &ed25519_dalek::SigningKey) -> Transaction {
+        use ed25519_dalek::Signer;
+        let public_key = key.verifying_key().to_bytes();
+        let sender = common::crypto::derive_address_from_public_key(&public_key);
+        let mut payload = public_key.to_vec();
+        payload.extend_from_slice(br#"{"action":"vote","proposal_id":1,"choice":"yes"}"#);
+        let mut tx = Transaction::simple_transfer(sender, [0u8; 20], 0, 0, 1);
+        tx.to = None;
+        tx.payload = payload;
+        tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
+        tx
+    }
+
+    /// Regression: governance / EVM / WASM payloads used to skip signature checks,
+    /// so anyone could vote (or call) as any sender.
+    #[test]
+    fn test_unauthenticated_txs_are_rejected() {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[5u8; 32]);
+        let valid = governance_vote_tx(&key);
+        let mut forged = governance_vote_tx(&key);
+        forged.signature = vec![7u8; 64]; // right sender + key, signature not by that key
+
+        let evm = EvmExecutor::with_store(Arc::new(InMemoryStore::default()), 1);
+        let chain_store = Arc::new(ChainStore::new(Arc::new(MemDb::new())));
+        let mut executor = BlockExecutor::new(evm, chain_store);
+
+        let block = Block {
+            header: Header::new([0u8; 32], 1),
+            extrinsics: vec![valid.clone(), forged],
+        };
+        let receipts = executor.execute_and_commit(&block).unwrap();
+
+        assert!(receipts[0].success, "{:?}", receipts[0].revert_reason);
+        assert!(!receipts[1].success);
+        assert_eq!(
+            BlockExecutor::successful_txs(&block, &receipts),
+            vec![valid]
+        );
     }
 }

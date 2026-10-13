@@ -102,6 +102,98 @@ impl TransactionValidator {
     }
 }
 
+/// Authenticate a transaction and return the signer's Ed25519 public key.
+///
+/// Wire convention (SDK and frontend): the first 32 payload bytes are the
+/// sender's public key, the signature is over `tx.hash()`, and `sender` is the
+/// address derived from that key. `chain_id` is required, because a tx without
+/// one could be replayed on another chain.
+///
+/// Every executor branch (native, EVM, WASM, governance) must call this before
+/// trusting `tx.sender`.
+pub fn verify_tx_signature(tx: &Transaction, expected_chain_id: u64) -> Result<[u8; 32]> {
+    match tx.chain_id {
+        Some(id) if id == expected_chain_id => {}
+        other => {
+            return Err(anyhow!(
+                "Invalid chain ID: expected {}, got {:?}",
+                expected_chain_id,
+                other
+            ))
+        }
+    }
+
+    let public_key: [u8; 32] = tx
+        .payload
+        .get(..32)
+        .and_then(|b| b.try_into().ok())
+        .ok_or_else(|| anyhow!("Payload must start with the sender's 32-byte public key"))?;
+
+    if !tx.verify(&public_key) {
+        return Err(anyhow!("Invalid signature"));
+    }
+
+    if crate::crypto::derive_address_from_public_key(&public_key) != tx.sender {
+        return Err(anyhow!("Public key does not match sender"));
+    }
+
+    Ok(public_key)
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn signed_tx(key: &SigningKey, chain_id: Option<u64>) -> Transaction {
+        let public_key = key.verifying_key().to_bytes();
+        let sender = crate::crypto::derive_address_from_public_key(&public_key);
+        let mut tx = Transaction::simple_transfer(sender, [2u8; 20], 5, 0, 1);
+        tx.chain_id = chain_id;
+        tx.payload = public_key.to_vec();
+        tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
+        tx
+    }
+
+    #[test]
+    fn accepts_valid_signature() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let tx = signed_tx(&key, Some(1));
+        assert_eq!(
+            verify_tx_signature(&tx, 1).unwrap(),
+            key.verifying_key().to_bytes()
+        );
+    }
+
+    #[test]
+    fn rejects_forged_sender() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let mut tx = signed_tx(&key, Some(1));
+        tx.sender = [9u8; 20];
+        tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
+        assert!(verify_tx_signature(&tx, 1).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_signature_and_missing_key() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let mut tx = signed_tx(&key, Some(1));
+        tx.signature[0] ^= 0xFF;
+        assert!(verify_tx_signature(&tx, 1).is_err());
+
+        let mut short = signed_tx(&key, Some(1));
+        short.payload.truncate(10);
+        assert!(verify_tx_signature(&short, 1).is_err());
+    }
+
+    #[test]
+    fn rejects_wrong_or_missing_chain_id() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        assert!(verify_tx_signature(&signed_tx(&key, Some(2)), 1).is_err());
+        assert!(verify_tx_signature(&signed_tx(&key, None), 1).is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

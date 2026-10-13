@@ -1,6 +1,6 @@
 # Blockchain Status Summary
 
-## Current Status: PRE-MAINNET **100%** (code-complete)
+## Current Status: Devnet MVP — **not testnet-ready** (see blocking defects below)
 
 **Last Updated**: August 3, 2026  
 **Version**: 0.3.4  
@@ -47,14 +47,25 @@
 
 ---
 
-## Mainnet blockers (operational only)
+## Known blocking code defects (October 2026 review)
+
+These must be fixed before any public testnet. Operational items further down come after them.
+
+- **Consensus safety**: quorum is `>= floor(2N/3)` instead of `> 2/3` (`consensus/src/bft.rs`); round jumps happen before signature checks; conflicting votes overwrite each other with no evidence; lock state is not persisted across restarts; synced blocks are not checked against a +2/3 commit certificate.
+- **Transaction authentication**: only native transfers verify signatures. EVM, governance and WASM transactions trust `tx.sender`, and the mempool does not verify either (`mempool/src/lib.rs` `recover_signer`).
+- **RPC writes state outside consensus**: `/bridge/mint` (mints without an ETH proof when `eth_tx_hash` is omitted), `/validators/register` (any stake, hot-reloaded into BFT), `/faucet/request`, `/delegate`, `/deploy_wasm`, `/runtime/propose`. None require authentication.
+- **No real state root**: the header `state_root` hashes only `parent_root + extrinsics_root`, and blocks are committed before that check runs.
+- **Hashing**: the transaction hash has no length prefixes, so `chain_id` can be stripped without breaking the signature. The header hash omits `base_fee` and `gas_used`.
+- **Rewards**: the default base reward (`1e19`) overflows `i64` and is never paid.
+
+## Mainnet blockers (operational)
 
 - Public testnet 30+ day soak
 - Professional security audit
 - Bug bounty program
 - Production alerting webhooks + multi-region deploy
 
-Not code gaps — see `MAINNET_CHECKLIST.md`.
+See `MAINNET_CHECKLIST.md`.
 
 ---
 
@@ -84,4 +95,4 @@ cd sdk/javascript && npm install && npm run build
 └──────────────────────────────────────────┘
 ```
 
-**Status**: Pre-mainnet code-complete — ready for public testnet deploy and audit.
+**Status**: Devnet MVP — fix the blocking code defects above before public testnet or audit.

@@ -72,7 +72,10 @@ pub async fn apply_at_height(
                 );
                 activated = Some(version);
             }
-            Err(e) => warn!("Runtime upgrade {} not applied at height {}: {}", id, height, e),
+            Err(e) => warn!(
+                "Runtime upgrade {} not applied at height {}: {}",
+                id, height, e
+            ),
         }
     }
 

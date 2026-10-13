@@ -299,6 +299,45 @@ interface GovStats {
     activeValidators: number;
 }
 
+declare class Wallet {
+    private privateKey;
+    readonly address: string;
+    readonly publicKey: string;
+    constructor(privateKey: string | Uint8Array);
+    static generate(): Wallet;
+    static fromPrivateKey(privateKey: string): Wallet;
+    static fromMnemonic(mnemonic: string, _index?: number): Wallet;
+    static generateMnemonic(): string;
+    signMessage(message: string): Promise<string>;
+    signTransaction(tx: TransactionRequest): Promise<Transaction>;
+    connect(provider: Provider): ConnectedWallet;
+    getPrivateKey(): string;
+    getPublicKey(): string;
+    getAddress(): string;
+    static verifySignature(message: string, signature: string, publicKey: string): boolean;
+}
+declare class ConnectedWallet {
+    private wallet;
+    private client;
+    constructor(privateKey: string | Uint8Array, provider: Provider);
+    sendTransaction(tx: TransactionRequest): Promise<any>;
+    getBalance(): Promise<string>;
+    get address(): string;
+    getNonce(): Promise<number>;
+    /** Submit a signed governance action (propose / vote) via POST /submit_tx. */
+    submitGovernanceAction(action: Record<string, unknown>): Promise<any>;
+    createProposal(req: {
+        title: string;
+        description?: string;
+        proposal_type?: string;
+        version?: string;
+        hash?: string;
+    }): Promise<any>;
+    vote(proposalId: number, choice: "yes" | "no" | "abstain"): Promise<any>;
+    executeProposal(proposalId: number): Promise<any>;
+    getClient(): ModularClient;
+}
+
 declare class ModularClient extends EventEmitter {
     private provider;
     private options;
@@ -333,9 +372,10 @@ declare class ModularClient extends EventEmitter {
     healthCheck(): Promise<boolean>;
     getProposals(): Promise<GovProposal[]>;
     getProposal(id: number): Promise<GovProposal | null>;
-    /** Governance writes use signed POST /submit_tx — use Wallet.signTransaction with governance payload. */
-    createProposal(_req: CreateProposalRequest): Promise<any>;
-    vote(_req: VoteRequest): Promise<any>;
+    /** Governance writes require a `Wallet` for signing. */
+    createProposal(req: CreateProposalRequest, wallet: Wallet): Promise<any>;
+    vote(req: VoteRequest, wallet: Wallet): Promise<any>;
+    executeProposal(proposalId: number, wallet: Wallet): Promise<any>;
     getVotes(_proposalId: number): Promise<GovVote[]>;
     getTreasury(): Promise<TreasuryInfo | null>;
     getGovParams(): Promise<GovParams | null>;
@@ -349,7 +389,6 @@ declare class ModularClient extends EventEmitter {
         stake: string;
         commission_rate?: number;
     }): Promise<any>;
-    executeProposal(_proposalId: number): Promise<any>;
     requestFaucet(address: string, amount?: string): Promise<any>;
     getSlashingEvents(): Promise<any[]>;
     deployWasm(name: string, wasmBase64: string): Promise<any>;
@@ -359,34 +398,6 @@ declare class ModularClient extends EventEmitter {
     getPendingUserOperations(): Promise<number>;
     getGovStats(): Promise<GovStats | null>;
     getProvider(): Provider;
-}
-
-declare class Wallet {
-    private privateKey;
-    readonly address: string;
-    readonly publicKey: string;
-    constructor(privateKey: string | Uint8Array);
-    static generate(): Wallet;
-    static fromPrivateKey(privateKey: string): Wallet;
-    static fromMnemonic(mnemonic: string, _index?: number): Wallet;
-    static generateMnemonic(): string;
-    signMessage(message: string): Promise<string>;
-    signTransaction(tx: TransactionRequest): Promise<Transaction>;
-    connect(provider: Provider): ConnectedWallet;
-    getPrivateKey(): string;
-    getPublicKey(): string;
-    getAddress(): string;
-    static verifySignature(message: string, signature: string, publicKey: string): boolean;
-}
-declare class ConnectedWallet {
-    private wallet;
-    private client;
-    constructor(privateKey: string | Uint8Array, provider: Provider);
-    sendTransaction(tx: TransactionRequest): Promise<any>;
-    getBalance(): Promise<string>;
-    get address(): string;
-    getNonce(): Promise<number>;
-    getClient(): ModularClient;
 }
 
 declare class HttpProvider implements Provider {

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use common::types::{Block, Hash, Header};
+use common::types::{Hash, Header};
 use consensus::ValidatorInfo;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -163,7 +163,7 @@ impl LightClient {
     ) -> bool {
         // Simplified Merkle proof verification
         // In production, implement full Merkle Patricia trie verification
-        !proof.is_empty() && key.len() > 0 && value.len() > 0
+        !proof.is_empty() && !key.is_empty() && !value.is_empty()
     }
 }
 
@@ -234,7 +234,7 @@ impl SyncCommitteeManager {
 
     /// Check if rotation should occur at this slot
     pub fn should_rotate(&self, slot: u64) -> bool {
-        slot % self.rotation_period == 0
+        slot.is_multiple_of(self.rotation_period)
     }
 
     pub fn current_committee(&self) -> &SyncCommittee {

@@ -69,7 +69,8 @@ export class Wallet {
     const gasLimit = Number(tx.gasLimit ?? 21000);
     const maxFeePerGas = Number(tx.maxFeePerGas ?? 1000000000);
     const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 100000000);
-    const chainId = tx.chainId ?? null;
+    // The node requires a chain ID (replay protection); default to the devnet's.
+    const chainId = tx.chainId ?? 1;
     const to = tx.to ?? null;
     const value = Number(tx.value ?? 0);
 

@@ -326,10 +326,6 @@ export class ModularClient extends EventEmitter {
     return await this.provider.request("register_validator", [req]);
   }
 
-  async executeProposal(_proposalId: number): Promise<any> {
-    throw new Error("Execute via signed governance transaction (POST /submit_tx)");
-  }
-
   async requestFaucet(address: string, amount?: string): Promise<any> {
     return await this.provider.request("faucet_request", [{ address, amount }]);
   }

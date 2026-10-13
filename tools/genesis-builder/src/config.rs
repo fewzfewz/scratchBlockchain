@@ -3,9 +3,8 @@
 //! This module defines the configuration structures for blockchain genesis.
 //! Configuration is loaded from TOML files and validated before genesis generation.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
 
 /// Complete genesis configuration loaded from TOML
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,12 +143,6 @@ impl GenesisConfig {
     pub fn from_toml(content: &str) -> Result<Self> {
         let config: GenesisConfig = toml::from_str(content)?;
         Ok(config)
-    }
-
-    /// Load from file
-    pub fn from_file(path: &std::path::Path) -> Result<Self> {
-        let content = std::fs::read_to_string(path)?;
-        Self::from_toml(&content)
     }
 
     /// Generate example TOML configuration

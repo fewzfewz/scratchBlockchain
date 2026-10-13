@@ -58,7 +58,7 @@ impl PruneConfig {
         if !self.enabled() || finalized_height == 0 {
             return false;
         }
-        finalized_height % self.prune_every_n_blocks == 0
+        finalized_height.is_multiple_of(self.prune_every_n_blocks)
     }
 
     pub fn cutoff_height(&self, finalized_height: u64) -> u64 {
@@ -131,7 +131,7 @@ impl ChainStore {
             }
 
             batch.delete(ColumnFamily::Blocks, hash.as_slice());
-            batch.delete(ColumnFamily::BlockHeights, &height.to_le_bytes());
+            batch.delete(ColumnFamily::BlockHeights, height.to_le_bytes());
             stats.blocks_pruned += 1;
         }
 

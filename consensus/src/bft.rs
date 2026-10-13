@@ -136,7 +136,8 @@ impl BftEngine {
         self.proposal = None;
         self.own_proposal = None;
         // Proposals from a previous height are no longer useful for finalizing.
-        self.proposals_by_hash.retain(|_, p| p.height == self.height);
+        self.proposals_by_hash
+            .retain(|_, p| p.height == self.height);
         self.start_timeout(Step::Propose);
         vec![BftEvent::NewRound(self.height, self.round)]
     }

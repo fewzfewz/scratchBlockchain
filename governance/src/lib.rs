@@ -583,6 +583,7 @@ pub enum VoteChoice {
 }
 
 impl VoteChoice {
+    #[allow(clippy::should_implement_trait)] // returns Option, unlike FromStr
     pub fn from_str(s: &str) -> Option<VoteChoice> {
         match s.trim().to_ascii_lowercase().as_str() {
             "yes" | "for" | "aye" => Some(VoteChoice::Yes),

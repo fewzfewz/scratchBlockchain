@@ -64,7 +64,6 @@ impl Storage for MemStore {
 
 #[cfg(feature = "sled-legacy")]
 mod sled_legacy {
-    use super::*;
     use common::traits::Storage;
     use sled::Db;
     use std::error::Error;
@@ -198,8 +197,8 @@ impl StateStore {
         use sha2::{Digest, Sha256};
 
         let mut leaves = Vec::new();
-        let mut iter = self.chain.iter_state()?;
-        while let Some((key, value)) = iter.next() {
+        let iter = self.chain.iter_state()?;
+        for (key, value) in iter {
             if key.len() == 20 {
                 let account: common::types::Account = serde_json::from_slice(&value)?;
                 let mut hasher = Sha256::new();

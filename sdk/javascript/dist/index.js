@@ -222,12 +222,22 @@ var ModularClient = class extends import_eventemitter3.default {
       return null;
     }
   }
-  /** Governance writes use signed POST /submit_tx — use Wallet.signTransaction with governance payload. */
-  async createProposal(_req) {
-    throw new Error("Use Wallet.signTransaction with governance payload and client.sendTransaction()");
+  /** Governance writes require a `Wallet` for signing. */
+  async createProposal(req, wallet) {
+    const connected = wallet.connect(this.provider);
+    return connected.createProposal({
+      title: req.title,
+      description: req.description
+    });
   }
-  async vote(_req) {
-    throw new Error("Use Wallet.signTransaction with governance vote payload and client.sendTransaction()");
+  async vote(req, wallet) {
+    const connected = wallet.connect(this.provider);
+    const choice = req.support === "For" ? "yes" : req.support === "Against" ? "no" : "abstain";
+    return connected.vote(req.proposalId, choice);
+  }
+  async executeProposal(proposalId, wallet) {
+    const connected = wallet.connect(this.provider);
+    return connected.executeProposal(proposalId);
   }
   async getVotes(_proposalId) {
     const proposal = await this.getProposal(_proposalId);
@@ -273,9 +283,6 @@ var ModularClient = class extends import_eventemitter3.default {
   }
   async registerValidator(req) {
     return await this.provider.request("register_validator", [req]);
-  }
-  async executeProposal(_proposalId) {
-    throw new Error("Execute via signed governance transaction (POST /submit_tx)");
   }
   async requestFaucet(address, amount) {
     return await this.provider.request("faucet_request", [{ address, amount }]);
@@ -386,7 +393,7 @@ var Wallet = class _Wallet {
     const gasLimit = Number(tx.gasLimit ?? 21e3);
     const maxFeePerGas = Number(tx.maxFeePerGas ?? 1e9);
     const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 1e8);
-    const chainId = tx.chainId ?? null;
+    const chainId = tx.chainId ?? 1;
     const to = tx.to ?? null;
     const value = Number(tx.value ?? 0);
     const parts = [
@@ -470,6 +477,44 @@ var ConnectedWallet = class {
   }
   async getNonce() {
     return await this.client.getNonce(this.address);
+  }
+  /** Submit a signed governance action (propose / vote) via POST /submit_tx. */
+  async submitGovernanceAction(action) {
+    const nonce = await this.getNonce();
+    const pubKey = (0, import_utils.hexToBytes)(this.wallet.getPublicKey());
+    const body = new TextEncoder().encode(JSON.stringify(action));
+    const payload = new Uint8Array(pubKey.length + body.length);
+    payload.set(pubKey, 0);
+    payload.set(body, pubKey.length);
+    return this.sendTransaction({
+      data: "0x" + (0, import_utils.bytesToHex)(payload),
+      gasLimit: 21e3,
+      chainId: 1,
+      nonce
+    });
+  }
+  async createProposal(req) {
+    return this.submitGovernanceAction({
+      action: "propose",
+      title: req.title,
+      description: req.description ?? "",
+      proposal_type: req.proposal_type,
+      version: req.version,
+      hash: req.hash
+    });
+  }
+  async vote(proposalId, choice) {
+    return this.submitGovernanceAction({
+      action: "vote",
+      proposal_id: proposalId,
+      choice
+    });
+  }
+  async executeProposal(proposalId) {
+    return this.submitGovernanceAction({
+      action: "execute",
+      proposal_id: proposalId
+    });
   }
   getClient() {
     return this.client;

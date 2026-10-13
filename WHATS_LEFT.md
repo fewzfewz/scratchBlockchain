@@ -1,10 +1,12 @@
 # What's Left - Development Status
 
-## Current Status: **PRE-MAINNET 100%** (code-complete)
+## Current Status: **Devnet MVP — not testnet-ready**
+
+> The "pre-mainnet complete" items below exist as features, but an October 2026 code review found blocking consensus-safety and authentication defects. See "Known blocking code defects" in `STATUS.md`. Fix those before public testnet.
 
 ### Last Updated: August 3, 2026
 
-All **pre-mainnet software work is complete**. Remaining items are **mainnet launch** operations (deploy, audit, economics ceremony) — not missing features.
+The feature list below is built, but blocking security defects remain (see `STATUS.md`). Mainnet launch operations (deploy, audit, economics ceremony) come after those fixes.
 
 ---
 

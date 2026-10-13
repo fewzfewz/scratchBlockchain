@@ -33,7 +33,7 @@ impl ReceiptStore {
     }
 
     pub fn has_receipt(&self, tx_hash: &Hash) -> Result<bool, Box<dyn Error>> {
-        Ok(self.db.contains(ColumnFamily::Receipts, tx_hash)?)
+        self.db.contains(ColumnFamily::Receipts, tx_hash)
     }
 }
 

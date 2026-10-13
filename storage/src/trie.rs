@@ -41,6 +41,9 @@ type NibblePath = Vec<Nibble>;
 /// Hash type for node references (32 bytes, SHA256)
 pub type NodeHash = [u8; 32];
 
+/// New subtree root plus every node created or changed while building it.
+type TrieUpdate = (NodeHash, Vec<(NodeHash, TrieNode)>);
+
 /// Empty trie hash (SHA256 of empty string)
 pub const EMPTY_TRIE_HASH: NodeHash = [
     0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
@@ -225,7 +228,7 @@ impl PatriciaTrie {
         debug!(
             "Inserted key: {:?} -> root: {:?}",
             hex::encode(key),
-            hex::encode(&new_root)
+            hex::encode(new_root)
         );
         Ok(())
     }
@@ -269,7 +272,7 @@ impl PatriciaTrie {
         debug!(
             "Deleted key: {:?} -> root: {:?}",
             hex::encode(key),
-            hex::encode(&new_root)
+            hex::encode(new_root)
         );
         Ok(())
     }
@@ -444,7 +447,7 @@ impl PatriciaTrie {
 
             Ok(node)
         } else {
-            Err(format!("Node not found: {:?}", hex::encode(&hash)).into())
+            Err(format!("Node not found: {:?}", hex::encode(hash)).into())
         }
     }
 
@@ -469,7 +472,7 @@ impl PatriciaTrie {
         node_hash: NodeHash,
         path: &[Nibble],
         value: Vec<u8>,
-    ) -> Result<(NodeHash, Vec<(NodeHash, TrieNode)>), Box<dyn Error>> {
+    ) -> Result<TrieUpdate, Box<dyn Error>> {
         let node = self.get_node(node_hash)?;
         let mut changed = Vec::new();
 
@@ -708,7 +711,7 @@ impl PatriciaTrie {
         &mut self,
         node_hash: NodeHash,
         path: &[Nibble],
-    ) -> Result<(NodeHash, Vec<(NodeHash, TrieNode)>), Box<dyn Error>> {
+    ) -> Result<TrieUpdate, Box<dyn Error>> {
         let node = self.get_node(node_hash)?;
         let mut changed = Vec::new();
 

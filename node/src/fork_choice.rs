@@ -17,6 +17,12 @@ struct ChainTip {
     finalized_height: u64,
 }
 
+impl Default for ForkChoice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ForkChoice {
     pub fn new() -> Self {
         Self {

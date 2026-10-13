@@ -1,3 +1,4 @@
+#[cfg(test)]
 use consensus::{FinalityGadget, FinalityVote, ValidatorInfo};
 use proptest::prelude::*;
 

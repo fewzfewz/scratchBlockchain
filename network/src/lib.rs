@@ -11,7 +11,7 @@
 //! - **Peer Persistence**: Save and restore known peers across restarts
 //!
 //! ## Architecture
-//! ```
+//! ```text
 //! ┌─────────────────────────────────────────────────────────────┐
 //! │                      NetworkService                          │
 //! ├─────────────┬─────────────┬─────────────┬───────────────────┤
@@ -412,7 +412,10 @@ impl NetworkService {
     /// so losing a burst is preferable to wedging the node forever.
     fn emit(&self, event: NetworkEvent) {
         if let Err(e) = self.event_sender.try_send(event) {
-            warn!("Dropping network event ({}): node is not draining fast enough", e);
+            warn!(
+                "Dropping network event ({}): node is not draining fast enough",
+                e
+            );
         }
     }
 
@@ -562,7 +565,10 @@ impl NetworkService {
             // Request-response failures
             SwarmEvent::Behaviour(behaviour::NodeBehaviourEvent::RequestResponse(
                 request_response::Event::OutboundFailure {
-                    request_id, peer, error, ..
+                    request_id,
+                    peer,
+                    error,
+                    ..
                 },
             )) => {
                 warn!("❌ Request {} to {} failed: {:?}", request_id, peer, error);

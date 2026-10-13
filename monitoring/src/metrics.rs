@@ -1,5 +1,4 @@
-use prometheus::{Counter, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry};
-use std::sync::Arc;
+use prometheus::{Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry};
 
 /// Blockchain metrics for Prometheus
 pub struct BlockchainMetrics {

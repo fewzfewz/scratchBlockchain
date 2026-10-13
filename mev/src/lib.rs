@@ -87,8 +87,8 @@ impl CommitRevealScheme {
         current_height: u64,
     ) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&tx_hash);
-        hasher.update(&secret);
+        hasher.update(tx_hash);
+        hasher.update(secret);
         let commitment = hasher.finalize().into();
 
         self.pending_commitments.insert(
@@ -131,8 +131,8 @@ impl CommitRevealScheme {
         // Verify the secret matches the commitment
         let tx_hash = tx.hash();
         let mut hasher = Sha256::new();
-        hasher.update(&tx_hash);
-        hasher.update(&secret);
+        hasher.update(tx_hash);
+        hasher.update(secret);
         let computed_commitment: [u8; 32] = hasher.finalize().into();
 
         if computed_commitment != commitment {
@@ -384,7 +384,7 @@ impl BlockBuilder {
         let gas_mev = (tx.gas_limit as u128) * (tx.max_priority_fee_per_gas as u128);
 
         // Check for DEX interactions (simplified)
-        let dex_mev = if tx.payload.len() > 4 && &tx.payload[0..4] == &[0x7f, 0x00, 0x00, 0x00] {
+        let dex_mev = if tx.payload.len() > 4 && tx.payload[0..4] == [0x7f, 0x00, 0x00, 0x00] {
             10_000_000_000 // 10 tokens if DEX swap
         } else {
             0
@@ -712,7 +712,7 @@ impl ThresholdEncryption {
     /// Split a secret into shares using Shamir's Secret Sharing (GF(2^8) via `sharks`)
     fn split_secret(&self, secret: &[u8; 32], total: usize, threshold: usize) -> Vec<Vec<u8>> {
         use sharks::{Share, Sharks};
-        let t = threshold.min(255).max(1) as u8;
+        let t = threshold.clamp(1, 255) as u8;
         let sharks = Sharks(t);
         sharks
             .dealer(secret)
@@ -728,7 +728,7 @@ impl ThresholdEncryption {
         if shares.len() < threshold {
             return vec![0u8; 32];
         }
-        let t = threshold.min(255).max(1) as u8;
+        let t = threshold.clamp(1, 255) as u8;
         let shark_shares: Vec<Share> = shares
             .values()
             .take(threshold)
@@ -774,10 +774,7 @@ impl ThresholdEncryption {
         };
 
         // Store the share
-        let shares = self
-            .decryption_shares
-            .entry(share.nonce)
-            .or_insert_with(HashMap::new);
+        let shares = self.decryption_shares.entry(share.nonce).or_default();
         shares.insert(share.validator, share.share);
 
         // Check if threshold is met

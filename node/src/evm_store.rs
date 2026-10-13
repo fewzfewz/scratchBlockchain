@@ -3,7 +3,6 @@
 use execution::evm::{EvmStore, StoredAccount};
 use revm::primitives::{Bytecode, B256, U256};
 use sha2::{Digest, Sha256};
-use std::error::Error;
 use std::sync::Arc;
 use storage::ChainStore;
 
@@ -171,7 +170,20 @@ mod tests {
 
     #[test]
     fn in_memory_state_root() {
+        // Empty stores agree on a (non-zero) root, and the root moves with state.
         let store = InMemoryStore::default();
-        assert_eq!(store.state_root(), [0u8; 32]);
+        let empty_root = store.state_root();
+        assert_eq!(empty_root, InMemoryStore::default().state_root());
+        assert_ne!(empty_root, [0u8; 32]);
+
+        store.put_account(
+            Address::from_slice(&[1u8; 20]),
+            StoredAccount {
+                balance: U256::from(1u64),
+                nonce: 0,
+                code_hash: None,
+            },
+        );
+        assert_ne!(store.state_root(), empty_root);
     }
 }

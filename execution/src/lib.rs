@@ -271,11 +271,10 @@ impl NativeExecutor {
 
         let sender_balance = check_sender.balance;
         let sender_nonce = check_sender.nonce;
-        drop(check_sender);
 
         // 6. Execute Transfer
         if let Some(to) = tx.to {
-            state.entry(to).or_insert(Account::default());
+            state.entry(to).or_default();
 
             let sender = state.get_mut(&tx.sender).unwrap();
             sender.balance = sender_balance - tx.value as u128;
@@ -332,7 +331,6 @@ mod tests {
     use super::*;
     use common::types::{Account, Block, Header, Transaction};
     use ed25519_dalek::{Signer, SigningKey};
-    use rand::rngs::OsRng;
 
     fn create_signed_transaction(
         sender: [u8; 20],
@@ -361,8 +359,6 @@ mod tests {
             chain_id: Some(1),
             to: Some(recipient),
             value: amount as u64,
-            from: sender,
-            data: vec![],
         };
 
         // Sign the transaction hash
@@ -385,13 +381,11 @@ mod tests {
             Account {
                 nonce: 0,
                 balance: 100_000_000_000_000,
-                code: vec![],
-                storage: HashMap::new(),
             },
         );
 
         // Create a signing key for testing
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
 
         let tx = create_signed_transaction(sender, 0, recipient, 500, &signing_key);
 
@@ -423,12 +417,10 @@ mod tests {
             Account {
                 nonce: 0,
                 balance: 100,
-                code: vec![],
-                storage: HashMap::new(),
             },
         );
 
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
         let tx = create_signed_transaction(sender, 0, recipient, 500, &signing_key);
 
         let block = Block {
@@ -451,13 +443,11 @@ mod tests {
             Account {
                 nonce: 0,
                 balance: 1000,
-                code: vec![],
-                storage: HashMap::new(),
             },
         );
 
         // Create transaction with wrong signature
-        let signing_key = SigningKey::generate(&mut OsRng);
+        let signing_key = SigningKey::from_bytes(&[7u8; 32]);
         let mut tx = create_signed_transaction(sender, 0, recipient, 500, &signing_key);
 
         // Corrupt the signature

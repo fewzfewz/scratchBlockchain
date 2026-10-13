@@ -73,9 +73,9 @@ async fn seed_governance(
 
     let validators = validator_stakes(trie).await;
     let (v1, v2, v3) = match validators.as_slice() {
-        [a, b, c, ..] => (a.clone(), b.clone(), c.clone()),
-        [a, b] => (a.clone(), b.clone(), (b.0, 0)),
-        [a] => (a.clone(), (a.0, 0), (a.0, 0)),
+        [a, b, c, ..] => (*a, *b, *c),
+        [a, b] => (*a, *b, (b.0, 0)),
+        [a] => (*a, (a.0, 0), (a.0, 0)),
         _ => return Ok(state),
     };
 
@@ -227,7 +227,8 @@ async fn on_proposal_executed(
         return Ok(());
     };
 
-    let code_hash = parse_code_hash(hash).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let code_hash =
+        parse_code_hash(hash).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let current = crate::runtime_upgrade_store::current_version(trie).await?;
     let parsed = parse_spec_version(version);
     let spec_version = parsed.max(current.spec_version.saturating_add(1));
@@ -345,17 +346,14 @@ async fn validator_stakes(trie: &Arc<Mutex<PatriciaTrie>>) -> Vec<(Address, u128
 /// Credit a portion of block fees to the on-chain treasury.
 pub async fn collect_treasury_fee(
     trie: &Arc<Mutex<PatriciaTrie>>,
-    amount: u64,
+    amount: u128,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if amount == 0 {
         return Ok(());
     }
     let mut state = load_or_init(trie).await?;
-    state.treasury.balance = state.treasury.balance.saturating_add(amount as u128);
-    state.treasury.total_collected = state
-        .treasury
-        .total_collected
-        .saturating_add(amount as u128);
+    state.treasury.balance = state.treasury.balance.saturating_add(amount);
+    state.treasury.total_collected = state.treasury.total_collected.saturating_add(amount);
     let data = serde_json::to_vec(&state)?;
     trie.lock().await.insert(GOVERNANCE_KEY, &data)?;
     Ok(())

@@ -1,4 +1,4 @@
-use common::types::Address;
+#[cfg(test)]
 use interop::ethereum_bridge::{BridgeMessage, EthereumBridge};
 use proptest::prelude::*;
 
@@ -17,7 +17,7 @@ proptest! {
         nonce in any::<u64>(),
         signatures in proptest::collection::vec(proptest::collection::vec(any::<u8>(), 64), 0..5)
     ) {
-        let relayers = vec![[1u8; 20], [2u8; 20], [3u8; 20]];
+        let relayers = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
         let mut bridge = EthereumBridge::new(1, 2, relayers, 2);
 
         let message = BridgeMessage {

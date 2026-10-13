@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::interval;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // Import from our modules
 mod config;
@@ -39,14 +39,14 @@ use config::NodeConfig;
 use rewards::{RewardConfig, RewardManager};
 
 // External imports
-use common::consensus_types::{ConsensusMessage, Proposal, Step, Vote};
+use common::consensus_types::{ConsensusMessage, Step};
 use common::crypto::SigningKey;
 use common::traits::Consensus;
-use common::types::{Block, Header, Transaction};
+use common::types::Block;
 
 use consensus::bft::{BftEngine, BftEvent};
 use consensus::slashing::{SlashingConfig, SlashingTracker};
-use consensus::{EnhancedConsensus, FinalityGadget, SlashingCondition, ValidatorInfo};
+use consensus::{EnhancedConsensus, FinalityGadget, ValidatorInfo};
 
 use execution::evm::EvmExecutor;
 use node::evm_store::ChainStoreEvmStore;
@@ -58,12 +58,10 @@ use node::tx_pool::TxPool;
 
 use storage::receipt_store::ReceiptStore;
 use storage::trie::PatriciaTrie;
-use storage::{ChainStore, ColumnFamily, PruneConfig, WriteBatch};
+use storage::{ChainStore, PruneConfig};
 
 use node::block_producer::{BlockExecutor, BlockProducer, BlockProducerConfig};
 use node::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
-use node::fork_choice::ForkChoice;
-use node::light_client::{LightClient, SyncCommittee, SyncCommitteeManager};
 use node::metrics::Metrics;
 
 /// Seconds without a finalized block before a node attempts to re-sync from peers.
@@ -224,8 +222,10 @@ impl NodeStats {
 /// Main node structure
 struct Node {
     // Core components
+    #[allow(dead_code)]
     config: NodeConfig,
     chain_store: Arc<ChainStore>,
+    #[allow(dead_code)]
     receipt_store: Arc<ReceiptStore>,
     state_trie: Arc<Mutex<PatriciaTrie>>,
 
@@ -252,6 +252,7 @@ struct Node {
 
     // Monitoring
     metrics: Arc<Metrics>,
+    #[allow(dead_code)]
     circuit_breaker: Arc<CircuitBreaker>,
     stats: NodeStats,
 
@@ -399,7 +400,7 @@ impl Node {
         // 6. Initialize Transaction Pool (MEV + account abstraction)
         // ================================================================
         let mempool_config = mempool::MempoolConfig {
-            max_capacity: (config.security.max_tx_per_block * 2) as usize,
+            max_capacity: (config.security.max_tx_per_block * 2),
             max_per_sender: 100,
             min_fee_per_gas: 1_000_000_000,
             chain_id: Some(1),
@@ -624,7 +625,7 @@ impl Node {
 
             tokio::select! {
                 _ = consensus_interval.tick() => {
-                    let mut engine = self.bft_engine.lock().await;
+                    let engine = self.bft_engine.lock().await;
                     if let Some(timeout) = engine.check_timeout() {
                         pending_events.push(timeout);
                     }
@@ -709,10 +710,7 @@ impl Node {
                     .execute_and_commit(&block)?;
 
                 // Calculate total fees
-                let total_fees: u64 = receipts
-                    .iter()
-                    .map(|r| r.gas_used * block.header.base_fee)
-                    .sum();
+                let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
 
                 // Get voters (simplified - in production, get from consensus)
                 let voters: Vec<Vec<u8>> = vec![];
@@ -737,7 +735,7 @@ impl Node {
                 // Apply rewards to state
                 for (validator, amount) in rewards {
                     if amount > 0 {
-                        self.apply_reward(&validator, amount as u64).await?;
+                        self.apply_reward(&validator, amount).await?;
                         info!(
                             "💰 Rewarded {} with {} tokens",
                             hex::encode(&validator[..4]),
@@ -746,11 +744,13 @@ impl Node {
                     }
                 }
 
-                // Apply on-chain governance actions included in this block
+                // Apply on-chain governance actions, from authenticated txs only
+                let authenticated =
+                    node::block_producer::BlockExecutor::successful_txs(&block, &receipts);
                 if let Err(e) = node::governance_store::apply_extrinsics(
                     &self.state_trie,
                     &self.chain_store,
-                    &block.extrinsics,
+                    &authenticated,
                     block.header.slot,
                 )
                 .await
@@ -873,7 +873,10 @@ impl Node {
             BftEvent::BehindSync(_target_height) => {
                 // Peers are ahead of us — request a contiguous sync on the
                 // next sync tick so we catch up to the canonical chain.
-                info!("🚩 Behind peers (height {}) — flagging sync", _target_height);
+                info!(
+                    "🚩 Behind peers (height {}) — flagging sync",
+                    _target_height
+                );
                 self.sync_requested = true;
             }
 
@@ -953,8 +956,6 @@ impl Node {
             NetworkEvent::ListeningOn(addr) => {
                 info!("🔊 Network listening on {}", addr);
             }
-
-            _ => {}
         }
 
         Ok(())
@@ -1074,10 +1075,7 @@ impl Node {
         }
 
         // Process rewards
-        let total_fees: u64 = receipts
-            .iter()
-            .map(|r| r.gas_used * block.header.base_fee)
-            .sum();
+        let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
         let proposer = proposer.unwrap_or_default();
         let voters = vec![];
 
@@ -1087,15 +1085,16 @@ impl Node {
         };
         for (validator, amount) in rewards {
             if amount > 0 {
-                self.apply_reward(&validator, amount as u64).await?;
+                self.apply_reward(&validator, amount).await?;
             }
         }
 
-        // Apply on-chain governance actions included in this block
+        // Apply on-chain governance actions, from authenticated txs only
+        let authenticated = node::block_producer::BlockExecutor::successful_txs(block, &receipts);
         if let Err(e) = node::governance_store::apply_extrinsics(
             &self.state_trie,
             &self.chain_store,
-            &block.extrinsics,
+            &authenticated,
             block.header.slot,
         )
         .await
@@ -1103,11 +1102,8 @@ impl Node {
             warn!("Error applying governance actions: {}", e);
         }
 
-        if let Err(e) = node::runtime_upgrade_store::apply_at_height(
-            &self.state_trie,
-            block.header.slot,
-        )
-        .await
+        if let Err(e) =
+            node::runtime_upgrade_store::apply_at_height(&self.state_trie, block.header.slot).await
         {
             warn!("Error applying runtime upgrades: {}", e);
         }
@@ -1171,15 +1167,13 @@ impl Node {
         let sync_requested = std::mem::take(&mut self.sync_requested);
         let urgent = sync_requested || desync;
 
-        let stalled =
-            self.last_finalize_at.elapsed() >= Duration::from_secs(SYNC_GRACE_SECS);
+        let stalled = self.last_finalize_at.elapsed() >= Duration::from_secs(SYNC_GRACE_SECS);
 
         // Non-urgent (stall) triggers are throttled; urgent ones retry quickly.
         if !urgent && !stalled {
             return Ok(());
         }
-        if !urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS)
-        {
+        if !urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS) {
             return Ok(());
         }
         if urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(2) {
@@ -1398,11 +1392,9 @@ impl Node {
 
     /// Get current validator list
     async fn get_validator_list(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
-        Ok(
-            node::governance_store::load_consensus_validators(&self.state_trie)
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
-        )
+        node::governance_store::load_consensus_validators(&self.state_trie)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })
     }
 
     /// Reload BFT + finality validator sets from the state trie when changed.
@@ -1461,7 +1453,7 @@ impl Node {
     async fn apply_reward(
         &mut self,
         validator: &[u8],
-        amount: u64,
+        amount: u128,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let address = {
             use sha2::{Digest, Sha256};
@@ -1479,7 +1471,7 @@ impl Node {
             None => common::types::Account::default(),
         };
 
-        account.balance += amount as u128;
+        account.balance = account.balance.saturating_add(amount);
         trie.insert(&address, &serde_json::to_vec(&account)?)?;
 
         Ok(())

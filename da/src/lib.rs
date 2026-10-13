@@ -62,7 +62,7 @@ fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
         let mut next = Vec::new();
         for pair in level.chunks(2) {
             let mut hasher = Sha256::new();
-            hasher.update(&pair[0]);
+            hasher.update(pair[0]);
             hasher.update(pair.get(1).unwrap_or(&pair[0]));
             next.push(hasher.finalize().into());
         }
@@ -75,7 +75,7 @@ fn merkle_proof(leaves: &[[u8; 32]], mut index: usize) -> Vec<[u8; 32]> {
     let mut proof = Vec::new();
     let mut level: Vec<[u8; 32]> = leaves.to_vec();
     while level.len() > 1 {
-        let sibling = if index % 2 == 0 {
+        let sibling = if index.is_multiple_of(2) {
             *level.get(index + 1).unwrap_or(&level[index])
         } else {
             level[index - 1]
@@ -85,7 +85,7 @@ fn merkle_proof(leaves: &[[u8; 32]], mut index: usize) -> Vec<[u8; 32]> {
         let mut next = Vec::new();
         for pair in level.chunks(2) {
             let mut hasher = Sha256::new();
-            hasher.update(&pair[0]);
+            hasher.update(pair[0]);
             hasher.update(pair.get(1).unwrap_or(&pair[0]));
             next.push(hasher.finalize().into());
         }
@@ -206,10 +206,8 @@ impl ErasureCoder {
             .map_err(|e| anyhow::anyhow!("Reed-Solomon reconstruct: {}", e))?;
 
         let mut data = Vec::new();
-        for i in 0..self.data_chunks {
-            if let Some(ref shard) = shards[i] {
-                data.extend_from_slice(shard);
-            }
+        for shard in shards.iter().take(self.data_chunks).flatten() {
+            data.extend_from_slice(shard);
         }
         Ok(data)
     }
@@ -410,11 +408,12 @@ mod tests {
         assert!(coder.decode(&insufficient_chunks).is_err());
 
         // Test decoding with mixed chunks (data + parity)
-        let mut mixed_chunks = Vec::new();
-        mixed_chunks.push(chunks[0].clone());
-        mixed_chunks.push(chunks[1].clone());
-        mixed_chunks.push(chunks[4].clone()); // Parity chunk
-        mixed_chunks.push(chunks[5].clone()); // Parity chunk
+        let mixed_chunks = vec![
+            chunks[0].clone(),
+            chunks[1].clone(),
+            chunks[4].clone(), // Parity chunk
+            chunks[5].clone(), // Parity chunk
+        ];
 
         // Note: Our simplified XOR implementation might not support arbitrary subsets perfectly
         // like Reed-Solomon, but let's verify what it does support.
@@ -429,7 +428,7 @@ mod tests {
 
         // For this MVP, we expect it to fail if data chunks are missing, even if we have parity
         // This test documents the current limitation
-        let result = coder.decode(&mixed_chunks);
+        let _result = coder.decode(&mixed_chunks);
         // It sorts by index and takes first data_chunks.
         // If we have indices 0, 1, 4, 5. It takes 0, 1, 4, 5.
         // It expects to find data in them.

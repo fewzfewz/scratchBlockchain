@@ -166,7 +166,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_response_roundtrip() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let original_request = BlockRequest {
@@ -175,25 +175,28 @@ mod tests {
         };
 
         let mut write_buffer = Vec::new();
-        let write_cursor = Cursor::new(&mut write_buffer);
+        let mut write_cursor = Cursor::new(&mut write_buffer);
         codec
-            .write_request(&protocol, write_cursor, original_request.clone())
+            .write_request(&protocol, &mut write_cursor, original_request.clone())
             .await
             .unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let decoded_request = codec.read_request(&protocol, read_cursor).await.unwrap();
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let decoded_request = codec
+            .read_request(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
 
         assert_eq!(original_request, decoded_request);
     }
 
     #[tokio::test]
     async fn test_multiple_messages_on_same_connection() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let mut write_buffer = Vec::new();
-        let write_cursor = Cursor::new(&mut write_buffer);
+        let mut write_cursor = Cursor::new(&mut write_buffer);
 
         let req1 = BlockRequest {
             start_height: 1,
@@ -205,17 +208,23 @@ mod tests {
         };
 
         codec
-            .write_request(&protocol, write_cursor, req1.clone())
+            .write_request(&protocol, &mut write_cursor, req1.clone())
             .await
             .unwrap();
         codec
-            .write_request(&protocol, write_cursor, req2.clone())
+            .write_request(&protocol, &mut write_cursor, req2.clone())
             .await
             .unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let decoded1 = codec.read_request(&protocol, read_cursor).await.unwrap();
-        let decoded2 = codec.read_request(&protocol, read_cursor).await.unwrap();
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let decoded1 = codec
+            .read_request(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
+        let decoded2 = codec
+            .read_request(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
 
         assert_eq!(req1, decoded1);
         assert_eq!(req2, decoded2);
@@ -223,7 +232,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_response_roundtrip() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let original_response = BlockResponse {
@@ -231,14 +240,17 @@ mod tests {
         };
 
         let mut write_buffer = Vec::new();
-        let write_cursor = Cursor::new(&mut write_buffer);
+        let mut write_cursor = Cursor::new(&mut write_buffer);
         codec
-            .write_response(&protocol, write_cursor, original_response.clone())
+            .write_response(&protocol, &mut write_cursor, original_response.clone())
             .await
             .unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let decoded_response = codec.read_response(&protocol, read_cursor).await.unwrap();
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let decoded_response = codec
+            .read_response(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
 
         assert_eq!(
             original_response.blocks.len(),
@@ -248,7 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_json_returns_error() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let mut write_buffer = Vec::new();
@@ -259,8 +271,8 @@ mod tests {
         use futures::io::AsyncWriteExt;
         write_buffer.write_all(invalid_data).await.unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let result = codec.read_request(&protocol, read_cursor).await;
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let result = codec.read_request(&protocol, &mut read_cursor).await;
 
         assert!(result.is_err(), "Invalid JSON should cause error");
         assert!(result.unwrap_err().kind() == io::ErrorKind::InvalidData);

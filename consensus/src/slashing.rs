@@ -76,10 +76,7 @@ impl SlashingTracker {
         }
 
         let val_copy = validator.clone();
-        let missed = self
-            .missed_blocks
-            .entry(validator)
-            .or_insert_with(VecDeque::new);
+        let missed = self.missed_blocks.entry(validator).or_default();
 
         missed.push_back(height);
 
@@ -242,6 +239,12 @@ pub struct SlashingEvidence {
     pub block_height: u64,
     pub timestamp: Instant,
     pub proof: Vec<u8>,
+}
+
+impl Default for EvidenceCollector {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl EvidenceCollector {

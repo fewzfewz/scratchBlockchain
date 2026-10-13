@@ -23,18 +23,22 @@ pub struct NodeConfig {
     pub network: NetworkConfig,
 
     /// Consensus parameters (block time, validator limits)
+    #[serde(default)]
     pub consensus: ConsensusConfig,
 
     /// Validator-specific configuration
+    #[serde(default)]
     pub validator: ValidatorConfig,
 
     /// Storage paths and settings
     pub storage: StorageConfig,
 
     /// API server configuration
+    #[serde(default)]
     pub api: ApiConfig,
 
     /// Metrics and monitoring configuration
+    #[serde(default)]
     pub metrics: MetricsConfig,
 
     /// Logging configuration
@@ -102,7 +106,7 @@ pub struct ConsensusConfig {
 }
 
 /// Validator-specific configuration
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 pub struct ValidatorConfig {
     /// Whether this node participates as a validator
     #[serde(default)]
@@ -190,6 +194,38 @@ pub struct LoggingConfig {
     /// Log file path (if empty, logs to stdout)
     #[serde(default)]
     pub file_path: String,
+}
+
+impl Default for ConsensusConfig {
+    fn default() -> Self {
+        Self {
+            block_time_ms: default_block_time_ms(),
+            max_validators: default_max_validators(),
+            min_validator_stake: default_min_validator_stake(),
+            epoch_length: default_epoch_length(),
+            max_rounds_per_height: default_max_rounds_per_height(),
+        }
+    }
+}
+
+impl Default for ApiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_true(),
+            address: default_api_address(),
+            cors_origins: Vec::new(),
+            rate_limit: default_rate_limit(),
+        }
+    }
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            address: default_metrics_address(),
+        }
+    }
 }
 
 impl Default for LoggingConfig {
@@ -387,11 +423,11 @@ impl NodeConfig {
     /// Validate configuration for consistency and safety
     fn validate(&self) -> Result<(), anyhow::Error> {
         // Validate ports are within valid range
-        if self.network.p2p_port == 0 || self.network.p2p_port > 65535 {
+        if self.network.p2p_port == 0 {
             anyhow::bail!("Invalid P2P port: {}", self.network.p2p_port);
         }
 
-        if self.network.rpc_port == 0 || self.network.rpc_port > 65535 {
+        if self.network.rpc_port == 0 {
             anyhow::bail!("Invalid RPC port: {}", self.network.rpc_port);
         }
 
@@ -421,6 +457,7 @@ impl NodeConfig {
     }
 
     /// Generate a default configuration for development/testing
+    #[allow(dead_code)]
     pub fn default_for_development() -> Self {
         Self {
             network: NetworkConfig {
@@ -483,8 +520,12 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
+    /// Serializes tests that read or write `NODE_*` env vars, which are process-wide.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_config_load_and_validate() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
@@ -510,6 +551,7 @@ mod tests {
 
     #[test]
     fn test_env_override() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         env::set_var("NODE_NETWORK_P2P_PORT", "9999");
 
         let dir = tempdir().unwrap();
@@ -536,6 +578,7 @@ mod tests {
 
     #[test]
     fn test_invalid_port_rejected() {
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 

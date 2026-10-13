@@ -1,6 +1,10 @@
+#[cfg(test)]
 use common::consensus_types::Vote;
+#[cfg(test)]
 use common::crypto::SigningKey;
+#[cfg(test)]
 use consensus::bft::BftEngine;
+#[cfg(test)]
 use consensus::ValidatorInfo;
 use proptest::prelude::*;
 
