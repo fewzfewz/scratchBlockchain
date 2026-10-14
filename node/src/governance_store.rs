@@ -140,30 +140,46 @@ async fn seed_governance(
 
 /// Apply any governance transactions in a block's extrinsics and persist the
 /// updated state. Non-governance transactions are ignored here.
+/// Apply the governance, staking and bridge-mint actions in `extrinsics`.
+/// Returns the actions that were refused (tx hash, reason), so their
+/// receipts can say so: the executor marks these txs successful up front,
+/// before the action itself is checked against the trie.
 pub async fn apply_extrinsics(
     trie: &Arc<Mutex<PatriciaTrie>>,
     chain_store: &Arc<ChainStore>,
     extrinsics: &[common::types::Transaction],
     current_block: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Vec<([u8; 32], String)>, Box<dyn std::error::Error>> {
     let mut state = load_or_init(trie).await?;
     let mut changed = false;
+    let mut refused = Vec::new();
 
     for tx in extrinsics {
         let body = tx.payload.as_slice();
         if crate::bridge_mint::is_bridge_mint_payload(body) {
             match crate::bridge_mint::apply(trie, chain_store, tx).await {
                 Ok(amount) => info!("🌉 Bridge mint of {} at block {}", amount, current_block),
-                Err(e) => warn!("Bridge mint rejected at block {}: {}", current_block, e),
+                Err(e) => {
+                    warn!("Bridge mint rejected at block {}: {}", current_block, e);
+                    refused.push((tx.hash(), e.to_string()));
+                }
             }
             continue;
         }
         if is_staking_payload(body) {
-            if let Err(e) = apply_staking_action(trie, chain_store, tx, body).await {
+            // All or nothing: an action that fails part-way (e.g. after
+            // lowering a stake but before queueing it) must leave no trace.
+            let root_before = trie.lock().await.root_hash();
+            let result = apply_staking_action(trie, chain_store, tx, body, current_block).await;
+            if result.is_err() {
+                trie.lock().await.restore_root(root_before)?;
+            }
+            if let Err(e) = result {
                 warn!(
                     "Staking transaction rejected at block {}: {}",
                     current_block, e
                 );
+                refused.push((tx.hash(), e));
             }
             continue;
         }
@@ -192,10 +208,13 @@ pub async fn apply_extrinsics(
                     }
                 }
             }
-            Err(e) => warn!(
-                "Governance transaction rejected at block {}: {}",
-                current_block, e
-            ),
+            Err(e) => {
+                warn!(
+                    "Governance transaction rejected at block {}: {}",
+                    current_block, e
+                );
+                refused.push((tx.hash(), e.to_string()));
+            }
         }
     }
 
@@ -203,7 +222,7 @@ pub async fn apply_extrinsics(
         let data = serde_json::to_vec(&state)?;
         trie.lock().await.insert(GOVERNANCE_KEY, &data)?;
     }
-    Ok(())
+    Ok(refused)
 }
 
 /// Staking actions carried as signed transaction payloads:
@@ -226,18 +245,32 @@ fn staking_action(payload: &[u8]) -> Option<(String, serde_json::Value)> {
     }
     let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
     let action = value.get("action")?.as_str()?.to_string();
-    matches!(action.as_str(), "register_validator" | "delegate").then_some((action, value))
+    matches!(
+        action.as_str(),
+        "register_validator" | "delegate" | "unbond" | "undelegate" | "unjail" | "evidence"
+    )
+    .then_some((action, value))
 }
 
 /// Tokens a staking payload bonds, if it is a well-formed staking action.
+/// Balance a staking transaction locks up front (zero for actions that do
+/// not bond anything: unbond, undelegate, unjail, evidence).
 pub fn staking_bond_amount(payload: &[u8]) -> Option<u128> {
     let (action, value) = staking_action(payload)?;
-    let field = if action == "register_validator" {
-        "stake"
-    } else {
-        "amount"
-    };
-    parse_amount(&value, field).ok()
+    match action.as_str() {
+        "register_validator" => parse_amount(&value, "stake").ok(),
+        "delegate" => parse_amount(&value, "amount").ok(),
+        _ => Some(0),
+    }
+}
+
+fn parse_validator_field(value: &serde_json::Value) -> Result<Address, String> {
+    value
+        .get("validator")
+        .and_then(|v| v.as_str())
+        .and_then(|s| hex::decode(s.trim_start_matches("0x")).ok())
+        .and_then(|b| <[u8; 20]>::try_from(b.as_slice()).ok())
+        .ok_or_else(|| "Missing or invalid validator".to_string())
 }
 
 fn parse_amount(value: &serde_json::Value, field: &str) -> Result<u128, String> {
@@ -264,6 +297,7 @@ async fn apply_staking_action(
     chain_store: &Arc<ChainStore>,
     tx: &common::types::Transaction,
     payload: &[u8],
+    slot: u64,
 ) -> Result<(), String> {
     let (action, value) = staking_action(payload).ok_or("Not a staking action")?;
     match action.as_str() {
@@ -289,12 +323,7 @@ async fn apply_staking_action(
         }
         "delegate" => {
             let amount = parse_amount(&value, "amount")?;
-            let validator = value
-                .get("validator")
-                .and_then(|v| v.as_str())
-                .and_then(|s| hex::decode(s.trim_start_matches("0x")).ok())
-                .and_then(|b| <[u8; 20]>::try_from(b.as_slice()).ok())
-                .ok_or("Missing or invalid validator")?;
+            let validator = parse_validator_field(&value)?;
             let (balance, _) = crate::accounts::load(chain_store, &tx.sender);
             if balance < amount {
                 return Err(format!("Insufficient balance to bond {}", amount));
@@ -302,6 +331,27 @@ async fn apply_staking_action(
             apply_delegate(trie, chain_store, tx.sender, validator, amount).await?;
             bond(chain_store, &tx.sender, amount)?;
             Ok(())
+        }
+        "unbond" => {
+            let amount = parse_amount(&value, "amount")?;
+            crate::staking::unbond(trie, &tx.sender, &tx.public_key, amount, slot).await
+        }
+        "undelegate" => {
+            let amount = parse_amount(&value, "amount")?;
+            let validator = parse_validator_field(&value)?;
+            crate::staking::undelegate(trie, chain_store, &tx.sender, &validator, amount, slot)
+                .await
+        }
+        "unjail" => crate::staking::unjail(trie, &tx.sender, &tx.public_key, slot).await,
+        "evidence" => {
+            let evidence: common::consensus_types::DoubleSignEvidence = value
+                .get("evidence")
+                .cloned()
+                .and_then(|e| serde_json::from_value(e).ok())
+                .ok_or("Missing or malformed evidence")?;
+            crate::staking::apply_evidence(trie, &evidence, slot)
+                .await
+                .map(|_| ())
         }
         other => Err(format!("Unknown staking action {}", other)),
     }
@@ -545,31 +595,57 @@ pub async fn register_validator(
         blocks_missed: 0,
         delegator_count: 0,
         total_delegated: "0".to_string(),
+        jailed: false,
+        jailed_until: 0,
+        tombstoned: false,
+        missed_in_row: 0,
+        missed_since: 0,
+        slashed: String::new(),
     });
     persist_validators(trie, &validators).await
 }
 
 #[derive(serde::Deserialize, serde::Serialize)]
-struct ValidatorEntry {
-    address: String,
+pub(crate) struct ValidatorEntry {
+    pub(crate) address: String,
     #[serde(default)]
-    public_key: String,
-    stake: serde_json::Value,
+    pub(crate) public_key: String,
+    pub(crate) stake: serde_json::Value,
     #[serde(default)]
-    commission_rate: u64,
+    pub(crate) commission_rate: u64,
     #[serde(default)]
-    is_active: bool,
+    pub(crate) is_active: bool,
     #[serde(default)]
-    blocks_produced: u64,
+    pub(crate) blocks_produced: u64,
     #[serde(default)]
-    blocks_missed: u64,
+    pub(crate) blocks_missed: u64,
     #[serde(default)]
-    delegator_count: u64,
+    pub(crate) delegator_count: u64,
     #[serde(default)]
-    total_delegated: String,
+    pub(crate) total_delegated: String,
+    /// Out of the set for missed proposer turns (or for good, if tombstoned).
+    #[serde(default)]
+    pub(crate) jailed: bool,
+    /// First block at which `unjail` is accepted.
+    #[serde(default)]
+    pub(crate) jailed_until: u64,
+    /// Slashed for double signing; can never rejoin.
+    #[serde(default)]
+    pub(crate) tombstoned: bool,
+    /// Consecutive proposer turns missed.
+    #[serde(default)]
+    pub(crate) missed_in_row: u64,
+    /// Block at which the current streak of missed turns began.
+    #[serde(default)]
+    pub(crate) missed_since: u64,
+    /// Total stake burned by slashing.
+    #[serde(default)]
+    pub(crate) slashed: String,
 }
 
-async fn load_validators(trie: &Arc<Mutex<PatriciaTrie>>) -> Result<Vec<ValidatorEntry>, String> {
+pub(crate) async fn load_validators(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+) -> Result<Vec<ValidatorEntry>, String> {
     let guard = trie.lock().await;
     let data = guard
         .get(b"validators")
@@ -578,7 +654,7 @@ async fn load_validators(trie: &Arc<Mutex<PatriciaTrie>>) -> Result<Vec<Validato
     serde_json::from_slice(&data).map_err(|e| e.to_string())
 }
 
-async fn persist_validators(
+pub(crate) async fn persist_validators(
     trie: &Arc<Mutex<PatriciaTrie>>,
     validators: &[ValidatorEntry],
 ) -> Result<(), String> {
@@ -590,7 +666,7 @@ async fn persist_validators(
     Ok(())
 }
 
-fn parse_stake_value(v: &serde_json::Value) -> u128 {
+pub(crate) fn parse_stake_value(v: &serde_json::Value) -> u128 {
     match v {
         serde_json::Value::String(s) => s.parse().unwrap_or(0),
         serde_json::Value::Number(n) => n.as_u64().unwrap_or(0) as u128,
@@ -605,85 +681,19 @@ fn parse_stake_value(v: &serde_json::Value) -> u128 {
 ///   leader schedule expected to propose this height but did not.
 pub async fn record_block_stats(
     trie: &Arc<Mutex<PatriciaTrie>>,
+    certifying: &[consensus::ValidatorInfo],
     slot: u64,
     proposer_pubkey: &[u8],
 ) -> Result<(), String> {
-    let mut validators = load_validators(trie).await?;
-    if validators.is_empty() {
-        return Ok(());
-    }
-    let proposer_hex = hex::encode(proposer_pubkey);
-    // BFT height h finalizes the block at slot h - 1, and the proposer is
-    // chosen by BFT height.
-    let expected = expected_round0_proposer(&validators, slot.saturating_add(1));
-
-    for entry in validators.iter_mut() {
-        if entry.public_key.eq_ignore_ascii_case(&proposer_hex) {
-            entry.blocks_produced = entry.blocks_produced.saturating_add(1);
-        }
-    }
-    if let Some(expected_pubkey) = expected {
-        if !expected_pubkey.eq_ignore_ascii_case(&proposer_hex) {
-            if let Some(entry) = validators
-                .iter_mut()
-                .find(|v| v.public_key.eq_ignore_ascii_case(&expected_pubkey))
-            {
-                entry.blocks_missed = entry.blocks_missed.saturating_add(1);
-            }
-        }
-    }
-    persist_validators(trie, &validators).await
+    crate::staking::record_turn(trie, certifying, slot, proposer_pubkey).await
 }
 
-/// Deterministic round-0 proposer for a height, using the same stake-weighted
-/// selection as BFT (`common::consensus_types::select_proposer`) over the same
-/// stake (own + delegated) that `load_consensus_validators` feeds the engine.
-fn expected_round0_proposer(validators: &[ValidatorEntry], height: u64) -> Option<String> {
-    let set: Vec<(Vec<u8>, u128)> = validators
-        .iter()
-        .filter(|v| v.is_active && !v.public_key.is_empty())
-        .filter_map(|v| {
-            let pk = hex::decode(&v.public_key).ok()?;
-            let delegated: u128 = v.total_delegated.parse().unwrap_or(0);
-            let stake = parse_stake_value(&v.stake).saturating_add(delegated).max(1);
-            Some((pk, stake))
-        })
-        .collect();
-    common::consensus_types::select_proposer(
-        set.iter().map(|(pk, s)| (pk.as_slice(), *s)),
-        height,
-        0,
-    )
-    .map(hex::encode)
-}
 
 /// Load active validators for BFT / finality hot-reload (stake + delegated).
 pub async fn load_consensus_validators(
     trie: &Arc<Mutex<PatriciaTrie>>,
 ) -> Result<Vec<consensus::ValidatorInfo>, String> {
-    let entries = load_validators(trie).await?;
-    Ok(entries
-        .into_iter()
-        .filter(|v| v.is_active)
-        .filter_map(|v| {
-            let public_key = hex::decode(&v.public_key).ok()?;
-            if public_key.is_empty() {
-                return None;
-            }
-            let base = parse_stake_value(&v.stake);
-            let delegated: u128 = v.total_delegated.parse().unwrap_or(0);
-            // Keep the full wei stake as u128. Clamping to u64::MAX would give
-            // every validator identical (maximum) voting power, so a single
-            // validator could finalize solo — a safety violation that forked
-            // the network.
-            let total = base.saturating_add(delegated);
-            Some(consensus::ValidatorInfo {
-                public_key,
-                stake: total.max(1),
-                slashed: false,
-            })
-        })
-        .collect())
+    crate::staking::consensus_set(trie).await
 }
 
 #[cfg(test)]
@@ -738,7 +748,7 @@ mod tests {
                 0,
             )
             .unwrap();
-            record_block_stats(&trie, slot, &proposer).await.unwrap();
+            record_block_stats(&trie, &engine_set, slot, &proposer).await.unwrap();
         }
         let after = load_validators(&trie).await.unwrap();
         assert!(after.iter().all(|v| v.blocks_missed == 0));

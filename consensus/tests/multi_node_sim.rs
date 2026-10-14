@@ -179,7 +179,7 @@ impl Sim {
                 }
                 BftEvent::Equivocation(e) => self.nodes[i].evidence.push(e),
                 BftEvent::BehindSync(_) | BftEvent::NeedBlock(_, _) => self.sync(i),
-                BftEvent::NewRound(_, _) | BftEvent::Timeout(_) => {}
+                BftEvent::NewRound(_, _) | BftEvent::Timeout { .. } => {}
             }
         }
     }

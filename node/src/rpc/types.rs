@@ -92,6 +92,16 @@ pub(super) struct ValidatorInfo {
     pub(super) blocks_missed: u64,
     pub(super) delegator_count: u64,
     pub(super) total_delegated: String,
+    #[serde(default)]
+    jailed: bool,
+    #[serde(default)]
+    jailed_until: u64,
+    #[serde(default)]
+    tombstoned: bool,
+    #[serde(default)]
+    missed_in_row: u64,
+    #[serde(default)]
+    slashed: String,
 }
 
 #[derive(Debug, Serialize)]

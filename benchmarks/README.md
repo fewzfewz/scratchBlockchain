@@ -32,9 +32,30 @@ Devnet end to end (4 validators + 2 RPC nodes in Docker on one laptop,
 | Load | Included | Throughput | Submit → finalized |
 |---|---|---|---|
 | 500 transfers in 0.8 s | 500/500 | ~340 tx/s | p50 0.7 s, p95 0.9 s |
-| 5,000 transfers in 5.4 s | 5,000/5,000 | ~240 tx/s sustained | p50 11.5 s, p95 16.4 s (queueing) |
+| 5,000 transfers in 5.4 s (before) | 5,000/5,000 | ~240 tx/s sustained | p50 11.5 s, p95 16.4 s (queueing) |
+| 5,000 transfers in 6–7 s (now) | 5,000/5,000 | ~415–445 tx/s sustained | p50 4.0–7.1 s, p95 5.8–8.2 s |
 
-Under sustained load blocks fill to the gas limit (~1,400 transfers) and
-each full block takes a few seconds end to end: JSON encoding, gossip, and
-every validator re-verifying every signature. Those are the next things to
-optimize (binary encoding, parallel or cached signature checks).
+What changed between the two 5,000-transfer rows, in order of effect:
+
+1. Per-block disk syncs: every trie node written while a block was staged
+   forced an fsync of the database, although staged writes are only in
+   memory; now there is one sync per block, after it is written.
+2. Consensus timeouts: a timeout that expired at one height could be
+   handled after the engine had moved to the next and throw away that
+   height's round 0; timeouts now carry their height/round and fire once,
+   and every new height schedules its own propose timeout. The prevote and
+   precommit windows went from 1 s to 3 s / 2 s: a full block takes peers
+   1–2.5 s to receive and check, so 1 s failed exactly the busiest rounds.
+   (Runs at ~600 tx/s were measured before the propose timeout was
+   scheduled per height; that version stalled for good whenever a round-0
+   proposer was offline.)
+3. Signature checks: each transaction's Ed25519 signature is verified once
+   per node (RPC/mempool) and cached; the remaining checks in a block run in
+   parallel. Proposals already validated are not re-validated when the
+   proposer rebroadcasts them.
+4. Gossip and sync use MessagePack instead of JSON (~1.7× smaller blocks).
+
+A full block (~1,400 transfers) now costs ~60 ms to build, ~100 ms to
+validate and ~200–300 ms to execute and commit on each node. The submitting
+client (one Node.js process, ~500–950 tx/s) is now a large share of the
+measured time.

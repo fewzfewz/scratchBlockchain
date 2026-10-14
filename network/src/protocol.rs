@@ -43,8 +43,7 @@ impl Codec for BlockExchangeCodec {
         T: AsyncRead + Unpin + Send,
     {
         let raw_bytes = read_length_prefixed(io).await?;
-        serde_json::from_slice(&raw_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        common::wire::decode(&raw_bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     async fn read_response<T>(
@@ -56,8 +55,7 @@ impl Codec for BlockExchangeCodec {
         T: AsyncRead + Unpin + Send,
     {
         let raw_bytes = read_length_prefixed(io).await?;
-        serde_json::from_slice(&raw_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        common::wire::decode(&raw_bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     async fn write_request<T>(
@@ -69,9 +67,9 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let json_bytes =
-            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        write_length_prefixed(io, &json_bytes).await
+        let bytes =
+            common::wire::encode(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        write_length_prefixed(io, &bytes).await
     }
 
     async fn write_response<T>(
@@ -83,9 +81,9 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let json_bytes =
-            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        write_length_prefixed(io, &json_bytes).await
+        let bytes =
+            common::wire::encode(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        write_length_prefixed(io, &bytes).await
     }
 }
 
@@ -171,6 +169,7 @@ mod tests {
                 base_fee: 0,
                 last_commit_hash: [0; 32],
                 proposer: [0; 32],
+                next_validators_hash: [0; 32],
             },
             extrinsics: vec![],
             commit: None,

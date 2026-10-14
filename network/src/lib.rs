@@ -690,7 +690,7 @@ impl NetworkService {
                     }
                 }
 
-                let tx = match serde_json::from_slice::<TransactionMessage>(&message.data) {
+                let tx = match common::wire::decode::<TransactionMessage>(&message.data) {
                     Ok(tx_msg) => tx_msg.transaction,
                     Err(e) => {
                         warn!("Failed to deserialize transaction: {}", e);
@@ -709,7 +709,7 @@ impl NetworkService {
                 Accept
             }
 
-            BLOCK_TOPIC => match serde_json::from_slice::<BlockMessage>(&message.data) {
+            BLOCK_TOPIC => match common::wire::decode::<BlockMessage>(&message.data) {
                 Ok(block_msg) => {
                     if let Err(e) = validate::block(&block_msg.block) {
                         warn!("Rejecting gossiped block from {}: {}", source, e);
@@ -747,7 +747,7 @@ impl NetworkService {
                     }
                 }
 
-                match serde_json::from_slice::<ConsensusMessage>(&message.data) {
+                match common::wire::decode::<ConsensusMessage>(&message.data) {
                     Ok(msg) => {
                         if let Err(e) = validate::consensus_message(&msg) {
                             warn!("Rejecting consensus message from {}: {}", source, e);
@@ -861,7 +861,7 @@ impl NetworkService {
         let msg = TransactionMessage { transaction: tx };
         let topic = IdentTopic::new(TRANSACTION_TOPIC);
 
-        match serde_json::to_vec(&msg) {
+        match common::wire::encode(&msg) {
             Ok(data) => {
                 self.bytes_tx += data.len() as u64;
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
@@ -881,7 +881,7 @@ impl NetworkService {
         let msg = BlockMessage { block };
         let topic = IdentTopic::new(BLOCK_TOPIC);
 
-        match serde_json::to_vec(&msg) {
+        match common::wire::encode(&msg) {
             Ok(data) => {
                 self.bytes_tx += data.len() as u64;
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {
@@ -900,7 +900,7 @@ impl NetworkService {
     fn broadcast_consensus_message(&mut self, msg: ConsensusMessage) {
         let topic = IdentTopic::new(CONSENSUS_TOPIC);
 
-        match serde_json::to_vec(&msg) {
+        match common::wire::encode(&msg) {
             Ok(data) => {
                 self.bytes_tx += data.len() as u64;
                 if let Err(e) = self.swarm.behaviour_mut().gossipsub.publish(topic, data) {

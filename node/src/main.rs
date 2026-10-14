@@ -39,7 +39,7 @@ use config::NodeConfig;
 use rewards::{RewardConfig, RewardManager};
 
 // External imports
-use common::consensus_types::{ConsensusMessage, Step};
+use common::consensus_types::ConsensusMessage;
 use common::crypto::SigningKey;
 use common::traits::Consensus;
 use common::types::Block;
@@ -260,6 +260,14 @@ struct Node {
 
     // Transaction pool (mempool + MEV + account abstraction)
     tx_pool: Arc<TxPool>,
+    /// This validator's key, used to sign double-sign evidence transactions.
+    evidence_key: ed25519_dalek::SigningKey,
+    /// Validators whose double signing we already reported on chain.
+    reported_equivocators: std::collections::HashSet<Vec<u8>>,
+    /// (height, block hash) of proposals that passed validation. The
+    /// proposer rebroadcasts every second, and re-checking a full block on
+    /// each copy took ~100 ms of the main loop.
+    validated_proposals: std::collections::HashSet<(u64, [u8; 32])>,
 
     // Slashing tracker
     slashing_tracker: Arc<Mutex<SlashingTracker>>,
@@ -665,6 +673,13 @@ impl Node {
         );
 
         let max_gas_per_block = config.security.max_gas_per_block;
+        let evidence_key = {
+            let seed: [u8; 32] = signing_key
+                .to_bytes()
+                .try_into()
+                .map_err(|_| "validator key is not a 32-byte Ed25519 seed")?;
+            ed25519_dalek::SigningKey::from_bytes(&seed)
+        };
         Ok(Self {
             config,
             chain_store,
@@ -680,6 +695,9 @@ impl Node {
             block_producer,
             reward_manager,
             tx_pool,
+            evidence_key,
+            reported_equivocators: std::collections::HashSet::new(),
+            validated_proposals: std::collections::HashSet::new(),
             slashing_tracker,
             network_cmd_sender,
             network_event_receiver,
@@ -732,7 +750,7 @@ impl Node {
 
             tokio::select! {
                 _ = consensus_interval.tick() => {
-                    let engine = self.bft_engine.lock().await;
+                    let mut engine = self.bft_engine.lock().await;
                     if let Some(timeout) = engine.check_timeout() {
                         pending_events.push(timeout);
                     }
@@ -854,8 +872,28 @@ impl Node {
                 if is_proposer {
                     info!("🎁 I am the proposer for round {}/{}", height, round);
                     let mut producer = self.block_producer.lock().await;
+                    match node::staking::next_validators_hash(
+                        &self.state_trie,
+                        height.saturating_sub(1),
+                    )
+                    .await
+                    {
+                        Ok(hash) => producer.next_validators_hash = hash,
+                        Err(e) => {
+                            warn!("Cannot compute the next validator set: {}", e);
+                            return Ok(());
+                        }
+                    }
+                    let produce_started = Instant::now();
                     match producer.produce_block().await {
                         Ok(block) => {
+                            if !block.extrinsics.is_empty() {
+                                info!(
+                                    "⏱️ Built block with {} txs in {} ms",
+                                    block.extrinsics.len(),
+                                    produce_started.elapsed().as_millis()
+                                );
+                            }
                             info!(
                                 "✅ Produced block with {} transactions",
                                 block.extrinsics.len()
@@ -869,15 +907,16 @@ impl Node {
                 }
             }
 
-            BftEvent::Timeout(step) => {
-                warn!("⏰ Timeout at step {:?}", step);
+            BftEvent::Timeout {
+                step,
+                height,
+                round,
+            } => {
                 let mut engine = self.bft_engine.lock().await;
-                let events = match step {
-                    Step::Propose => engine.handle_timeout_propose(),
-                    Step::Prevote => engine.handle_timeout_prevote(),
-                    Step::Precommit => engine.handle_timeout_precommit(),
-                    Step::Commit => vec![],
-                };
+                if (engine.height, engine.round, engine.step) == (height, round, step) {
+                    warn!("⏰ Timeout at step {:?}", step);
+                }
+                let events = engine.handle_timeout(step, height, round);
                 new_events.extend(events);
             }
 
@@ -901,6 +940,12 @@ impl Node {
                         first,
                         second,
                     );
+                    if self.reported_equivocators.insert(evidence.first.voter.clone()) {
+                        if let Err(e) = self.submit_evidence(&evidence).await {
+                            warn!("Could not submit double-sign evidence: {}", e);
+                            self.reported_equivocators.remove(&evidence.first.voter);
+                        }
+                    }
                 }
             }
 
@@ -947,12 +992,40 @@ impl Node {
                                 .collect();
                             (engine.height, keys)
                         };
-                        if proposal.height == engine_height {
-                            if let Err(e) = self.validate_proposed_block(
-                                &proposal.block,
-                                &validator_keys,
-                                engine_height,
-                            ) {
+                        let proposal_key = (proposal.height, proposal.block.hash());
+                        self.validated_proposals.retain(|(h, _)| *h >= engine_height);
+                        if proposal.height == engine_height
+                            && !self.validated_proposals.contains(&proposal_key)
+                        {
+                            let next_set = node::staking::next_validators_hash(
+                                &self.state_trie,
+                                engine_height.saturating_sub(1),
+                            )
+                            .await;
+                            let validate_started = Instant::now();
+                            let checked = match next_set {
+                                Ok(hash) if hash != proposal.block.header.next_validators_hash => {
+                                    Err("next_validators_hash does not match our next validator set"
+                                        .to_string())
+                                }
+                                Ok(_) => self.validate_proposed_block(
+                                    &proposal.block,
+                                    &validator_keys,
+                                    engine_height,
+                                ),
+                                Err(e) => Err(e),
+                            };
+                            if !proposal.block.extrinsics.is_empty() {
+                                info!(
+                                    "⏱️ Validated proposal ({} txs) in {} ms",
+                                    proposal.block.extrinsics.len(),
+                                    validate_started.elapsed().as_millis()
+                                );
+                            }
+                            if checked.is_ok() {
+                                self.validated_proposals.insert(proposal_key);
+                            }
+                            if let Err(e) = checked {
                                 // Not voting for it: we prevote nil on timeout.
                                 warn!(
                                     "Rejecting proposal at height {} round {}: {}",
@@ -1174,8 +1247,10 @@ impl Node {
         }
         let proposer = block.header.proposer.to_vec();
 
+        let started = Instant::now();
         self.staged.begin()?;
         let result = self.stage_block_effects(block, proposer).await;
+        let effects_ms = started.elapsed().as_millis();
         let receipts = match result {
             Ok(receipts) => receipts,
             Err(e) => {
@@ -1200,6 +1275,15 @@ impl Node {
             block.header.slot,
             hex::encode(root)
         );
+        if !block.extrinsics.is_empty() {
+            info!(
+                "⏱️ Applied block {} ({} txs): {} ms total, {} ms of it executing and staging",
+                block.header.slot,
+                block.extrinsics.len(),
+                started.elapsed().as_millis(),
+                effects_ms
+            );
+        }
 
         self.metrics.record_block();
         self.metrics.update_finalized_height(block.header.slot);
@@ -1227,13 +1311,32 @@ impl Node {
         self.staged
             .put(storage::ColumnFamily::State, CERT_SET_KEY, &cert_set)?;
 
+        // Epoch rotation and matured unbonding, before the block's own
+        // transactions (so the next set is fixed by the state before it).
+        let certifying = node::staking::begin_block(
+            &self.state_trie,
+            &self.chain_store,
+            block.header.slot,
+        )
+        .await?;
+
+        let exec_started = Instant::now();
         let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
+        if !block.extrinsics.is_empty() {
+            info!(
+                "⏱️ Executed {} txs of block {} in {} ms",
+                block.extrinsics.len(),
+                block.header.slot,
+                exec_started.elapsed().as_millis()
+            );
+        }
 
         let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
 
         if !proposer.is_empty() {
             if let Err(e) = node::governance_store::record_block_stats(
                 &self.state_trie,
+                &certifying,
                 block.header.slot,
                 &proposer,
             )
@@ -1255,7 +1358,8 @@ impl Node {
 
         // Governance actions, from authenticated txs only
         let authenticated = node::block_producer::BlockExecutor::successful_txs(block, &receipts);
-        if let Err(e) = node::governance_store::apply_extrinsics(
+        let mut receipts = receipts;
+        match node::governance_store::apply_extrinsics(
             &self.state_trie,
             &self.chain_store,
             &authenticated,
@@ -1263,7 +1367,21 @@ impl Node {
         )
         .await
         {
-            warn!("Error applying governance actions: {}", e);
+            // Record refused actions as failed (the tx still paid gas and
+            // used its nonce, like a reverted call).
+            Ok(refused) => {
+                for (hash, reason) in refused {
+                    let Some(i) = block.extrinsics.iter().position(|t| t.hash() == hash) else {
+                        continue;
+                    };
+                    let receipt =
+                        node::block_producer::BlockExecutor::failed_receipt(reason);
+                    self.chain_store
+                        .put_receipt(&hash, &serde_json::to_vec(&receipt)?)?;
+                    receipts[i] = receipt;
+                }
+            }
+            Err(e) => warn!("Error applying governance actions: {}", e),
         }
 
         if let Err(e) =
@@ -1704,6 +1822,52 @@ impl Node {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let address = node::accounts::address_of_public_key(validator);
         node::accounts::credit(&self.chain_store, &address, amount)?;
+        Ok(())
+    }
+
+    /// Put double-sign evidence on chain as a staking transaction signed by
+    /// this validator, so every node slashes the equivocator (a local record
+    /// alone changes nothing).
+    async fn submit_evidence(
+        &self,
+        evidence: &common::consensus_types::DoubleSignEvidence,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let address = common::crypto::derive_address_from_public_key(
+            &self.evidence_key.verifying_key().to_bytes(),
+        );
+        let (_, onchain) = node::accounts::load(&self.chain_store, &address);
+        let pending = self
+            .tx_pool
+            .mempool_snapshot(100_000)
+            .iter()
+            .filter(|t| t.sender == address && t.nonce >= onchain)
+            .count() as u64;
+        let mut tx = common::types::Transaction {
+            sender: address,
+            nonce: onchain + pending,
+            public_key: [0; 32],
+            payload: serde_json::to_vec(&serde_json::json!({
+                "action": "evidence",
+                "evidence": evidence,
+            }))?,
+            signature: vec![],
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            chain_id: Some(self.chain_id),
+            to: None,
+            value: 0,
+        };
+        tx.sign_with(&self.evidence_key);
+        self.tx_pool.add_transaction(tx.clone())?;
+        self.network_cmd_sender
+            .send(NetworkCommand::BroadcastTransaction(tx))
+            .await?;
+        warn!(
+            "⚔️ Submitted double-sign evidence against {} at height {}",
+            hex::encode(&evidence.first.voter[..8]),
+            evidence.first.height
+        );
         Ok(())
     }
 

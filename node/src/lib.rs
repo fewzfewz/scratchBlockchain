@@ -12,6 +12,7 @@ pub mod metrics;
 pub mod rpc;
 pub mod runtime_upgrade;
 pub mod runtime_upgrade_store;
+pub mod staking;
 pub mod state_root;
 pub mod test_utils;
 pub mod tx_pool;

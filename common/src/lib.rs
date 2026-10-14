@@ -5,3 +5,4 @@ pub mod merkle;
 pub mod traits;
 pub mod types;
 pub mod validation;
+pub mod wire;

@@ -7,6 +7,7 @@ use std::collections::HashSet;
 pub const VOTE_DOMAIN: &[u8] = b"NEBULA_VOTE_V1";
 pub const PROPOSAL_DOMAIN: &[u8] = b"NEBULA_PROPOSAL_V1";
 pub const COMMIT_DOMAIN: &[u8] = b"NEBULA_COMMIT_V1";
+pub const VALIDATOR_SET_DOMAIN: &[u8] = b"NEBULA_VALSET_V1";
 
 /// BFT quorum: strictly more than two thirds of the total stake.
 ///
@@ -256,6 +257,45 @@ pub struct ValidatorInfo {
     pub stake: u128,
     /// Whether this validator has been slashed
     pub slashed: bool,
+}
+
+/// Canonical hash of a validator set: the voting validators (not slashed),
+/// sorted by public key, each as length-prefixed key plus stake. Headers
+/// commit to the next block's set with it, which lets a light client accept
+/// a set change by checking a supplied set against the header.
+pub fn validator_set_hash(validators: &[ValidatorInfo]) -> Hash {
+    use sha2::{Digest, Sha256};
+    let mut voting: Vec<&ValidatorInfo> = validators.iter().filter(|v| !v.slashed).collect();
+    voting.sort_by(|a, b| a.public_key.cmp(&b.public_key));
+    let mut hasher = Sha256::new();
+    hasher.update(VALIDATOR_SET_DOMAIN);
+    hasher.update((voting.len() as u64).to_le_bytes());
+    for v in voting {
+        hasher.update((v.public_key.len() as u64).to_le_bytes());
+        hasher.update(&v.public_key);
+        hasher.update(v.stake.to_le_bytes());
+    }
+    hasher.finalize().into()
+}
+
+#[cfg(test)]
+mod validator_set_hash_tests {
+    use super::*;
+
+    fn v(k: u8, stake: u128) -> ValidatorInfo {
+        ValidatorInfo { public_key: vec![k; 32], stake, slashed: false }
+    }
+
+    #[test]
+    fn order_independent_and_stake_sensitive() {
+        let a = validator_set_hash(&[v(1, 10), v(2, 20)]);
+        assert_eq!(a, validator_set_hash(&[v(2, 20), v(1, 10)]));
+        assert_ne!(a, validator_set_hash(&[v(1, 10), v(2, 21)]));
+        assert_ne!(a, validator_set_hash(&[v(1, 10)]));
+        let mut slashed = v(3, 5);
+        slashed.slashed = true;
+        assert_eq!(a, validator_set_hash(&[v(1, 10), v(2, 20), slashed]));
+    }
 }
 
 #[cfg(test)]

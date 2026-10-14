@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 parking_lot = "0.12"
+rayon = "1.7"
 common = { path = "../common" }
 network = { path = "../network" }
 consensus = { path = "../consensus" }

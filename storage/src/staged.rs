@@ -116,6 +116,8 @@ impl StagedStore {
         }
         batch.put(ColumnFamily::Meta, STATE_LTHASH_KEY, lthash.to_bytes());
         self.inner.write_batch(batch)?;
+        // One sync per block, once the whole block is on disk.
+        self.inner.flush()?;
         Ok(lthash)
     }
 
@@ -240,7 +242,14 @@ impl KeyValueStore for StagedStore {
         })
     }
 
+    /// While a block is staged its writes are only in memory, so there is
+    /// nothing to sync: `commit` syncs once after writing the block. (Syncing
+    /// here on every trie node write cost up to ~0.8 s per non-empty block,
+    /// long enough to time out the next consensus round.)
     fn flush(&self) -> Result<(), Box<dyn Error>> {
+        if self.is_staging() {
+            return Ok(());
+        }
         self.inner.flush()
     }
 

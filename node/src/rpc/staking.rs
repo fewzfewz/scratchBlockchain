@@ -53,6 +53,43 @@ pub(super) async fn handle_validators(
     }
 }
 
+/// Staking parameters, the set consensus is using this epoch, and stake
+/// waiting to be returned.
+pub(super) async fn handle_staking(
+    state_trie: Arc<Mutex<PatriciaTrie>>,
+    chain_store: Arc<ChainStore>,
+) -> Result<impl warp::Reply, Infallible> {
+    use crate::staking as st;
+    let height = chain_store.get_latest_height().ok().flatten().unwrap_or(0);
+    let set = st::consensus_set(&state_trie).await.unwrap_or_default();
+    let unbonding = st::unbonding_queue(&state_trie).await.unwrap_or_default();
+    let epoch_set: Vec<serde_json::Value> = set
+        .iter()
+        .map(|v| {
+            serde_json::json!({
+                "public_key": hex::encode(&v.public_key),
+                "voting_power": v.stake.to_string(),
+            })
+        })
+        .collect();
+    Ok(warp::reply::json(&serde_json::json!({
+        "height": height,
+        "epoch": height / st::EPOCH_BLOCKS,
+        "next_epoch_at": (height / st::EPOCH_BLOCKS + 1) * st::EPOCH_BLOCKS,
+        "params": {
+            "epoch_blocks": st::EPOCH_BLOCKS,
+            "unbonding_blocks": st::UNBONDING_BLOCKS,
+            "jail_blocks": st::JAIL_BLOCKS,
+            "max_missed_turns": st::MAX_MISSED_TURNS,
+            "double_sign_slash_bps": st::DOUBLE_SIGN_SLASH_BPS.to_string(),
+            "min_self_stake": st::MIN_SELF_STAKE.to_string(),
+        },
+        "epoch_set": epoch_set,
+        "epoch_set_hash": hex::encode(common::consensus_types::validator_set_hash(&set)),
+        "unbonding": unbonding,
+    })))
+}
+
 pub(super) async fn handle_delegations(
     address_str: String,
     chain_store: Arc<ChainStore>,

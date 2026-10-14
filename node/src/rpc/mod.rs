@@ -421,6 +421,15 @@ impl RpcServer {
             .and(with_arc(state_trie.clone()))
             .and_then(|_, state_trie| handle_validators(state_trie));
 
+        // GET /staking - Epoch set, staking parameters and the unbonding queue
+        let staking_info = warp::path("staking")
+            .and(warp::path::end())
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and_then(|_, state_trie, chain_store| handle_staking(state_trie, chain_store));
+
         // GET /block/latest - Get the latest block
         let block_latest = warp::path!("block" / "latest")
             .and(with_rate_limit.clone())
@@ -698,6 +707,7 @@ impl RpcServer {
             .or(bridge_unlock_ack)
             .or(fee_history)
             .or(validators)
+            .or(staking_info)
             .or(delegations)
             .or(governance)
             .or(proposal_by_id)

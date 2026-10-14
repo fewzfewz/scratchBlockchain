@@ -51,9 +51,10 @@
 
 These must be fixed before any public testnet. Operational items further down come after them.
 
-- **Validator set changes**: registration is now an ordered, signed transaction, but it takes effect at the next height rather than an epoch boundary, there is no unbonding, and equivocation evidence is recorded only in each node's local slashing tracker, not slashed on-chain.
+- **Staking lifecycle gaps**: validator-set changes now apply at epoch boundaries (every 20 blocks) and headers commit to the next set; unbonding, jailing for missed proposer turns and on-chain double-sign slashing are in (`node/src/staking.rs`). Still open: a double-sign slash burns only the validator's own stake (delegations are not slashed), jailing counts missed proposer turns but not missed precommits, and the staking parameters are compile-time constants rather than genesis/governance parameters.
 - **Bridge relayers**: the relayer set can only change through a new genesis; Nebula → Ethereum unlocks are still relayed by one process holding several keys (`interop/scripts/eth-relayer-daemon.js`).
 - **Consensus parameters from local config**: the max block gas and the governance params (`GOVERNANCE_*` env) feed consensus-critical checks and genesis state but are read per node; they belong in genesis.
+- **Upgrades**: there is no activation height for consensus-rule changes. Upgrading nodes one at a time lets old and new binaries finalize the same blocks under different rules, and the minority side stops with a state-root mismatch (seen on the devnet in October 2026). Until upgrades are versioned, stop every node, then start them all on the new binary.
 - **Amounts**: a transaction's `value` is a `u64` (about 18.4 tokens).
 - **Proposer fairness**: proposer selection is stake-weighted but random per (height, round), not CometBFT's priority rotation, so short-run proposer counts can deviate from stake shares.
 

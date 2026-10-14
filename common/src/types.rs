@@ -39,6 +39,12 @@ pub struct Header {
     /// about who proposed the block they finalized — and so about rewards.
     #[serde(default)]
     pub proposer: PublicKey,
+    /// `consensus_types::validator_set_hash` of the set that certifies the
+    /// *next* block. Validator-set changes take effect only at epoch
+    /// boundaries, so the proposer knows this set before executing the block;
+    /// a light client uses it to follow set changes.
+    #[serde(default)]
+    pub next_validators_hash: Hash,
 }
 
 impl Header {
@@ -55,6 +61,7 @@ impl Header {
             base_fee: 1_000_000_000, // 1 Gwei default
             last_commit_hash: [0; 32],
             proposer: [0; 32],
+            next_validators_hash: [0; 32],
         }
     }
 
@@ -73,6 +80,7 @@ impl Header {
         hasher.update(self.base_fee.to_le_bytes());
         hasher.update(self.last_commit_hash);
         hasher.update(self.proposer);
+        hasher.update(self.next_validators_hash);
         hasher.finalize().into()
     }
 

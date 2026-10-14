@@ -123,7 +123,7 @@ pub fn verify_tx_signature(tx: &Transaction, expected_chain_id: u64) -> Result<[
     }
 
     let public_key = tx.public_key;
-    if !tx.verify(&public_key) {
+    if !signature_ok(tx) {
         return Err(anyhow!("Invalid signature"));
     }
 
@@ -132,6 +132,53 @@ pub fn verify_tx_signature(tx: &Transaction, expected_chain_id: u64) -> Result<[
     }
 
     Ok(public_key)
+}
+
+/// Ed25519 checks already done, so a transaction is verified once per node
+/// instead of at RPC submit, mempool admission, gossip validation, proposal
+/// validation and execution. Keyed by a hash of the signed message *and* the
+/// signature, so a transaction re-signed (or tampered) never hits the cache.
+struct VerifiedCache {
+    set: std::collections::HashSet<[u8; 32]>,
+    order: std::collections::VecDeque<[u8; 32]>,
+}
+
+const VERIFIED_CACHE_CAP: usize = 200_000;
+
+static VERIFIED: std::sync::Mutex<Option<VerifiedCache>> = std::sync::Mutex::new(None);
+
+fn cache_key(tx: &Transaction) -> [u8; 32] {
+    let mut buf = Vec::with_capacity(32 + tx.signature.len());
+    buf.extend_from_slice(&tx.hash());
+    buf.extend_from_slice(&tx.signature);
+    crate::crypto::hash(&buf)
+}
+
+fn signature_ok(tx: &Transaction) -> bool {
+    let key = cache_key(tx);
+    {
+        let guard = VERIFIED.lock().unwrap_or_else(|p| p.into_inner());
+        if guard.as_ref().is_some_and(|c| c.set.contains(&key)) {
+            return true;
+        }
+    }
+    if !tx.verify(&tx.public_key) {
+        return false;
+    }
+    let mut guard = VERIFIED.lock().unwrap_or_else(|p| p.into_inner());
+    let cache = guard.get_or_insert_with(|| VerifiedCache {
+        set: std::collections::HashSet::new(),
+        order: std::collections::VecDeque::new(),
+    });
+    if cache.set.insert(key) {
+        cache.order.push_back(key);
+        if cache.order.len() > VERIFIED_CACHE_CAP {
+            if let Some(old) = cache.order.pop_front() {
+                cache.set.remove(&old);
+            }
+        }
+    }
+    true
 }
 
 #[cfg(test)]
@@ -147,6 +194,20 @@ mod signature_tests {
         tx.public_key = public_key;
         tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
         tx
+    }
+
+    #[test]
+    fn cached_signature_does_not_cover_a_tampered_one() {
+        let key = SigningKey::from_bytes(&[42u8; 32]);
+        let tx = signed_tx(&key, Some(1));
+        assert!(verify_tx_signature(&tx, 1).is_ok()); // now cached
+        let mut forged = tx.clone();
+        forged.signature[0] ^= 1;
+        assert!(verify_tx_signature(&forged, 1).is_err());
+        let mut changed = tx.clone();
+        changed.value += 1; // different message, same signature
+        assert!(verify_tx_signature(&changed, 1).is_err());
+        assert!(verify_tx_signature(&tx, 1).is_ok());
     }
 
     #[test]

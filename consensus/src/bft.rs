@@ -28,8 +28,11 @@ impl Default for TimeoutConfig {
     fn default() -> Self {
         Self {
             propose_timeout_ms: 3000,
-            prevote_timeout_ms: 1000,
-            precommit_timeout_ms: 1000,
+            // Long enough for a full block (~1,400 txs, ~500 KB) to reach
+            // every validator and be checked under load (measured at 1-2.5 s
+            // on the devnet); at 1 s such rounds failed and were retried.
+            prevote_timeout_ms: 3000,
+            precommit_timeout_ms: 2000,
             timeout_delta_ms: 500,
             max_timeout_ms: 30_000,
         }
@@ -44,7 +47,14 @@ pub enum BftEvent {
     /// `block.commit` carries the +2/3 precommits (commit certificate).
     FinalizeBlock(Block, Vec<u8>),
     NewRound(u64, u64),
-    Timeout(Step),
+    /// A step timed out. Carries the height and round it was scheduled for,
+    /// so a timeout that is only handled after the engine moved on is
+    /// ignored (see `handle_timeout`).
+    Timeout {
+        step: Step,
+        height: u64,
+        round: u64,
+    },
     /// A peer is voting/proposing at a height higher than ours: we are behind
     /// and should fetch the contiguous chain from a peer before continuing.
     BehindSync(u64),
@@ -509,6 +519,11 @@ impl BftEngine {
                         self.votes.clear();
                         self.proposals_by_hash.clear();
                         self.future_proposals.clear();
+                        // The new height needs its own propose timeout: if
+                        // its round-0 proposer is offline, this is what moves
+                        // it to round 1. (A stale timeout from the previous
+                        // height used to do that by accident.)
+                        self.start_timeout(Step::Propose);
                         events.push(BftEvent::NewRound(self.height, 0));
                     }
                     None => {
@@ -610,15 +625,38 @@ impl BftEngine {
         self.timeout_step = Some(step);
     }
 
-    pub fn check_timeout(&self) -> Option<BftEvent> {
-        if let (Some(timeout_instant), Some(timeout_step)) =
-            (self.current_timeout, self.timeout_step)
-        {
+    /// The pending timeout, if it has expired. Fires once: the node polls
+    /// this every millisecond, and a timeout reported on every poll until it
+    /// was handled once queued several copies (each advancing a round).
+    pub fn check_timeout(&mut self) -> Option<BftEvent> {
+        if let (Some(timeout_instant), Some(step)) = (self.current_timeout, self.timeout_step) {
             if Instant::now() >= timeout_instant {
-                return Some(BftEvent::Timeout(timeout_step));
+                self.current_timeout = None;
+                self.timeout_step = None;
+                return Some(BftEvent::Timeout {
+                    step,
+                    height: self.height,
+                    round: self.round,
+                });
             }
         }
         None
+    }
+
+    /// Handle a timeout reported by `check_timeout`, unless the engine has
+    /// left the height, round or step it was scheduled for. A stale timeout
+    /// from the previous height used to be applied to the next one, throwing
+    /// away its round 0 (the busiest heights lost a whole round each).
+    pub fn handle_timeout(&mut self, step: Step, height: u64, round: u64) -> Vec<BftEvent> {
+        if height != self.height || round != self.round || step != self.step {
+            return vec![];
+        }
+        match step {
+            Step::Propose => self.handle_timeout_propose(),
+            Step::Prevote => self.handle_timeout_prevote(),
+            Step::Precommit => self.handle_timeout_precommit(),
+            Step::Commit => vec![],
+        }
     }
 
     pub fn handle_timeout_propose(&mut self) -> Vec<BftEvent> {
@@ -763,6 +801,7 @@ mod tests {
                 base_fee: 0,
                 last_commit_hash: [0; 32],
                 proposer: [0; 32],
+                next_validators_hash: [0; 32],
             },
             extrinsics: vec![],
             commit: None,
@@ -901,6 +940,66 @@ mod tests {
             proposer: vals[0].pk.clone(),
         };
         assert!(engine.handle_proposal(bad_proposal).is_empty());
+    }
+
+    /// After a commit the next height must schedule its own propose timeout,
+    /// or an offline round-0 proposer stalls the chain forever.
+    #[test]
+    fn commit_schedules_the_next_heights_propose_timeout() {
+        let (vals, infos) = validator_set(4, 100);
+        let mut engine = engine_for(&vals, &infos, 0);
+        engine.start_round(0);
+        let height = engine.height;
+        let block = make_block(height - 1);
+        let hash = block.hash();
+        let proposer = engine.select_proposer(height, 0);
+        let signer = vals.iter().find(|v| v.pk == proposer).unwrap();
+        engine.handle_proposal(signer.proposal(height, 0, block));
+        for v in &vals {
+            engine.handle_vote(v.vote(height, 0, Step::Prevote, Some(hash)));
+        }
+        let events: Vec<_> = vals
+            .iter()
+            .flat_map(|v| engine.handle_vote(v.vote(height, 0, Step::Precommit, Some(hash))))
+            .collect();
+        assert!(events.iter().any(|e| matches!(e, BftEvent::FinalizeBlock(..))));
+        assert_eq!((engine.height, engine.round, engine.step), (height + 1, 0, Step::Propose));
+        assert_eq!(engine.timeout_step, Some(Step::Propose));
+        assert!(engine.current_timeout.is_some());
+    }
+
+    #[test]
+    fn stale_timeouts_are_ignored_and_fire_once() {
+        let (vals, infos) = validator_set(4, 100);
+        let mut engine = engine_for(&vals, &infos, 0);
+        engine.timeout_config = TimeoutConfig {
+            propose_timeout_ms: 0,
+            prevote_timeout_ms: 0,
+            precommit_timeout_ms: 0,
+            timeout_delta_ms: 0,
+            max_timeout_ms: 0,
+        };
+        engine.start_round(0);
+        let height = engine.height;
+
+        // Expired: reported exactly once.
+        let fired = engine.check_timeout().expect("expired timeout fires");
+        assert!(engine.check_timeout().is_none());
+        let BftEvent::Timeout { step, height: h, round } = fired else {
+            panic!("expected a timeout, got {:?}", fired);
+        };
+        assert_eq!((step, h, round), (Step::Propose, height, 0));
+
+        // The engine moves to the next height before handling it: ignored,
+        // round 0 of the new height is kept.
+        engine.reset_to_height(height + 1);
+        assert!(engine.handle_timeout(step, h, round).is_empty());
+        assert_eq!((engine.height, engine.round), (height + 1, 0));
+        // A timeout for another step of the current round is stale too.
+        assert!(engine.handle_timeout(Step::Precommit, height + 1, 0).is_empty());
+        assert_eq!(engine.round, 0);
+        // The current one is handled.
+        assert!(!engine.handle_timeout(Step::Propose, height + 1, 0).is_empty());
     }
 
     #[test]

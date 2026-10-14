@@ -1,11 +1,27 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, Compass, Activity, Server, BellRing } from 'lucide-react'
+import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, Compass, Activity, Server, BellRing, LogOut, Unlock, UserCheck } from 'lucide-react'
 import { signAndSubmit, waitForReceipt, walletAddress, getApiUrl, nblToWei } from '../lib/chain.js'
-import { Page, PageHeader, Card, Field, Button, Notice, buttonClass, inputClass } from '../components/ui.jsx'
+import { Page, PageHeader, Card, Field, Button, Notice, Badge, KeyValue, buttonClass, inputClass } from '../components/ui.jsx'
 
 const GRAFANA_URL = 'http://localhost:3002/d/validator-onboarding/validator-onboarding'
 const ONBOARDING_DOC = 'https://github.com/fewzfewz/scratchBlockchain/blob/main/docs/validator-onboarding.md'
+
+const fmtNbl = (wei) => `${(Number(wei || 0) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 4 })} NBL`
+
+/** Sign and submit a staking action from the wallet; resolves to the receipt. */
+async function submitStaking(body) {
+  const payload = Array.from(new TextEncoder().encode(JSON.stringify(body)))
+  const { hash } = await signAndSubmit({ from: walletAddress(), to: null, valueWei: 0, payload })
+  return { hash, receipt: await waitForReceipt(hash) }
+}
+
+function validatorStatus(v) {
+  if (v.tombstoned) return ['Slashed', 'red', 'Removed for double signing. It cannot rejoin.']
+  if (v.jailed) return ['Jailed', 'amber', `Out of the set after ${v.missed_in_row} missed proposer turns. Unjail from block ${Number(v.jailed_until).toLocaleString()}.`]
+  if (!v.is_active) return ['Leaving', 'neutral', 'All stake is unbonding.']
+  return ['Active', 'green', 'In the validator set (changes apply at the next epoch).']
+}
 
 const CHECKS = [
   { id: 'health', label: 'Node health', path: '/health' },
@@ -21,6 +37,47 @@ export default function ValidatorOnboardPage() {
   const [stakeNbl, setStakeNbl] = useState('1')
   const [commission, setCommission] = useState('10')
   const [registering, setRegistering] = useState(false)
+  const [mine, setMine] = useState(null)
+  const [staking, setStaking] = useState(null)
+  const [unbondNbl, setUnbondNbl] = useState('')
+  const [actionMsg, setActionMsg] = useState({ type: 'info', text: '' })
+  const [acting, setActing] = useState('')
+
+  const loadMine = async () => {
+    const me = walletAddress()
+    if (!me) return
+    try {
+      const [vals, st] = await Promise.all([
+        window.fetch(`${getApiUrl()}/validators`).then((r) => r.json()),
+        window.fetch(`${getApiUrl()}/staking`).then((r) => r.json()),
+      ])
+      const list = Array.isArray(vals) ? vals : vals.validators || []
+      setMine(list.find((v) => v.address?.toLowerCase() === me.toLowerCase()) || null)
+      setStaking(st)
+    } catch { /* the pre-flight checks report connectivity */ }
+  }
+
+  useEffect(() => {
+    loadMine()
+    const t = setInterval(loadMine, 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  const runAction = async (name, body, done) => {
+    setActing(name)
+    setActionMsg({ type: 'info', text: 'Submitting…' })
+    try {
+      const { hash, receipt } = await submitStaking(body)
+      setActionMsg(receipt?.success
+        ? { type: 'ok', text: `${done} (tx ${hash.slice(0, 10)}…)` }
+        : { type: 'err', text: `Failed: ${receipt?.revert_reason || 'not included yet'}` })
+      loadMine()
+    } catch (e) {
+      setActionMsg({ type: 'err', text: e.message })
+    } finally {
+      setActing('')
+    }
+  }
 
   const runChecks = async () => {
     setLoading(true)
@@ -65,10 +122,10 @@ export default function ValidatorOnboardPage() {
       const receipt = await waitForReceipt(hash)
       setRegisterMsg(
         receipt?.success
-          ? 'Registered: you are in the validator set from the next block'
+          ? `Registered: you join the validator set at the next epoch${staking?.next_epoch_at ? ` (block ${Number(staking.next_epoch_at).toLocaleString()})` : ''}`
           : `Registration failed: ${receipt?.revert_reason || 'not included yet'}`,
       )
-      if (receipt?.success) runChecks()
+      if (receipt?.success) { runChecks(); loadMine() }
     } catch (e) {
       setRegisterMsg('Error: ' + e.message)
     } finally {
@@ -134,6 +191,48 @@ export default function ValidatorOnboardPage() {
           </div>
         </Card>
       </div>
+
+      {mine && (() => {
+        const [label, tone, detail] = validatorStatus(mine)
+        const height = staking?.height || 0
+        const canUnjail = mine.jailed && !mine.tombstoned && height >= mine.jailed_until
+        const myUnbonding = (staking?.unbonding || []).filter((u) => u.owner?.toLowerCase() === mine.address.toLowerCase())
+        const p = staking?.params
+        return (
+          <Card title="Your validator" icon={UserCheck} className="mb-6"
+            actions={<Badge tone={tone}>{label}</Badge>}
+            description={detail}>
+            <div className="grid lg:grid-cols-2 gap-6">
+              <KeyValue rows={[
+                ['Own stake', fmtNbl(mine.stake)],
+                ['Delegated to you', fmtNbl(mine.total_delegated)],
+                ['Blocks proposed', Number(mine.blocks_produced || 0).toLocaleString()],
+                ['Missed turns in a row', `${mine.missed_in_row || 0}${p ? ` / ${p.max_missed_turns} before jail` : ''}`],
+                ...(mine.slashed && mine.slashed !== '0' ? [['Slashed', fmtNbl(mine.slashed)]] : []),
+                ...myUnbonding.map((u, i) => [`Unbonding #${i + 1}`, `${fmtNbl(u.amount)} at block ${Number(u.release_at).toLocaleString()}`]),
+              ]} />
+              <div className="space-y-4">
+                <Field label="Unbond (NBL)" hint={p ? `Returned to your balance ${p.unbonding_blocks} blocks later. Keep at least 1 NBL, or unbond everything to leave.` : undefined}>
+                  <div className="flex gap-2">
+                    <input value={unbondNbl} onChange={(e) => setUnbondNbl(e.target.value)} inputMode="decimal" placeholder="0.0" className={inputClass} />
+                    <Button variant="secondary" icon={LogOut} loading={acting === 'unbond'} disabled={!(parseFloat(unbondNbl) > 0)}
+                      onClick={() => runAction('unbond', { action: 'unbond', amount: nblToWei(unbondNbl).toString() }, 'Unbonding started')}>
+                      Unbond
+                    </Button>
+                  </div>
+                </Field>
+                {mine.jailed && !mine.tombstoned && (
+                  <Button icon={Unlock} loading={acting === 'unjail'} disabled={!canUnjail} className="w-full"
+                    onClick={() => runAction('unjail', { action: 'unjail' }, 'Unjailed: you rejoin at the next epoch')}>
+                    {canUnjail ? 'Unjail' : `Unjail at block ${Number(mine.jailed_until).toLocaleString()}`}
+                  </Button>
+                )}
+                <Notice type={actionMsg.type}>{actionMsg.text}</Notice>
+              </div>
+            </div>
+          </Card>
+        )
+      })()}
 
       <Card title="Operator checklist" icon={Server}>
         <ol className="grid md:grid-cols-2 gap-x-8 gap-y-5">

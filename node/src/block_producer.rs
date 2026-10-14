@@ -220,7 +220,7 @@ impl BlockExecutor {
         }
     }
 
-    fn failed_receipt(reason: impl Into<String>) -> TransactionReceipt {
+    pub fn failed_receipt(reason: impl Into<String>) -> TransactionReceipt {
         TransactionReceipt {
             success: false,
             gas_used: 21_000,
@@ -365,6 +365,7 @@ impl BlockExecutor {
         let mut receipts = Vec::with_capacity(block.extrinsics.len());
         let mut state_diffs = Vec::new();
         let chain_id = self.evm.chain_id();
+        prevalidate_signatures(&block.extrinsics, chain_id);
         for tx in &block.extrinsics {
             // Authenticate once, before any branch below trusts `tx.sender`.
             if let Err(e) = common::validation::verify_tx_signature(tx, chain_id) {
@@ -572,6 +573,10 @@ pub struct BlockProducer {
 
     /// Block production configuration
     config: BlockProducerConfig,
+
+    /// `header.next_validators_hash` for the next block, set by the node from
+    /// the state trie (`staking::next_validators_hash`) before each proposal.
+    pub next_validators_hash: [u8; 32],
 }
 
 impl BlockProducer {
@@ -592,6 +597,7 @@ impl BlockProducer {
             current_slot: 0,
             validator_address,
             config,
+            next_validators_hash: [0; 32],
         }
     }
 
@@ -634,13 +640,11 @@ impl BlockProducer {
         // Step 2: Calculate gas limits and filter transactions
         let mut total_gas_used = 0u64;
         let mut valid_transactions = Vec::new();
-        // Room for the header, last commit and JSON framing.
+        // Room for the header, last commit and message framing.
         let mut bytes_left = common::types::MAX_BLOCK_BYTES.saturating_sub(128 * 1024);
 
         for tx in transactions {
-            let tx_bytes = serde_json::to_vec(&tx)
-                .map(|b| b.len() + 1)
-                .unwrap_or(usize::MAX);
+            let tx_bytes = common::wire::encoded_len(&tx).saturating_add(1);
             if tx_bytes > bytes_left {
                 debug!("Block size budget reached");
                 break;
@@ -684,6 +688,7 @@ impl BlockProducer {
         header.base_fee = base_fee;
         header.extrinsics_root = extrinsics_root;
         header.state_root = state_root;
+        header.next_validators_hash = self.next_validators_hash;
 
         // The parent's commit certificate (CometBFT's LastCommit): pays the
         // validators that actually finalized it. Genesis has none.
@@ -850,9 +855,7 @@ pub fn validate_block(
     if !header.verify_proposer_signature() {
         return Err("header is not signed by its proposer".into());
     }
-    let size = serde_json::to_vec(block)
-        .map(|b| b.len())
-        .unwrap_or(usize::MAX);
+    let size = common::wire::encoded_len(block);
     if size > common::types::MAX_BLOCK_BYTES {
         return Err(format!(
             "block is {} bytes, over the {} limit",
@@ -882,6 +885,7 @@ pub fn validate_block(
             header.base_fee, expected_base_fee
         ));
     }
+    prevalidate_signatures(&block.extrinsics, chain_id);
     let mut gas = 0u64;
     for tx in &block.extrinsics {
         gas = gas
@@ -892,6 +896,19 @@ pub fn validate_block(
             .map_err(|e| format!("tx {}: {}", hex::encode(&tx.hash()[..8]), e))?;
     }
     Ok(())
+}
+
+/// Check every transaction's signature on all cores and remember the valid
+/// ones (common::validation's cache), so the sequential checks that follow
+/// are lookups. Signature checks dominate the cost of validating a full block.
+pub fn prevalidate_signatures(txs: &[Transaction], chain_id: u64) {
+    use rayon::prelude::*;
+    if txs.len() < 16 {
+        return;
+    }
+    txs.par_iter().for_each(|tx| {
+        let _ = common::validation::verify_tx_signature(tx, chain_id);
+    });
 }
 
 /// Prefix of the node-local per-address transaction index.
@@ -1257,7 +1274,7 @@ mod tests {
         let parent = Block::genesis();
         let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
         let mut big = Transaction::simple_transfer([0; 20], [9; 20], 1, 0, 1);
-        big.payload = vec![7u8; common::types::MAX_BLOCK_BYTES / 2];
+        big.payload = vec![7u8; common::types::MAX_BLOCK_BYTES + 1];
         big.sign_with(&key);
         let mut header = Header::new(parent.hash(), 0);
         header.state_root = TEST_ROOT;

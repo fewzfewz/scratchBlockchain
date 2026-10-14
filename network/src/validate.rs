@@ -168,13 +168,13 @@ mod tests {
     /// Decode a gossip payload as each message type and validate whatever
     /// decodes — exactly what the network layer does with untrusted bytes.
     fn decode_and_validate(bytes: &[u8]) {
-        if let Ok(m) = serde_json::from_slice::<crate::TransactionMessage>(bytes) {
+        if let Ok(m) = common::wire::decode::<crate::TransactionMessage>(bytes) {
             let _ = transaction(&m.transaction);
         }
-        if let Ok(m) = serde_json::from_slice::<crate::BlockMessage>(bytes) {
+        if let Ok(m) = common::wire::decode::<crate::BlockMessage>(bytes) {
             let _ = block(&m.block);
         }
-        if let Ok(m) = serde_json::from_slice::<ConsensusMessage>(bytes) {
+        if let Ok(m) = common::wire::decode::<ConsensusMessage>(bytes) {
             let _ = consensus_message(&m);
         }
     }
@@ -195,9 +195,9 @@ mod tests {
             precommits: vec![signed_vote(&key, hash, 5)],
         });
         let seeds: Vec<Vec<u8>> = vec![
-            serde_json::to_vec(&crate::TransactionMessage { transaction: tx }).unwrap(),
-            serde_json::to_vec(&crate::BlockMessage { block: b }).unwrap(),
-            serde_json::to_vec(&ConsensusMessage::Vote(signed_vote(&key, hash, 5))).unwrap(),
+            common::wire::encode(&crate::TransactionMessage { transaction: tx }).unwrap(),
+            common::wire::encode(&crate::BlockMessage { block: b }).unwrap(),
+            common::wire::encode(&ConsensusMessage::Vote(signed_vote(&key, hash, 5))).unwrap(),
         ];
 
         let mut rng = Rng(0x9E37_79B9_7F4A_7C15);

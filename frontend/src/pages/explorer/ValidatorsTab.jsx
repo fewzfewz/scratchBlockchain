@@ -9,6 +9,14 @@ const nbl = (s) => (!s || isNaN(Number(s)) ? 0 : Number(s) / 1e18)
 const fmtNbl = (n) => `${n.toLocaleString(undefined, { maximumFractionDigits: 2 })} NBL`
 const totalStake = (v) => nbl(v.stake) + nbl(v.total_delegated)
 
+/** [label, tone] for a validator's state. */
+function status(v) {
+  if (v.tombstoned) return ['Slashed', 'red']
+  if (v.jailed) return ['Jailed', 'amber']
+  if (v.is_active === false) return ['Inactive', 'neutral']
+  return ['Active', 'green']
+}
+
 function uptime(v) {
   const scheduled = (v.blocks_produced || 0) + (v.blocks_missed || 0)
   return scheduled > 0 ? ((v.blocks_produced || 0) / scheduled) * 100 : null
@@ -52,7 +60,7 @@ export default function ValidatorsTab() {
         </button>
         <div className="flex flex-wrap items-center gap-3 mb-6">
           <h2 className="font-mono text-lg font-semibold text-slate-900 dark:text-white">{shorten(v.address, 12, 8)}</h2>
-          <Badge tone={v.is_active === false ? 'neutral' : 'green'}>{v.is_active === false ? 'Inactive' : 'Active'}</Badge>
+          <Badge tone={status(v)[1]}>{status(v)[0]}</Badge>
         </div>
         <div className="grid sm:grid-cols-3 gap-3 mb-6">
           <Stat label="Voting power" value={networkStake ? `${((totalStake(v) / networkStake) * 100).toFixed(1)}%` : '—'} sub={fmtNbl(totalStake(v))} />
@@ -66,6 +74,9 @@ export default function ValidatorsTab() {
           ['Delegated', fmtNbl(nbl(v.total_delegated))],
           ['Delegators', fmt(v.delegator_count)],
           ['Commission', `${v.commission_rate}%`],
+          ['Missed turns in a row', fmt(v.missed_in_row || 0)],
+          ...(v.jailed && !v.tombstoned ? [['Jailed until block', fmt(v.jailed_until)]] : []),
+          ...(v.slashed && v.slashed !== '0' ? [['Slashed', fmtNbl(nbl(v.slashed))]] : []),
         ]} />
       </Card>
     )
@@ -75,7 +86,7 @@ export default function ValidatorsTab() {
     <Card
       title="Validators"
       icon={ShieldCheck}
-      description={`${sorted.length} validators · a block needs signatures from more than 2/3 of the stake · proposers are picked in proportion to stake`}
+      description={`${sorted.length} registered · a block needs signatures from more than 2/3 of the stake · proposers are picked in proportion to stake · set changes apply every epoch`}
       padded={false}
     >
       {loading ? (
@@ -98,7 +109,10 @@ export default function ValidatorsTab() {
                 <span className="text-slate-400 tabular-nums">{i + 1}</span>
                 <span className="min-w-0">
                   <span className="block font-mono text-xs text-slate-900 dark:text-white truncate">{shorten(v.address, 10, 6)}</span>
-                  <span className="block text-xs text-slate-500">{v.commission_rate}% commission</span>
+                  <span className="block text-xs text-slate-500">
+                    {v.commission_rate}% commission
+                    {status(v)[0] !== 'Active' && <Badge tone={status(v)[1]} className="ml-2 !h-5">{status(v)[0]}</Badge>}
+                  </span>
                 </span>
                 <span className="min-w-0">
                   <span className="flex items-center justify-between gap-2 text-xs">
