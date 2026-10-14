@@ -44,3 +44,9 @@ balance = "10000000000"
 [[accounts]]
 address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 balance = "5000000000"
+
+# Dev funding account (faucet / bridge mint / WASM deploy in dev mode).
+# Its key is api.dev_funding_key in the node configs — devnet only.
+[[accounts]]
+address = "0x575f06bc3506d23fa619b6c4f69cc9a40d182dc1"
+balance = "1000000000000000000000000000"

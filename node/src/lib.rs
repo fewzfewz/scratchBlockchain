@@ -1,3 +1,4 @@
+pub mod accounts;
 pub mod block_producer;
 pub mod bridge_queue;
 pub mod circuit_breaker;
@@ -10,6 +11,7 @@ pub mod metrics;
 pub mod rpc;
 pub mod runtime_upgrade;
 pub mod runtime_upgrade_store;
+pub mod state_root;
 pub mod test_utils;
 pub mod tx_pool;
 pub mod wasm_registry;

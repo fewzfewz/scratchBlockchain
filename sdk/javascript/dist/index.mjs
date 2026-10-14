@@ -228,8 +228,9 @@ var ModularClient = class extends EventEmitter {
     const response = await this.provider.request("get_delegations", [address]);
     return response.delegations || [];
   }
-  async delegate(delegator, validator, amount) {
-    return await this.provider.request("delegate_stake", [{ delegator, validator, amount }]);
+  /** Delegation is a signed transaction: use `ConnectedWallet.delegate`. */
+  async delegate(_delegator, _validator, _amount) {
+    throw new Error("Delegate with a signed transaction: ConnectedWallet.delegate(validator, amount)");
   }
   async undelegate(_delegator, _validator, _amount) {
     throw new Error("Undelegate via signed governance/staking transaction (POST /submit_tx)");
@@ -238,8 +239,11 @@ var ModularClient = class extends EventEmitter {
     const response = await this.provider.request("get_validators");
     return response.validators || response || [];
   }
-  async registerValidator(req) {
-    return await this.provider.request("register_validator", [req]);
+  /** Registration is a signed transaction: use `ConnectedWallet.registerValidator`. */
+  async registerValidator(_req) {
+    throw new Error(
+      "Register with a signed transaction: ConnectedWallet.registerValidator(stake, commissionRate)"
+    );
   }
   async requestFaucet(address, amount) {
     return await this.provider.request("faucet_request", [{ address, amount }]);
@@ -397,7 +401,7 @@ var Wallet = class _Wallet {
     const rawPayload = tx.data ? hexToBytes(tx.data.startsWith("0x") ? tx.data.slice(2) : tx.data) : new Uint8Array();
     const gasLimit = Number(tx.gasLimit ?? 21e3);
     const maxFeePerGas = Number(tx.maxFeePerGas ?? 1e9);
-    const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 1e8);
+    const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 1e9);
     const chainId = tx.chainId ?? 1;
     const to = tx.to ?? null;
     const value = Number(tx.value ?? 0);
@@ -499,6 +503,18 @@ var ConnectedWallet = class {
       hash: req.hash
     });
   }
+  /** Register this account as a validator, bonding `stake` wei from its balance. */
+  async registerValidator(stake, commissionRate = 10) {
+    return this.submitGovernanceAction({
+      action: "register_validator",
+      stake,
+      commission_rate: commissionRate
+    });
+  }
+  /** Bond `amount` wei from this account to a registered validator. */
+  async delegate(validator, amount) {
+    return this.submitGovernanceAction({ action: "delegate", validator, amount });
+  }
   async vote(proposalId, choice) {
     return this.submitGovernanceAction({
       action: "vote",
@@ -595,8 +611,6 @@ var HttpProvider = class {
       send_raw_transaction: "/submit_tx",
       connect_peer: "/connect_peer",
       estimate_gas: "/estimate_gas",
-      delegate_stake: "/delegate",
-      register_validator: "/validators/register",
       faucet_request: "/faucet/request",
       deploy_wasm: "/deploy_wasm",
       call_wasm: "/call_wasm",

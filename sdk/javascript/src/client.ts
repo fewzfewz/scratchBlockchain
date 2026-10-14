@@ -304,8 +304,9 @@ export class ModularClient extends EventEmitter {
     return response.delegations || [];
   }
 
-  async delegate(delegator: string, validator: string, amount: string): Promise<any> {
-    return await this.provider.request("delegate_stake", [{ delegator, validator, amount }]);
+  /** Delegation is a signed transaction: use `ConnectedWallet.delegate`. */
+  async delegate(_delegator: string, _validator: string, _amount: string): Promise<any> {
+    throw new Error("Delegate with a signed transaction: ConnectedWallet.delegate(validator, amount)");
   }
 
   async undelegate(_delegator: string, _validator: string, _amount: string): Promise<any> {
@@ -317,13 +318,16 @@ export class ModularClient extends EventEmitter {
     return response.validators || response || [];
   }
 
-  async registerValidator(req: {
+  /** Registration is a signed transaction: use `ConnectedWallet.registerValidator`. */
+  async registerValidator(_req: {
     address: string;
     public_key: string;
     stake: string;
     commission_rate?: number;
   }): Promise<any> {
-    return await this.provider.request("register_validator", [req]);
+    throw new Error(
+      "Register with a signed transaction: ConnectedWallet.registerValidator(stake, commissionRate)",
+    );
   }
 
   async requestFaucet(address: string, amount?: string): Promise<any> {

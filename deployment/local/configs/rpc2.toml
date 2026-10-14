@@ -20,6 +20,8 @@ cors_origins = ["*"]
 # Local devnet only: exposes faucet / validator-register / bridge-relayer routes.
 # Set NODE_API_ADMIN_TOKEN to require a bearer token on admin routes.
 dev_mode = true
+# Genesis-funded devnet account that pays faucet / bridge-mint transfers.
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true

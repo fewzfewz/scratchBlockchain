@@ -36,6 +36,20 @@ pub async fn load_or_init(
     Ok(state)
 }
 
+/// Read-only view: the stored state, or the default if none is stored yet.
+/// Never writes (RPC reads must not change state outside a block).
+pub async fn load(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+) -> Result<RuntimeUpgradeManager, Box<dyn std::error::Error>> {
+    let guard = trie.lock().await;
+    if let Some(data) = guard.get(RUNTIME_KEY)? {
+        if let Ok(state) = serde_json::from_slice(&data) {
+            return Ok(state);
+        }
+    }
+    Ok(RuntimeUpgradeManager::new(default_version()))
+}
+
 pub async fn persist(
     trie: &Arc<Mutex<PatriciaTrie>>,
     state: &RuntimeUpgradeManager,
@@ -109,13 +123,13 @@ pub async fn approve_upgrade(
 pub async fn list_pending(
     trie: &Arc<Mutex<PatriciaTrie>>,
 ) -> Result<Vec<UpgradeProposal>, Box<dyn std::error::Error>> {
-    let state = load_or_init(trie).await?;
+    let state = load(trie).await?;
     Ok(state.pending_upgrades().to_vec())
 }
 
 pub async fn current_version(
     trie: &Arc<Mutex<PatriciaTrie>>,
 ) -> Result<RuntimeVersion, Box<dyn std::error::Error>> {
-    let state = load_or_init(trie).await?;
+    let state = load(trie).await?;
     Ok(state.current_version().clone())
 }

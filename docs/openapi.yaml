@@ -576,6 +576,8 @@ paths:
 
   /delegate:
     post:
+      deprecated: true
+      description: 'Removed (410). Submit a signed transaction with payload {"action":"delegate","validator":"0x…","amount":"<wei>"} to /submit_tx.'
       summary: Delegate stake to validator
       operationId: delegateStake
       requestBody:
@@ -597,6 +599,8 @@ paths:
 
   /validators/register:
     post:
+      deprecated: true
+      description: 'Removed (410). Submit a signed transaction with payload {"action":"register_validator","stake":"<wei>","commission_rate":10} to /submit_tx.'
       summary: Register a new validator
       operationId: registerValidator
       requestBody:
@@ -815,6 +819,8 @@ paths:
 
   /runtime/propose:
     post:
+      deprecated: true
+      description: 'Removed (410). Runtime upgrades go through a governance software_upgrade proposal.'
       summary: Propose runtime upgrade
       operationId: proposeRuntimeUpgrade
       requestBody:
@@ -839,6 +845,8 @@ paths:
 
   /runtime/approve:
     post:
+      deprecated: true
+      description: 'Removed (410). Approved by executing the governance proposal.'
       summary: Approve runtime upgrade
       operationId: approveRuntimeUpgrade
       requestBody:

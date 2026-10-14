@@ -32,6 +32,8 @@ pub const DEFAULT_WASM_FUEL: u64 = 1_000_000;
 
 /// WASM contract call prefix in transaction payload: `WASM:<name>:<func>:<arg>`
 pub const WASM_TX_PREFIX: &[u8] = b"WASM:";
+/// Deploy a WASM module: payload `WASMDEPLOY:<name>:<module bytes>`.
+pub const WASM_DEPLOY_PREFIX: &[u8] = b"WASMDEPLOY:";
 ///
 /// This allows running WASM-based contracts (alternative to EVM).
 /// Currently a placeholder - will be fully implemented when contract

@@ -147,6 +147,15 @@ pub async fn apply_extrinsics(
 
     for tx in extrinsics {
         let body = tx.payload.as_slice();
+        if is_staking_payload(body) {
+            if let Err(e) = apply_staking_action(trie, chain_store, tx, body).await {
+                warn!(
+                    "Staking transaction rejected at block {}: {}",
+                    current_block, e
+                );
+            }
+            continue;
+        }
         if !ChainGovernance::is_governance_payload(body) {
             continue;
         }
@@ -184,6 +193,107 @@ pub async fn apply_extrinsics(
         trie.lock().await.insert(GOVERNANCE_KEY, &data)?;
     }
     Ok(())
+}
+
+/// Staking actions carried as signed transaction payloads:
+///
+/// - `{"action":"register_validator","stake":"<wei>","commission_rate":10}`
+///   registers the sender as a validator, with the transaction's public key
+///   as its consensus key, bonding `stake` from the sender's balance.
+/// - `{"action":"delegate","validator":"0x…","amount":"<wei>"}` bonds
+///   `amount` from the sender's balance to a registered validator.
+///
+/// They used to be RPC calls that wrote any stake into one node's state
+/// without moving any tokens.
+pub fn is_staking_payload(payload: &[u8]) -> bool {
+    staking_action(payload).is_some()
+}
+
+fn staking_action(payload: &[u8]) -> Option<(String, serde_json::Value)> {
+    if payload.first() != Some(&b'{') {
+        return None;
+    }
+    let value: serde_json::Value = serde_json::from_slice(payload).ok()?;
+    let action = value.get("action")?.as_str()?.to_string();
+    matches!(action.as_str(), "register_validator" | "delegate").then_some((action, value))
+}
+
+/// Tokens a staking payload bonds, if it is a well-formed staking action.
+pub fn staking_bond_amount(payload: &[u8]) -> Option<u128> {
+    let (action, value) = staking_action(payload)?;
+    let field = if action == "register_validator" {
+        "stake"
+    } else {
+        "amount"
+    };
+    parse_amount(&value, field).ok()
+}
+
+fn parse_amount(value: &serde_json::Value, field: &str) -> Result<u128, String> {
+    value
+        .get(field)
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<u128>().ok())
+        .filter(|a| *a > 0)
+        .ok_or_else(|| format!("Missing or invalid {}", field))
+}
+
+/// Debit `amount` from `address`, failing (and changing nothing) if the
+/// balance is too low.
+fn bond(chain_store: &ChainStore, address: &Address, amount: u128) -> Result<(), String> {
+    let (balance, nonce) = crate::accounts::load(chain_store, address);
+    let rest = balance
+        .checked_sub(amount)
+        .ok_or_else(|| format!("Insufficient balance to bond {}", amount))?;
+    crate::accounts::store(chain_store, address, rest, nonce).map_err(|e| e.to_string())
+}
+
+async fn apply_staking_action(
+    trie: &Arc<Mutex<PatriciaTrie>>,
+    chain_store: &Arc<ChainStore>,
+    tx: &common::types::Transaction,
+    payload: &[u8],
+) -> Result<(), String> {
+    let (action, value) = staking_action(payload).ok_or("Not a staking action")?;
+    match action.as_str() {
+        "register_validator" => {
+            let stake = parse_amount(&value, "stake")?;
+            let commission = value
+                .get("commission_rate")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(10)
+                .min(100);
+            let (balance, _) = crate::accounts::load(chain_store, &tx.sender);
+            if balance < stake {
+                return Err(format!("Insufficient balance to bond {}", stake));
+            }
+            register_validator(trie, tx.sender, tx.public_key.to_vec(), stake, commission).await?;
+            bond(chain_store, &tx.sender, stake)?;
+            info!(
+                "Validator {} registered with stake {}",
+                hex::encode(&tx.sender[..6]),
+                stake
+            );
+            Ok(())
+        }
+        "delegate" => {
+            let amount = parse_amount(&value, "amount")?;
+            let validator = value
+                .get("validator")
+                .and_then(|v| v.as_str())
+                .and_then(|s| hex::decode(s.trim_start_matches("0x")).ok())
+                .and_then(|b| <[u8; 20]>::try_from(b.as_slice()).ok())
+                .ok_or("Missing or invalid validator")?;
+            let (balance, _) = crate::accounts::load(chain_store, &tx.sender);
+            if balance < amount {
+                return Err(format!("Insufficient balance to bond {}", amount));
+            }
+            apply_delegate(trie, chain_store, tx.sender, validator, amount).await?;
+            bond(chain_store, &tx.sender, amount)?;
+            Ok(())
+        }
+        other => Err(format!("Unknown staking action {}", other)),
+    }
 }
 
 fn parse_spec_version(version: &str) -> u32 {
@@ -370,7 +480,10 @@ pub async fn apply_delegate(
         .ok_or("Validator not found")?;
 
     let current: u128 = entry.total_delegated.parse().unwrap_or(0);
-    entry.total_delegated = (current + amount).to_string();
+    entry.total_delegated = current
+        .checked_add(amount)
+        .ok_or("Delegation total overflow")?
+        .to_string();
     entry.delegator_count = entry.delegator_count.saturating_add(1);
     persist_validators(trie, &validators).await?;
 
@@ -579,5 +692,73 @@ mod tests {
             .unwrap();
         let power = voter_power(&trie, &chain_store, &addr).await;
         assert_eq!(power, 5_000_000_000_000_000_000);
+    }
+
+    fn staking_tx(seed: u8, payload: serde_json::Value) -> common::types::Transaction {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let mut tx = common::types::Transaction::simple_transfer([0; 20], [0; 20], 0, 0, 1);
+        tx.to = None;
+        tx.payload = serde_json::to_vec(&payload).unwrap();
+        tx.sign_with(&key);
+        tx
+    }
+
+    #[tokio::test]
+    async fn register_validator_tx_bonds_stake() {
+        let inner = Arc::new(storage::MemDb::new());
+        let chain_store = Arc::new(ChainStore::new(inner.clone()));
+        let trie = Arc::new(Mutex::new(PatriciaTrie::new(inner).unwrap()));
+        trie.lock().await.insert(b"validators", b"[]").unwrap();
+
+        let stake = 2_000_000_000_000_000_000u128;
+        let tx = staking_tx(
+            11,
+            serde_json::json!({"action": "register_validator", "stake": stake.to_string()}),
+        );
+        assert!(is_staking_payload(&tx.payload));
+        assert_eq!(staking_bond_amount(&tx.payload), Some(stake));
+
+        // Not enough balance: rejected, nothing changes.
+        crate::accounts::store(&chain_store, &tx.sender, stake - 1, 1).unwrap();
+        apply_extrinsics(&trie, &chain_store, std::slice::from_ref(&tx), 5)
+            .await
+            .unwrap();
+        assert_eq!(load_validators(&trie).await.unwrap().len(), 0);
+
+        crate::accounts::store(&chain_store, &tx.sender, stake + 10, 1).unwrap();
+        apply_extrinsics(&trie, &chain_store, std::slice::from_ref(&tx), 6)
+            .await
+            .unwrap();
+        let validators = load_validators(&trie).await.unwrap();
+        assert_eq!(validators.len(), 1);
+        assert_eq!(validators[0].public_key, hex::encode(tx.public_key));
+        assert_eq!(crate::accounts::load(&chain_store, &tx.sender), (10, 1));
+    }
+
+    #[tokio::test]
+    async fn delegate_tx_bonds_amount() {
+        let inner = Arc::new(storage::MemDb::new());
+        let chain_store = Arc::new(ChainStore::new(inner.clone()));
+        let trie = Arc::new(Mutex::new(PatriciaTrie::new(inner).unwrap()));
+        let validator = format!("0x{}", hex::encode([3u8; 20]));
+        let set = serde_json::json!([{ "address": validator, "stake": "1" }]);
+        trie.lock()
+            .await
+            .insert(b"validators", &serde_json::to_vec(&set).unwrap())
+            .unwrap();
+
+        let tx = staking_tx(
+            12,
+            serde_json::json!({"action": "delegate", "validator": validator, "amount": "40"}),
+        );
+        crate::accounts::store(&chain_store, &tx.sender, 100, 0).unwrap();
+        apply_extrinsics(&trie, &chain_store, std::slice::from_ref(&tx), 1)
+            .await
+            .unwrap();
+        assert_eq!(crate::accounts::load(&chain_store, &tx.sender), (60, 0));
+        assert_eq!(
+            load_validators(&trie).await.unwrap()[0].total_delegated,
+            "40"
+        );
     }
 }

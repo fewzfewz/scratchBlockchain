@@ -335,6 +335,10 @@ declare class ConnectedWallet {
         version?: string;
         hash?: string;
     }): Promise<any>;
+    /** Register this account as a validator, bonding `stake` wei from its balance. */
+    registerValidator(stake: string, commissionRate?: number): Promise<any>;
+    /** Bond `amount` wei from this account to a registered validator. */
+    delegate(validator: string, amount: string): Promise<any>;
     vote(proposalId: number, choice: "yes" | "no" | "abstain"): Promise<any>;
     executeProposal(proposalId: number): Promise<any>;
     getClient(): ModularClient;
@@ -382,10 +386,12 @@ declare class ModularClient extends EventEmitter {
     getTreasury(): Promise<TreasuryInfo | null>;
     getGovParams(): Promise<GovParams | null>;
     getDelegations(address: string): Promise<DelegationInfo[]>;
-    delegate(delegator: string, validator: string, amount: string): Promise<any>;
+    /** Delegation is a signed transaction: use `ConnectedWallet.delegate`. */
+    delegate(_delegator: string, _validator: string, _amount: string): Promise<any>;
     undelegate(_delegator: string, _validator: string, _amount: string): Promise<any>;
     getValidators(): Promise<ValidatorInfo[]>;
-    registerValidator(req: {
+    /** Registration is a signed transaction: use `ConnectedWallet.registerValidator`. */
+    registerValidator(_req: {
         address: string;
         public_key: string;
         stake: string;

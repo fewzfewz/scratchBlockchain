@@ -35,7 +35,28 @@ async function submitGovTx(wallet, payloadObj) {
   });
   const text = await res.text();
   if (!res.ok) throw new Error(text);
-  return text.replace(/^"|"$/g, '');
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return text.replace(/^"|"$/g, '');
+  }
+  if (String(data.status || '').startsWith('error')) throw new Error(data.status);
+  return data.hash;
+}
+
+/** Poll GET /tx/<hash> until the receipt exists. */
+async function waitForReceipt(hash, attempts = 15) {
+  for (let i = 0; i < attempts; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    try {
+      const d = await fetchJson(`${API_URL}/tx/${hash.replace(/^0x/, '')}`);
+      if (d.receipt) return d.receipt;
+    } catch {
+      /* not yet */
+    }
+  }
+  throw new Error(`No receipt for ${hash}`);
 }
 
 function generateWallet() {
@@ -43,4 +64,4 @@ function generateWallet() {
   return { publicKey: kp.publicKey, secretKey: kp.secretKey, address: addressFromPublicKey(kp.publicKey) };
 }
 
-module.exports = { submitGovTx, generateWallet, buildGovTx };
+module.exports = { submitGovTx, waitForReceipt, generateWallet, buildGovTx };

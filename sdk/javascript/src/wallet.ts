@@ -243,6 +243,20 @@ export class ConnectedWallet {
     });
   }
 
+  /** Register this account as a validator, bonding `stake` wei from its balance. */
+  async registerValidator(stake: string, commissionRate: number = 10): Promise<any> {
+    return this.submitGovernanceAction({
+      action: "register_validator",
+      stake,
+      commission_rate: commissionRate,
+    });
+  }
+
+  /** Bond `amount` wei from this account to a registered validator. */
+  async delegate(validator: string, amount: string): Promise<any> {
+    return this.submitGovernanceAction({ action: "delegate", validator, amount });
+  }
+
   async vote(proposalId: number, choice: "yes" | "no" | "abstain"): Promise<any> {
     return this.submitGovernanceAction({
       action: "vote",

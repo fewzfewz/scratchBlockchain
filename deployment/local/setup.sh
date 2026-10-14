@@ -89,6 +89,10 @@ balance = "10000000000"
 [[accounts]]
 address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 balance = "5000000000"
+
+[[accounts]]
+address = "0x575f06bc3506d23fa619b6c4f69cc9a40d182dc1"
+balance = "1000000000000000000000000000"
 EOF
 
 # Generate genesis using genesis-builder
@@ -130,6 +134,7 @@ enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
 dev_mode = true
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true
@@ -160,6 +165,7 @@ enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
 dev_mode = true
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true
@@ -190,6 +196,7 @@ enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
 dev_mode = true
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true
@@ -220,6 +227,7 @@ enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
 dev_mode = true
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true
@@ -248,6 +256,7 @@ enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
 dev_mode = true
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true
@@ -275,6 +284,7 @@ enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
 dev_mode = true
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true

@@ -232,7 +232,9 @@ services:
       - NODE_NAME=rpc1
       - RUST_LOG=info
       - ETH_RPC_URL=http://hardhat:9545
+      # Governance params are part of genesis state: every node must match.
       - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
       - NEBULA_CHAIN_ID=100
       - ETH_CHAIN_ID=1
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
@@ -271,6 +273,9 @@ services:
     environment:
       - NODE_NAME=rpc2
       - RUST_LOG=info
+      # Governance params are part of genesis state: every node must match.
+      - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:

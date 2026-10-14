@@ -4,7 +4,7 @@ import {
   Shield, CheckCircle, AlertCircle, Server, Cpu, Wifi, ExternalLink,
   Copy, RefreshCw, BookOpen, Activity, Gauge,
 } from 'lucide-react'
-import { adminHeaders, walletAddress } from '../lib/chain.js'
+import { signAndSubmit, waitForReceipt, walletAddress } from '../lib/chain.js'
 
 const API_URL = 'http://localhost:8545'
 const GRAFANA_URL = 'http://localhost:3002/d/validator-onboarding/validator-onboarding'
@@ -56,25 +56,23 @@ export default function ValidatorOnboardPage() {
       setRegisterMsg('You can only register your own wallet address as a validator.')
       return
     }
-    const pub = localStorage.getItem('nebula_wallet_pub')
-    if (!pub) {
-      setRegisterMsg('Missing wallet public key — regenerate your wallet on /wallet.')
-      return
-    }
     try {
-      const r = await window.fetch(`${API_URL}/validators/register`, {
-        method: 'POST',
-        headers: adminHeaders(),
-        body: JSON.stringify({
-          address: registerAddr,
-          public_key: pub,
-          stake: '1000000000000000000',
-          commission_rate: 10,
-        }),
-      })
-      const text = await r.text()
-      setRegisterMsg(r.ok ? `Registered: ${text}` : `Failed: ${text}`)
-      if (r.ok) runChecks()
+      // A signed staking transaction: bonds 1 NBL from this wallet and registers
+      // it as a validator once the transaction is included in a block.
+      const payload = Array.from(
+        new TextEncoder().encode(
+          JSON.stringify({ action: 'register_validator', stake: '1000000000000000000', commission_rate: 10 }),
+        ),
+      )
+      const { hash } = await signAndSubmit({ from: myAddr, to: null, valueWei: 0, payload })
+      setRegisterMsg(`Registration submitted (tx ${hash.slice(0, 12)}…) — waiting for inclusion`)
+      const receipt = await waitForReceipt(hash)
+      setRegisterMsg(
+        receipt?.success
+          ? 'Registered: you are in the validator set from the next block'
+          : `Registration failed: ${receipt?.revert_reason || 'not included yet'}`,
+      )
+      if (receipt?.success) runChecks()
     } catch (e) {
       setRegisterMsg('Error: ' + e.message)
     }
@@ -86,7 +84,7 @@ export default function ValidatorOnboardPage() {
     { n: 3, title: 'Generate keys', body: 'Use scripts/setup-validator.sh or import an Ed25519 keypair.' },
     { n: 4, title: 'Configure genesis', body: 'Point --genesis at genesis.json and set data_dir in node config.' },
     { n: 5, title: 'Join the network', body: 'POST /connect_peer with bootstrap multiaddrs from deployment/local.' },
-    { n: 6, title: 'Register stake', body: 'POST /validators/register (min 1 NBL) or delegate via POST /delegate.' },
+    { n: 6, title: 'Register stake', body: 'Submit a signed register_validator transaction (bonds min 1 NBL), or a delegate transaction, via POST /submit_tx.' },
     { n: 7, title: 'Monitor & alert', body: 'Watch Grafana Validator Onboarding dashboard; Alertmanager fires on validator down / stalled consensus.' },
   ]
 

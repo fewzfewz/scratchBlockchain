@@ -177,6 +177,11 @@ pub struct ApiConfig {
     /// open to anyone who can reach the RPC port (a warning is logged).
     #[serde(default)]
     pub admin_token: Option<String>,
+
+    /// Hex Ed25519 seed of a genesis-funded account. In dev mode the faucet,
+    /// bridge mint and WASM deploy routes submit transactions signed by it.
+    #[serde(default)]
+    pub dev_funding_key: Option<String>,
 }
 
 /// Metrics configuration
@@ -228,6 +233,7 @@ impl Default for ApiConfig {
             rate_limit: default_rate_limit(),
             dev_mode: false,
             admin_token: None,
+            dev_funding_key: None,
         }
     }
 }
@@ -434,6 +440,9 @@ impl NodeConfig {
         if let Ok(val) = env::var("NODE_API_ADMIN_TOKEN") {
             self.api.admin_token = Some(val).filter(|t| !t.is_empty());
         }
+        if let Ok(val) = env::var("NODE_API_DEV_FUNDING_KEY") {
+            self.api.dev_funding_key = Some(val).filter(|t| !t.is_empty());
+        }
 
         // Validator overrides
         if let Ok(val) = env::var("NODE_VALIDATOR_ENABLED") {
@@ -517,6 +526,7 @@ impl NodeConfig {
                 rate_limit: 1000,
                 dev_mode: true,
                 admin_token: None,
+                dev_funding_key: None,
             },
             metrics: MetricsConfig {
                 enabled: false,

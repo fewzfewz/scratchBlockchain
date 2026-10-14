@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Droplets, CheckCircle, AlertCircle, Clock, Copy, WifiOff, Wallet, History, RefreshCw, Activity, Zap, ShieldCheck, Gauge } from 'lucide-react'
 
 const RPC_URL = 'http://localhost:8545'
-const DRIP_AMOUNT = 100
+const DRIP_AMOUNT = 10 // node caps a drip at 10 NBL (one transfer)
 // Local dev: 60s cooldown (matches node RPC). Production UI can use 24h.
 const COOLDOWN_MS = import.meta.env.DEV ? 60 * 1000 : 24 * 60 * 60 * 1000
 
@@ -141,7 +141,7 @@ export default function FaucetPage() {
       saveData(address, { remaining: newRemaining, total: newTotal, lastRequest: now })
       setCooldownEnd(now + COOLDOWN_MS)
       setLastRequest(now)
-      setStatus(`${DRIP_AMOUNT} tokens sent to ${address}`)
+      setStatus(`${DRIP_AMOUNT} tokens on the way to ${address} — they arrive with the next block`)
       setStatusType('success')
 
       const drip = { address, amount: DRIP_AMOUNT, timestamp: now }
@@ -150,7 +150,8 @@ export default function FaucetPage() {
       localStorage.setItem('faucet_history', JSON.stringify(updated))
       setDrips(updated.slice(0, 10))
 
-      setTimeout(() => fetchBalance(address), 1500)
+      setTimeout(() => fetchBalance(address), 4000)
+      setTimeout(() => fetchBalance(address), 9000)
     } catch (e) {
       setStatus(`Error: ${e.message}`)
       setStatusType('error')

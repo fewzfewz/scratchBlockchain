@@ -55,22 +55,25 @@ Nebula nodes inside Docker receive `ETH_RPC_URL=http://hardhat:9545` for `/bridg
 
 ## Dev mode and the admin token
 
-The node configs in `configs/` set `api.dev_mode = true`. That turns on routes that change state directly, without going through consensus:
+The node configs in `configs/` set `api.dev_mode = true` and `api.dev_funding_key`. The funding key belongs to an account that genesis funds with 1e9 NBL. Three dev routes submit real transactions signed by that account, so every node applies them through consensus:
 
-- **Dev routes** (open in dev mode): `/faucet/request`, `/deploy_wasm`
-- **Admin routes**: `/validators/register`, `/delegate`, `/runtime/propose`, `/runtime/approve`, `/bridge/mint`, `/bridge/unlock`, `/bridge/unlock/ack`, `/connect_peer`
+- `/faucet/request` — a transfer of up to 10 NBL. Funds arrive with the next block.
+- `/deploy_wasm` — a `WASMDEPLOY:` transaction. A contract name can only be registered once.
+- `/bridge/mint` — an admin route; set `NODE_API_ADMIN_TOKEN` to require a bearer token. It's a transfer of at most ~18.4 NBL, the `u64` limit of a transaction's `value`.
 
-To protect the admin routes, set `NODE_API_ADMIN_TOKEN=<token>` on the nodes. Then pass the token from each client:
+Other admin routes are `/bridge/unlock`, `/bridge/unlock/ack` and `/connect_peer`. Clients pass the token with `NEBULA_ADMIN_TOKEN` (relayer and scripts) or `localStorage.setItem('nebula_admin_token', '<token>')` (browser).
 
-- **Relayer and test scripts:** set `NEBULA_ADMIN_TOKEN`
-- **Browser:** run `localStorage.setItem('nebula_admin_token', '<token>')`
+Validator registration and delegation are signed transactions sent to `/submit_tx`. They bond the stake from the sender's balance:
 
-When `dev_mode` is off (the default), every one of these routes returns 404. `/bridge/mint` also has these rules:
+- `{"action":"register_validator","stake":"<wei>","commission_rate":10}`
+- `{"action":"delegate","validator":"0x…","amount":"<wei>"}`
 
-- It always requires an `eth_tx_hash`.
-- It only checks Ethereum through the node's own `ETH_RPC_URL`.
-- It stores each processed hash on disk, so the same Ethereum transaction can't mint twice, even after a restart.
+The old `/validators/register`, `/delegate`, `/runtime/propose` and `/runtime/approve` routes return 410.
+
+When `dev_mode` is off (the default), every dev and admin route returns 404.
+
+The governance environment variables (`GOVERNANCE_*`) feed the genesis governance state, which the state root commits to. Every node, including the RPC nodes, must use the same values.
 
 ## Upgrading from an older devnet
 
-The transaction and header hash formats changed in Phase 1, and transactions now carry a `public_key` field. Blocks from an existing devnet won't decode under the new formats. Before starting again, wipe the node data volumes with `docker compose down -v`.
+Phases 1–3 changed the transaction, header and vote formats, the storage layout and the genesis state, so old data won't load. A node started on an old data directory refuses to start. Before starting again, wipe the node data volumes with `docker compose down -v`.

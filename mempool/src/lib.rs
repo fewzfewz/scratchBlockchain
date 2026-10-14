@@ -290,82 +290,117 @@ impl Mempool {
         Ok(())
     }
 
-    /// Get a batch of transactions for block production
-    /// Returns transactions in priority order (highest fee first)
-    /// Only returns transactions with valid nonce ordering per sender
+    /// Select up to `limit` transactions for a block, without removing them.
+    ///
+    /// Each sender's transactions are taken in nonce order starting from its
+    /// next expected nonce (so one sender can have several in a block);
+    /// across senders, the highest fee goes first. The pool is unchanged —
+    /// transactions leave it only when a block including them is finalized
+    /// (`remove_transactions`), so a proposal that fails to finalize loses
+    /// nothing.
     pub fn get_transactions(&self, limit: usize) -> Vec<Transaction> {
-        let mut transactions = self.transactions.lock().unwrap();
+        let transactions = self.transactions.lock().unwrap();
         let sender_state = self.sender_state.lock().unwrap();
 
-        let mut result = Vec::with_capacity(limit);
-        let mut skipped = Vec::new();
-
-        // Drain heap and select valid transactions
-        while result.len() < limit && !transactions.is_empty() {
-            if let Some(ptx) = transactions.pop() {
-                let expected = sender_state
-                    .get(&ptx.tx.sender)
-                    .map(|(_, n)| *n)
-                    .unwrap_or(u64::MAX);
-
-                if ptx.tx.nonce == expected || expected == u64::MAX {
-                    result.push(ptx.tx.clone());
-                } else {
-                    skipped.push(ptx);
-                }
-            }
+        let mut queues: HashMap<[u8; 20], Vec<&PrioritizedTransaction>> = HashMap::new();
+        for ptx in transactions.iter() {
+            queues.entry(ptx.tx.sender).or_default().push(ptx);
+        }
+        let mut cursors: HashMap<[u8; 20], (usize, u64)> = HashMap::new();
+        for (sender, queue) in queues.iter_mut() {
+            queue.sort_by_key(|p| (p.tx.nonce, std::cmp::Reverse(p.fee), p.timestamp));
+            let expected = sender_state
+                .get(sender)
+                .map(|(_, n)| *n)
+                .filter(|n| *n != u64::MAX)
+                .unwrap_or(queue[0].tx.nonce);
+            cursors.insert(*sender, (0, expected));
         }
 
-        // Put back skipped
-        for ptx in skipped {
-            transactions.push(ptx);
+        let mut result = Vec::with_capacity(limit.min(transactions.len()));
+        while result.len() < limit {
+            // Each sender's candidate is its first queued tx with the expected
+            // nonce (stale lower nonces are skipped; a gap blocks the sender).
+            let mut best: Option<(&[u8; 20], usize, &PrioritizedTransaction)> = None;
+            for (sender, queue) in queues.iter() {
+                let (mut idx, expected) = cursors[sender];
+                while idx < queue.len() && queue[idx].tx.nonce < expected {
+                    idx += 1;
+                }
+                if idx < queue.len() && queue[idx].tx.nonce == expected {
+                    let candidate = queue[idx];
+                    if best.is_none_or(|(_, _, b)| candidate > b) {
+                        best = Some((sender, idx, candidate));
+                    }
+                }
+            }
+            let Some((sender, idx, ptx)) = best else {
+                break;
+            };
+            result.push(ptx.tx.clone());
+            let sender = *sender;
+            cursors.insert(sender, (idx + 1, ptx.tx.nonce + 1));
         }
 
         result
     }
 
-    /// Remove transactions that have been included in a block
-    /// Updates sender state (increments expected nonce)
+    /// Remove transactions that have been included in a finalized block, and
+    /// advance each sender's expected nonce past them. Pooled transactions
+    /// whose nonce is now stale are dropped too.
     pub fn remove_transactions(&self, txs: &[Transaction]) {
         let mut transactions = self.transactions.lock().unwrap();
         let mut seen_txs = self.seen_txs.lock().unwrap();
         let mut sender_state = self.sender_state.lock().unwrap();
 
-        // Build a set of signatures to remove for O(1) lookup
-        let to_remove: HashSet<Vec<u8>> = txs.iter().map(|tx| tx.signature.clone()).collect();
-
-        // Drain and rebuild the heap (most efficient way to remove arbitrary elements)
-        let mut remaining = BinaryHeap::new();
-        let mut removed_count = 0;
-
-        while let Some(ptx) = transactions.pop() {
-            if to_remove.contains(&ptx.tx.signature) {
-                // Remove from mempool
-                seen_txs.remove(&ptx.tx.signature);
-
-                // Update sender state
-                if let Some((count, next_nonce)) = sender_state.get_mut(&ptx.tx.sender) {
-                    *count = count.saturating_sub(1);
-                    *next_nonce = ptx.tx.nonce + 1;
-
-                    if *count == 0 {
-                        sender_state.remove(&ptx.tx.sender);
-                    }
-                }
-                removed_count += 1;
-            } else {
-                remaining.push(ptx);
-            }
+        let mut next_nonce: HashMap<[u8; 20], u64> = HashMap::new();
+        for tx in txs {
+            let n = next_nonce.entry(tx.sender).or_insert(0);
+            *n = (*n).max(tx.nonce.saturating_add(1));
         }
+        let included: HashSet<&Vec<u8>> = txs.iter().map(|tx| &tx.signature).collect();
 
-        // Restore remaining transactions
-        while let Some(ptx) = remaining.pop() {
-            transactions.push(ptx);
+        let before = transactions.len();
+        let remaining: BinaryHeap<PrioritizedTransaction> = std::mem::take(&mut *transactions)
+            .into_iter()
+            .filter(|ptx| {
+                let stale = next_nonce
+                    .get(&ptx.tx.sender)
+                    .is_some_and(|n| ptx.tx.nonce < *n);
+                let drop = stale || included.contains(&ptx.tx.signature);
+                if drop {
+                    seen_txs.remove(&ptx.tx.signature);
+                }
+                !drop
+            })
+            .collect();
+        *transactions = remaining;
+
+        // Recount per sender and advance expected nonces.
+        let mut counts: HashMap<[u8; 20], usize> = HashMap::new();
+        for ptx in transactions.iter() {
+            *counts.entry(ptx.tx.sender).or_default() += 1;
+        }
+        for (sender, next) in next_nonce {
+            match counts.get(&sender) {
+                Some(count) => {
+                    let entry = sender_state.entry(sender).or_insert((0, next));
+                    entry.0 = *count;
+                    entry.1 = if entry.1 == u64::MAX {
+                        next
+                    } else {
+                        entry.1.max(next)
+                    };
+                }
+                None => {
+                    sender_state.remove(&sender);
+                }
+            }
         }
 
         info!(
             "Removed {} transactions from mempool. Remaining: {}",
-            removed_count,
+            before - transactions.len(),
             transactions.len()
         );
     }
@@ -589,10 +624,12 @@ mod tests {
         mempool.add_transaction(tx1).unwrap();
         mempool.add_transaction(tx2).unwrap();
 
-        // Should still return nonce 1 first
+        // Both are ready, in nonce order (the higher fee does not jump ahead).
         let batch = mempool.get_transactions(2);
-        assert_eq!(batch.len(), 1); // Only nonce 1 is ready
-        assert_eq!(batch[0].nonce, 1);
+        assert_eq!(
+            batch.iter().map(|t| t.nonce).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
     }
 
     #[test]
@@ -639,5 +676,40 @@ mod tests {
         let batch = mempool.get_transactions(2);
         assert_eq!(batch[0].max_priority_fee_per_gas, 3_000_000_000);
         assert_eq!(batch[1].max_priority_fee_per_gas, 2_000_000_000);
+    }
+
+    /// Regression: selecting transactions for a block removed them from the
+    /// pool, so finalizing never advanced the sender's nonce and every later
+    /// transaction from that sender was stuck forever.
+    #[test]
+    fn selection_is_non_destructive_and_finalization_advances_nonce() {
+        let mempool = Mempool::new(MempoolConfig::default());
+        let tx0 = create_test_tx(0, 1_000_000_000, [1; 20]);
+        mempool.add_transaction(tx0.clone()).unwrap();
+
+        let block1 = mempool.get_transactions(10);
+        assert_eq!(block1, vec![tx0.clone()]);
+        assert_eq!(mempool.size(), 1, "selection must not remove");
+
+        // The next tx arrives before block 1 is finalized.
+        let tx1 = create_test_tx(1, 1_000_000_000, [1; 20]);
+        mempool.add_transaction(tx1.clone()).unwrap();
+        mempool.remove_transactions(&block1);
+        assert_eq!(mempool.get_transactions(10), vec![tx1.clone()]);
+
+        mempool.remove_transactions(&[tx1]);
+        assert_eq!(mempool.size(), 0);
+    }
+
+    #[test]
+    fn finalized_nonces_evict_stale_duplicates() {
+        let mempool = Mempool::new(MempoolConfig::default());
+        let a = create_test_tx(0, 1_000_000_000, [1; 20]);
+        let b = create_test_tx(0, 2_000_000_000, [1; 20]); // same nonce, other tx
+        mempool.add_transaction(a.clone()).unwrap();
+        mempool.add_transaction(b).unwrap();
+        // `a` finalized (e.g. via another node's block): `b` can never execute.
+        mempool.remove_transactions(&[a]);
+        assert_eq!(mempool.size(), 0);
     }
 }

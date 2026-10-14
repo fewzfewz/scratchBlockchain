@@ -1,15 +1,20 @@
+pub mod commitment;
 mod db;
 pub mod pruner;
 pub mod receipt_store;
+pub mod staged;
 pub mod trie;
 
 use common::traits::Storage;
-use db::KeyValueStore;
 use std::error::Error;
 use std::sync::Arc;
 
-pub use db::{ChainStore, ColumnFamily, DbError, DbMetrics, MemDb, WriteBatch};
+pub use db::{
+    ChainStore, ColumnFamily, DbError, DbMetrics, KeyValueStore, KvIter, MemDb, WriteBatch,
+    STATE_ROOT_KEY,
+};
 pub use pruner::{PruneConfig, PruneStats};
+pub use staged::StagedStore;
 
 pub struct MemStore {
     db: Box<dyn KeyValueStore>,

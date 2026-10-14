@@ -58,7 +58,7 @@ use node::tx_pool::TxPool;
 
 use storage::receipt_store::ReceiptStore;
 use storage::trie::PatriciaTrie;
-use storage::{ChainStore, PruneConfig};
+use storage::{ChainStore, PruneConfig, StagedStore};
 
 use node::block_producer::{BlockExecutor, BlockProducer, BlockProducerConfig};
 use node::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
@@ -236,9 +236,16 @@ struct Node {
     #[allow(dead_code)]
     config: NodeConfig,
     chain_store: Arc<ChainStore>,
+    /// Write stage over the database: each block's whole state transition is
+    /// committed as one atomic batch (or discarded).
+    staged: Arc<StagedStore>,
     #[allow(dead_code)]
     receipt_store: Arc<ReceiptStore>,
     state_trie: Arc<Mutex<PatriciaTrie>>,
+    chain_id: u64,
+    max_gas_per_block: u64,
+    /// Set when our state diverged from a finalized block; the node stops.
+    fatal_error: Option<String>,
 
     // Consensus
     bft_engine: Arc<Mutex<BftEngine>>,
@@ -301,8 +308,10 @@ impl Node {
         let data_dir = &config.storage.data_dir;
         fs::create_dir_all(data_dir)?;
 
-        let chain_store = Arc::new(ChainStore::open(data_dir)?);
-        let kv_store = chain_store.inner().clone();
+        let base_store = ChainStore::open(data_dir)?.inner().clone();
+        let staged = Arc::new(StagedStore::new(base_store));
+        let kv_store: Arc<dyn storage::KeyValueStore> = staged.clone();
+        let chain_store = Arc::new(ChainStore::new(kv_store.clone()));
         let receipt_store = Arc::new(ReceiptStore::new(kv_store.clone()));
         let state_trie = Arc::new(Mutex::new(PatriciaTrie::new(kv_store)?));
 
@@ -315,13 +324,13 @@ impl Node {
             let genesis_config: common::types::GenesisConfig =
                 serde_json::from_str(&genesis_content)?;
 
-            // Initialize genesis accounts in state trie
-            for account in genesis_config.accounts {
-                let account_json = serde_json::to_vec(&account)?;
-                state_trie
-                    .lock()
-                    .await
-                    .insert(&account.address, &account_json)?;
+            // The whole genesis state is written as one atomic batch, together
+            // with its state root (which block 0's header must commit to).
+            staged.begin()?;
+
+            // Genesis balances live where transfers and /balance read them.
+            for account in &genesis_config.accounts {
+                node::accounts::store(&chain_store, &account.address, account.balance, 0)?;
             }
 
             // Initialize genesis validators in state trie (for /validators RPC)
@@ -352,6 +361,11 @@ impl Node {
                 validator_infos.len()
             );
 
+            // Governance state is part of genesis (seeded once, here, so every
+            // node starts from the same trie).
+            node::governance_store::load_or_init(&state_trie).await?;
+            node::runtime_upgrade_store::load_or_init(&state_trie).await?;
+
             // Store genesis block
             let genesis_block = Block::genesis();
             let block_hash = genesis_block.hash();
@@ -359,6 +373,20 @@ impl Node {
             chain_store.put_block(&block_hash, &block_data)?;
             chain_store.put_block_height(0, &block_hash)?;
             chain_store.set_latest_height(0)?;
+
+            let trie_root = state_trie.lock().await.root_hash();
+            let flat = staged.staged_lthash()?.checksum();
+            let root = node::state_root::compute(&flat, &trie_root);
+            let mut meta = storage::WriteBatch::new();
+            meta.put(storage::ColumnFamily::Meta, storage::STATE_ROOT_KEY, root);
+            staged.commit(meta)?;
+            info!("🌱 Genesis state root {}", hex::encode(root));
+        }
+        if chain_store.get_state_root()?.is_none() {
+            return Err(
+                "Database has no state root (created before Phase 3). Wipe the data directory and restart."
+                    .into(),
+            );
         }
 
         // ================================================================
@@ -552,6 +580,15 @@ impl Node {
             dev_mode: config.api.dev_mode,
             admin_token: config.api.admin_token.clone(),
             cors_origins: config.api.cors_origins.clone(),
+            dev_funding_key: match (&config.api.dev_funding_key, config.api.dev_mode) {
+                (Some(hex_seed), true) => Some(
+                    hex::decode(hex_seed.trim())
+                        .ok()
+                        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+                        .ok_or("api.dev_funding_key must be a 32-byte hex seed")?,
+                ),
+                _ => None,
+            },
         });
         if config.api.dev_mode {
             warn!(
@@ -592,9 +629,8 @@ impl Node {
             }
         }
 
-        // Ensure on-chain governance state exists (seeds it for fresh chains and
-        // for existing chains that predate governance).
-        node::governance_store::load_or_init(&state_trie).await?;
+        // Governance is seeded as part of genesis; nothing may write state
+        // here, outside a block (it would change the committed state root).
 
         let prune_config = PruneConfig::from_mode(
             &config.storage.pruning_mode,
@@ -606,11 +642,16 @@ impl Node {
             prune_config.mode, prune_config.blocks_to_keep, prune_config.prune_every_n_blocks
         );
 
+        let max_gas_per_block = config.security.max_gas_per_block;
         Ok(Self {
             config,
             chain_store,
+            staged,
             receipt_store,
             state_trie,
+            chain_id,
+            max_gas_per_block,
+            fatal_error: None,
             bft_engine,
             finality_gadget,
             block_executor,
@@ -658,6 +699,12 @@ impl Node {
                 }
             }
             pending_events.extend(new_events);
+
+            if let Some(reason) = self.fatal_error.take() {
+                tracing::error!("🛑 State diverged from the network — stopping: {}", reason);
+                self.shutdown().await?;
+                return Err(reason.into());
+            }
 
             tokio::select! {
                 _ = consensus_interval.tick() => {
@@ -739,16 +786,6 @@ impl Node {
                 info!("🔒 Finalizing block at height {}", block.header.slot);
                 self.last_finalize_at = Instant::now();
 
-                // Execute and commit block
-                let receipts = self
-                    .block_executor
-                    .lock()
-                    .await
-                    .execute_and_commit(&block)?;
-
-                // Calculate total fees
-                let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
-
                 // Validators whose precommits finalized the block.
                 let voters: Vec<Vec<u8>> = block
                     .commit
@@ -756,62 +793,15 @@ impl Node {
                     .map(|c| c.precommits.iter().map(|v| v.voter.clone()).collect())
                     .unwrap_or_default();
 
-                // Track per-validator block production stats in the state trie
-                if let Err(e) = node::governance_store::record_block_stats(
-                    &self.state_trie,
-                    block.header.slot,
-                    &proposer,
-                )
-                .await
-                {
-                    warn!("Error recording block stats: {}", e);
+                if let Err(e) = self.apply_state_transition(&block, proposer, &voters).await {
+                    // +2/3 of the stake finalized this block, so failing to apply
+                    // it means our state is not theirs. Stop rather than vote on.
+                    self.fatal_error = Some(format!(
+                        "cannot apply finalized block {}: {}",
+                        block.header.slot, e
+                    ));
+                    return Err(e);
                 }
-
-                // Process rewards
-                let rewards = {
-                    let mut rm = self.reward_manager.lock().await;
-                    rm.process_block(&block, proposer, &voters, total_fees)
-                };
-
-                // Apply rewards to state
-                for (validator, amount) in rewards {
-                    if amount > 0 {
-                        self.apply_reward(&validator, amount).await?;
-                        info!(
-                            "💰 Rewarded {} with {} tokens",
-                            hex::encode(&validator[..4]),
-                            amount
-                        );
-                    }
-                }
-
-                // Apply on-chain governance actions, from authenticated txs only
-                let authenticated =
-                    node::block_producer::BlockExecutor::successful_txs(&block, &receipts);
-                if let Err(e) = node::governance_store::apply_extrinsics(
-                    &self.state_trie,
-                    &self.chain_store,
-                    &authenticated,
-                    block.header.slot,
-                )
-                .await
-                {
-                    warn!("Error applying governance actions: {}", e);
-                }
-
-                if let Err(e) = node::runtime_upgrade_store::apply_at_height(
-                    &self.state_trie,
-                    block.header.slot,
-                )
-                .await
-                {
-                    warn!("Error applying runtime upgrades: {}", e);
-                }
-
-                // Update metrics
-                self.metrics.record_block();
-                self.metrics.update_finalized_height(block.header.slot);
-                self.stats.record_block(block.extrinsics.len());
 
                 // Remove transactions from pool
                 self.tx_pool.remove_transactions(&block.extrinsics);
@@ -822,39 +812,7 @@ impl Node {
                     tracker.update_height(block.header.slot);
                 }
 
-                // Economic engine: burn 50% of fees; 10% to treasury
-                if total_fees > 0 {
-                    let burned = total_fees / 2;
-                    info!("🔥 Fee burn: {} tokens burned from block fees", burned);
-                    if let Err(e) = node::governance_store::collect_treasury_fee(
-                        &self.state_trie,
-                        total_fees / 10,
-                    )
-                    .await
-                    {
-                        warn!("Treasury fee collection failed: {}", e);
-                    }
-                }
-
-                // Prune old blocks/receipts below retention window
-                match self
-                    .chain_store
-                    .maybe_prune(&self.prune_config, block.header.slot)
-                {
-                    Ok(stats) if stats.blocks_pruned > 0 => {
-                        info!(
-                            "🧹 Pruned {} blocks, {} receipts (cutoff height {})",
-                            stats.blocks_pruned, stats.receipts_pruned, stats.to_height
-                        );
-                        if let Ok(removed) = self.state_trie.lock().await.gc_orphan_nodes() {
-                            if removed > 0 {
-                                info!("🧹 Trie GC removed {} orphan nodes", removed);
-                            }
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => warn!("State pruning failed: {}", e),
-                }
+                self.prune_after(block.header.slot).await;
 
                 // Hot-reload BFT validator set from trie (post-governance extrinsics)
                 if let Err(e) = self.sync_validator_set().await {
@@ -963,6 +921,19 @@ impl Node {
                         engine.handle_vote(vote)
                     }
                     ConsensusMessage::Proposal(proposal) => {
+                        let engine_height = self.bft_engine.lock().await.height;
+                        if proposal.height == engine_height {
+                            if let Err(e) =
+                                self.validate_proposed_block(&proposal.block, engine_height)
+                            {
+                                // Not voting for it: we prevote nil on timeout.
+                                warn!(
+                                    "Rejecting proposal at height {} round {}: {}",
+                                    proposal.height, proposal.round, e
+                                );
+                                return Ok(());
+                            }
+                        }
                         let mut engine = self.bft_engine.lock().await;
                         engine.handle_proposal(proposal)
                     }
@@ -1060,10 +1031,28 @@ impl Node {
         Ok(())
     }
 
-    /// Verify, execute, and commit a block that we know is a contiguous
-    /// extension of our chain. Shared by the gossip path and the sync path.
+    /// Application-level validity of a proposed block for BFT height
+    /// `height` (which finalizes slot `height - 1`) on top of our tip.
+    fn validate_proposed_block(&self, block: &Block, height: u64) -> Result<(), String> {
+        let parent = latest_block(&self.chain_store).map_err(|e| e.to_string())?;
+        let state_root = self
+            .chain_store
+            .get_state_root()
+            .map_err(|e| e.to_string())?
+            .ok_or("no committed state root")?;
+        node::block_producer::validate_block(
+            block,
+            &parent,
+            height.saturating_sub(1),
+            &state_root,
+            self.chain_id,
+            self.max_gas_per_block,
+        )
+    }
+
+    /// Verify and apply a block fetched by sync, which we know is a
+    /// contiguous extension of our chain.
     async fn apply_block(&mut self, block: &Block) -> Result<(), Box<dyn std::error::Error>> {
-        // Verify block signature by a known validator
         let validators = self.get_validator_list().await?;
         // Finality: a synced block must carry +2/3 precommits from the
         // validator set. A proposer signature alone proves nothing — one
@@ -1080,52 +1069,99 @@ impl Node {
             warn!("Invalid block: {}", e);
             return Err(format!("Invalid block: {}", e).into());
         }
-        let proposer = consensus.verify_block_author(block);
+        let proposer = consensus.verify_block_author(block).unwrap_or_default();
 
-        // Execute block
-        let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
-
-        // Verify state root when the header records one (non-zero).
-        if block.header.state_root.iter().any(|b| *b != 0) {
-            let parent_root = if block.header.slot == 0 {
-                [0u8; 32]
-            } else {
-                match self
-                    .chain_store
-                    .get_block_hash_by_height(block.header.slot.saturating_sub(1))
-                {
-                    Ok(Some(hash_bytes)) if hash_bytes.len() == 32 => {
-                        let mut hash = [0u8; 32];
-                        hash.copy_from_slice(&hash_bytes);
-                        if let Ok(Some(encoded)) = self.chain_store.get_block(&hash) {
-                            if let Ok(parent) = serde_json::from_slice::<Block>(&encoded) {
-                                parent.header.state_root
-                            } else {
-                                [0u8; 32]
-                            }
-                        } else {
-                            [0u8; 32]
-                        }
-                    }
-                    _ => [0u8; 32],
-                }
-            };
-            let computed = node::block_producer::BlockProducer::compute_state_root(
-                &parent_root,
-                &block.header.extrinsics_root,
-            );
-            if computed != block.header.state_root {
-                warn!("State root mismatch");
-                return Err("State root mismatch".into());
-            }
+        if let Err(e) = self.apply_state_transition(block, proposer, &voters).await {
+            // The block is certified, so a failure here means we diverged.
+            self.fatal_error = Some(format!(
+                "cannot apply certified block {}: {}",
+                block.header.slot, e
+            ));
+            return Err(e);
         }
 
-        // Track per-validator block production stats in the state trie
-        if let Some(pubkey) = &proposer {
+        self.tx_pool.remove_transactions(&block.extrinsics);
+        info!("✅ Processed block at height {}", block.header.slot);
+        Ok(())
+    }
+
+    /// The state transition for one finalized block, applied atomically.
+    ///
+    /// 1. The header must commit to our state after its parent.
+    /// 2. Execute transactions, then rewards, block stats, governance,
+    ///    runtime upgrades and the treasury fee — all staged in memory.
+    /// 3. Compute the new state root and write everything (block, receipts,
+    ///    state, trie, commitment, root) as one batch. On any error the stage
+    ///    is discarded and the database is unchanged.
+    async fn apply_state_transition(
+        &mut self,
+        block: &Block,
+        proposer: Vec<u8>,
+        voters: &[Vec<u8>],
+    ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
+        let expected = self
+            .chain_store
+            .get_state_root()?
+            .ok_or("No committed state root")?;
+        if block.header.state_root != expected {
+            return Err(format!(
+                "state root mismatch at slot {}: block commits to {}, ours is {}",
+                block.header.slot,
+                hex::encode(block.header.state_root),
+                hex::encode(expected)
+            )
+            .into());
+        }
+
+        self.staged.begin()?;
+        let result = self.stage_block_effects(block, proposer, voters).await;
+        let receipts = match result {
+            Ok(receipts) => receipts,
+            Err(e) => {
+                self.staged.discard();
+                self.state_trie.lock().await.reload_root()?;
+                return Err(e);
+            }
+        };
+
+        let trie_root = self.state_trie.lock().await.root_hash();
+        let flat = self.staged.staged_lthash()?.checksum();
+        let root = node::state_root::compute(&flat, &trie_root);
+        let mut meta = storage::WriteBatch::new();
+        meta.put(storage::ColumnFamily::Meta, storage::STATE_ROOT_KEY, root);
+        if let Err(e) = self.staged.commit(meta) {
+            self.staged.discard();
+            self.state_trie.lock().await.reload_root()?;
+            return Err(e);
+        }
+        debug!(
+            "State root after slot {}: {}",
+            block.header.slot,
+            hex::encode(root)
+        );
+
+        self.metrics.record_block();
+        self.metrics.update_finalized_height(block.header.slot);
+        self.stats.record_block(block.extrinsics.len());
+        Ok(receipts)
+    }
+
+    /// Everything a block changes, written into the open stage.
+    async fn stage_block_effects(
+        &mut self,
+        block: &Block,
+        proposer: Vec<u8>,
+        voters: &[Vec<u8>],
+    ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
+        let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
+
+        let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
+
+        if !proposer.is_empty() {
             if let Err(e) = node::governance_store::record_block_stats(
                 &self.state_trie,
                 block.header.slot,
-                pubkey,
+                &proposer,
             )
             .await
             {
@@ -1133,21 +1169,17 @@ impl Node {
             }
         }
 
-        // Process rewards
-        let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
-        let proposer = proposer.unwrap_or_default();
-
         let rewards = {
             let mut rm = self.reward_manager.lock().await;
-            rm.process_block(block, proposer, &voters, total_fees)
+            rm.process_block(block, proposer, voters, total_fees)
         };
         for (validator, amount) in rewards {
             if amount > 0 {
-                self.apply_reward(&validator, amount).await?;
+                self.apply_reward(&validator, amount)?;
             }
         }
 
-        // Apply on-chain governance actions, from authenticated txs only
+        // Governance actions, from authenticated txs only
         let authenticated = node::block_producer::BlockExecutor::successful_txs(block, &receipts);
         if let Err(e) = node::governance_store::apply_extrinsics(
             &self.state_trie,
@@ -1166,14 +1198,40 @@ impl Node {
             warn!("Error applying runtime upgrades: {}", e);
         }
 
-        // Update mempool
-        self.tx_pool.remove_transactions(&block.extrinsics);
+        // Economic engine: burn 50% of fees; 10% to treasury
+        if total_fees > 0 {
+            info!(
+                "🔥 Fee burn: {} tokens burned from block fees",
+                total_fees / 2
+            );
+            if let Err(e) =
+                node::governance_store::collect_treasury_fee(&self.state_trie, total_fees / 10)
+                    .await
+            {
+                warn!("Treasury fee collection failed: {}", e);
+            }
+        }
 
-        info!("✅ Processed block at height {}", block.header.slot);
-        self.metrics.record_block();
-        self.stats.record_block(block.extrinsics.len());
+        Ok(receipts)
+    }
 
-        Ok(())
+    /// Prune old blocks/receipts below the retention window (not state).
+    async fn prune_after(&self, slot: u64) {
+        match self.chain_store.maybe_prune(&self.prune_config, slot) {
+            Ok(stats) if stats.blocks_pruned > 0 => {
+                info!(
+                    "🧹 Pruned {} blocks, {} receipts (cutoff height {})",
+                    stats.blocks_pruned, stats.receipts_pruned, stats.to_height
+                );
+                if let Ok(removed) = self.state_trie.lock().await.gc_orphan_nodes() {
+                    if removed > 0 {
+                        info!("🧹 Trie GC removed {} orphan nodes", removed);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => warn!("State pruning failed: {}", e),
+        }
     }
 
     /// Hash of the block currently at our chain tip.
@@ -1520,31 +1578,14 @@ impl Node {
         Ok(())
     }
 
-    /// Apply reward to validator
-    async fn apply_reward(
+    /// Credit a validator's reward account (address derived from its key).
+    fn apply_reward(
         &mut self,
         validator: &[u8],
         amount: u128,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let address = {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(validator);
-            let digest = hasher.finalize();
-            let mut addr = [0u8; 20];
-            addr.copy_from_slice(&digest[digest.len() - 20..]);
-            addr
-        };
-
-        let mut trie = self.state_trie.lock().await;
-        let mut account: common::types::Account = match trie.get(&address)? {
-            Some(data) => serde_json::from_slice(&data)?,
-            None => common::types::Account::default(),
-        };
-
-        account.balance = account.balance.saturating_add(amount);
-        trie.insert(&address, &serde_json::to_vec(&account)?)?;
-
+        let address = node::accounts::address_of_public_key(validator);
+        node::accounts::credit(&self.chain_store, &address, amount)?;
         Ok(())
     }
 
@@ -1593,6 +1634,19 @@ impl Node {
 // ============================================================================
 
 use warp::Filter;
+
+/// The latest committed block (the local genesis placeholder on a new chain).
+fn latest_block(chain_store: &ChainStore) -> Result<Block, Box<dyn std::error::Error>> {
+    match chain_store.get_latest_height()? {
+        Some(height) => {
+            let data = chain_store
+                .get_block_by_height(height)?
+                .ok_or_else(|| format!("Block not found at height {}", height))?;
+            Ok(serde_json::from_slice(&data)?)
+        }
+        None => Ok(Block::genesis()),
+    }
+}
 
 /// Load or generate validator key
 fn load_or_generate_key(key_path: &PathBuf) -> Result<SigningKey, Box<dyn std::error::Error>> {

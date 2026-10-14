@@ -60,13 +60,40 @@ pub struct BlockExecutor {
     evm: EvmExecutor,
 
     /// Chain storage with atomic commit support
-    chain_store: Arc<ChainStore>,
+    pub(crate) chain_store: Arc<ChainStore>,
 }
 
 impl BlockExecutor {
     /// Create a new block executor
     pub fn new(evm: EvmExecutor, chain_store: Arc<ChainStore>) -> Self {
         Self { evm, chain_store }
+    }
+
+    /// `WASMDEPLOY:<name>:<module>`: validate the module and register it under
+    /// a name that is not taken yet (no overwriting someone else's contract).
+    fn execute_wasm_deploy(payload: &[u8], chain_store: &Arc<ChainStore>) -> TransactionReceipt {
+        let rest = &payload[execution::WASM_DEPLOY_PREFIX.len()..];
+        let Some(sep) = rest.iter().position(|b| *b == b':') else {
+            return Self::failed_receipt("Invalid WASM deploy payload");
+        };
+        let Ok(name) = std::str::from_utf8(&rest[..sep]) else {
+            return Self::failed_receipt("Invalid WASM contract name");
+        };
+        let module = &rest[sep + 1..];
+        let registry = crate::wasm_registry::WasmRegistry::new(chain_store.clone());
+        if matches!(registry.get(name), Ok(Some(_))) {
+            return Self::failed_receipt(format!("WASM contract '{}' already exists", name));
+        }
+        let valid = execution::WasmExecutor::new()
+            .map_err(|e| e.to_string())
+            .and_then(|exec| exec.validate_module(module).map_err(|e| e.to_string()));
+        if let Err(e) = valid {
+            return Self::failed_receipt(format!("Invalid WASM module: {}", e));
+        }
+        match registry.deploy(name, module) {
+            Ok(()) => Self::success_receipt(),
+            Err(e) => Self::failed_receipt(e.to_string()),
+        }
     }
 
     fn execute_wasm_tx(payload: &[u8], chain_store: &Arc<ChainStore>) -> TransactionReceipt {
@@ -172,30 +199,25 @@ impl BlockExecutor {
             .rev()
             .find(|(k, _)| k.as_slice() == addr)
             .map(|(_, v)| v.clone());
-        let encoded = match pending_value {
-            Some(v) => v,
-            None => chain_store.get_state(addr).ok().flatten(),
-        };
-        if let Some(encoded) = encoded {
-            if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
-                let balance = acc
-                    .get("balance")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<u128>().ok())
-                    .unwrap_or(0);
-                let nonce = acc.get("nonce").and_then(|v| v.as_u64()).unwrap_or(0);
-                return (balance, nonce);
-            }
+        match pending_value {
+            Some(v) => crate::accounts::decode(v.as_deref()),
+            None => crate::accounts::load(chain_store, addr),
         }
-        (0, 0)
     }
 
     fn encode_account_state(balance: u128, nonce: u64) -> Vec<u8> {
-        serde_json::to_vec(&serde_json::json!({
-            "balance": balance.to_string(),
-            "nonce": nonce,
-        }))
-        .unwrap_or_default()
+        crate::accounts::encode(balance, nonce)
+    }
+
+    fn success_receipt() -> TransactionReceipt {
+        TransactionReceipt {
+            success: true,
+            gas_used: 21_000,
+            output: vec![],
+            created_address: None,
+            revert_reason: None,
+            logs: vec![],
+        }
     }
 
     fn failed_receipt(reason: impl Into<String>) -> TransactionReceipt {
@@ -257,7 +279,7 @@ impl BlockExecutor {
         }
 
         let gas_fee = tx.gas_limit as u128 * tx.max_fee_per_gas as u128;
-        let total_cost = tx.value as u128 + gas_fee;
+        let total_cost = tx.value as u128 + gas_fee; // both < 2^64·2^64: no overflow
         if sender_balance < total_cost {
             return (
                 Self::failed_receipt(format!(
@@ -270,8 +292,28 @@ impl BlockExecutor {
 
         let (recipient_balance, recipient_nonce) =
             Self::load_account_state(chain_store, pending, &to);
-        let new_sender_balance = sender_balance - tx.value as u128 - gas_fee;
-        let new_recipient_balance = recipient_balance + tx.value as u128;
+        let new_sender_balance = sender_balance - total_cost; // checked above
+                                                              // A self-transfer must see the debit, or it would mint `value`.
+        let recipient_balance = if to == tx.sender {
+            new_sender_balance
+        } else {
+            recipient_balance
+        };
+        let Some(new_recipient_balance) = recipient_balance.checked_add(tx.value as u128) else {
+            return (Self::failed_receipt("Recipient balance overflow"), vec![]);
+        };
+        if to == tx.sender {
+            return (
+                Self::success_receipt(),
+                vec![(
+                    tx.sender.to_vec(),
+                    Some(Self::encode_account_state(
+                        new_recipient_balance,
+                        sender_nonce + 1,
+                    )),
+                )],
+            );
+        }
 
         let state_diffs = vec![
             (
@@ -331,13 +373,39 @@ impl BlockExecutor {
             }
 
             let body = tx.payload.as_slice();
-            let is_governance = ChainGovernance::is_governance_payload(body);
+            // Governance and staking actions are applied afterwards by
+            // governance_store::apply_extrinsics (they need the trie).
+            let is_governance = ChainGovernance::is_governance_payload(body)
+                || crate::governance_store::is_staking_payload(body);
             let is_wasm = body.starts_with(execution::WASM_TX_PREFIX);
-            if is_governance || is_wasm {
+            let is_wasm_deploy = body.starts_with(execution::WASM_DEPLOY_PREFIX);
+            if is_governance || is_wasm || is_wasm_deploy {
                 match Self::consume_nonce(tx, &self.chain_store, &state_diffs) {
                     Ok(diffs) => state_diffs.extend(diffs),
                     Err(e) => {
                         receipts.push(Self::failed_receipt(e));
+                        continue;
+                    }
+                }
+            }
+
+            if crate::governance_store::is_staking_payload(body) {
+                // Fail the receipt up front if the bond cannot be paid; the
+                // registration itself is applied by apply_extrinsics.
+                let bond = crate::governance_store::staking_bond_amount(body);
+                let (balance, _) =
+                    Self::load_account_state(&self.chain_store, &state_diffs, &tx.sender);
+                match bond {
+                    Some(amount) if amount <= balance => {}
+                    Some(amount) => {
+                        receipts.push(Self::failed_receipt(format!(
+                            "Insufficient balance to bond {}",
+                            amount
+                        )));
+                        continue;
+                    }
+                    None => {
+                        receipts.push(Self::failed_receipt("Invalid staking amount"));
                         continue;
                     }
                 }
@@ -353,6 +421,11 @@ impl BlockExecutor {
                     revert_reason: None,
                     logs: vec![],
                 });
+                continue;
+            }
+
+            if is_wasm_deploy {
+                receipts.push(Self::execute_wasm_deploy(body, &self.chain_store));
                 continue;
             }
 
@@ -562,7 +635,8 @@ impl BlockProducer {
             }
         }
 
-        // Step 3: Pre-validate transactions (quick checks before EVM)
+        // Step 3: Drop anything that would make the block invalid (every tx
+        // must authenticate; see `validate_block`).
         let valid_transactions = self.pre_validate_transactions(valid_transactions);
 
         // Step 4: Calculate base fee from parent (EIP-1559)
@@ -573,10 +647,14 @@ impl BlockProducer {
         );
 
         // Step 5: Build extrinsics root (Merkle root of transactions)
-        let extrinsics_root = self.compute_extrinsics_root(&valid_transactions);
+        let extrinsics_root = compute_extrinsics_root(&valid_transactions);
 
-        // Step 5: Compute state root (deterministic from parent + extrinsics)
-        let state_root = Self::compute_state_root(&parent.header.state_root, &extrinsics_root);
+        // Step 6: Commit to the state after the parent block.
+        let state_root = self
+            .block_executor
+            .chain_store
+            .get_state_root()?
+            .ok_or("No committed state root (genesis not initialized)")?;
 
         // Step 6: Build block header
         let mut header = Header::new(parent.hash(), self.current_slot);
@@ -620,8 +698,17 @@ impl BlockProducer {
     /// - Non-empty signature
     /// - Valid signature length
     fn pre_validate_transactions(&self, txns: Vec<Transaction>) -> Vec<Transaction> {
+        let chain_id = self.block_executor.evm.chain_id();
         txns.into_iter()
             .filter(|tx| {
+                if let Err(e) = common::validation::verify_tx_signature(tx, chain_id) {
+                    warn!(
+                        "Dropping unauthenticated tx {}: {}",
+                        hex::encode(tx.hash()),
+                        e
+                    );
+                    return false;
+                }
                 // Check gas limit
                 if tx.gas_limit == 0 {
                     warn!(
@@ -650,46 +737,103 @@ impl BlockProducer {
             })
             .collect()
     }
+}
 
-    /// Compute Merkle root of transaction hashes
-    fn compute_extrinsics_root(&self, transactions: &[Transaction]) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
+/// Merkle root of the block's transaction hashes.
+///
+/// Leaves and inner nodes are domain-tagged, an odd node is promoted (not
+/// duplicated) and the count is committed, so no two distinct transaction
+/// lists share a root (duplicating the last leaf lets `[a, b, c]` and
+/// `[a, b, c, c]` collide).
+pub fn compute_extrinsics_root(transactions: &[Transaction]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
 
-        if transactions.is_empty() {
-            // Empty root
-            return [0u8; 32];
-        }
-
-        // Simple Merkle tree construction
-        let mut hashes: Vec<[u8; 32]> = transactions.iter().map(|tx| tx.hash()).collect();
-
-        // Build Merkle tree
-        while hashes.len() > 1 {
-            let mut next_level = Vec::new();
-            for chunk in hashes.chunks(2) {
-                let mut hasher = Sha256::new();
-                hasher.update(chunk[0]);
-                if chunk.len() > 1 {
-                    hasher.update(chunk[1]);
-                } else {
-                    hasher.update(chunk[0]); // Duplicate for odd length
+    let mut level: Vec<[u8; 32]> = transactions
+        .iter()
+        .map(|tx| {
+            let mut h = Sha256::new();
+            h.update([0u8]);
+            h.update(tx.hash());
+            h.finalize().into()
+        })
+        .collect();
+    while level.len() > 1 {
+        level = level
+            .chunks(2)
+            .map(|pair| match pair {
+                [a, b] => {
+                    let mut h = Sha256::new();
+                    h.update([1u8]);
+                    h.update(a);
+                    h.update(b);
+                    h.finalize().into()
                 }
-                next_level.push(hasher.finalize().into());
-            }
-            hashes = next_level;
-        }
-
-        hashes[0]
+                [a] => *a,
+                _ => unreachable!(),
+            })
+            .collect();
     }
+    let mut h = Sha256::new();
+    h.update(b"NEBULA_TXROOT_V1");
+    h.update((transactions.len() as u64).to_le_bytes());
+    h.update(level.first().copied().unwrap_or([0u8; 32]));
+    h.finalize().into()
+}
 
-    /// Deterministic state root from parent root + extrinsics root.
-    pub fn compute_state_root(parent_root: &[u8; 32], extrinsics_root: &[u8; 32]) -> [u8; 32] {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(parent_root);
-        hasher.update(extrinsics_root);
-        hasher.finalize().into()
+/// Everything a validator checks about a proposed block before voting for it,
+/// besides consensus signatures: it extends `parent` at `expected_slot`,
+/// commits to our current state root, its extrinsics root and base fee are
+/// right, it fits the gas limit, and every transaction authenticates (a block
+/// carrying an unauthenticated tx is invalid as a whole).
+pub fn validate_block(
+    block: &Block,
+    parent: &Block,
+    expected_slot: u64,
+    expected_state_root: &[u8; 32],
+    chain_id: u64,
+    max_gas_per_block: u64,
+) -> Result<(), String> {
+    let header = &block.header;
+    if header.slot != expected_slot {
+        return Err(format!(
+            "slot {} != expected {}",
+            header.slot, expected_slot
+        ));
     }
+    if header.parent_hash != parent.hash() {
+        return Err("parent hash does not match our tip".into());
+    }
+    if &header.state_root != expected_state_root {
+        return Err(format!(
+            "state root {} != ours {}",
+            hex::encode(&header.state_root[..8]),
+            hex::encode(&expected_state_root[..8])
+        ));
+    }
+    if header.extrinsics_root != compute_extrinsics_root(&block.extrinsics) {
+        return Err("extrinsics root mismatch".into());
+    }
+    let expected_base_fee = execution::gas::calculate_next_base_fee(
+        parent.header.gas_used,
+        max_gas_per_block,
+        parent.header.base_fee,
+    );
+    if header.base_fee != expected_base_fee {
+        return Err(format!(
+            "base fee {} != expected {}",
+            header.base_fee, expected_base_fee
+        ));
+    }
+    let mut gas = 0u64;
+    for tx in &block.extrinsics {
+        gas = gas
+            .checked_add(tx.gas_limit)
+            .filter(|g| *g <= max_gas_per_block)
+            .ok_or("block exceeds the gas limit")?;
+        common::validation::verify_tx_signature(tx, chain_id)
+            .map_err(|e| format!("tx {}: {}", hex::encode(&tx.hash()[..8]), e))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -700,6 +844,8 @@ mod tests {
     use mempool::MempoolConfig;
     use std::sync::Arc;
     use storage::{ChainStore, MemDb};
+
+    const TEST_ROOT: [u8; 32] = [7u8; 32];
 
     fn make_test_setup() -> (BlockProducer, Arc<TxPool>) {
         let signing_key = SigningKey::from_bytes(&[1u8; 32]).unwrap();
@@ -722,6 +868,15 @@ mod tests {
         let store = Arc::new(InMemoryStore::default());
         let evm = EvmExecutor::with_store(store, 1);
         let db = Arc::new(MemDb::new());
+        {
+            use storage::KeyValueStore;
+            db.put(
+                storage::ColumnFamily::Meta,
+                storage::STATE_ROOT_KEY,
+                &TEST_ROOT,
+            )
+            .unwrap();
+        }
         let chain_store = Arc::new(ChainStore::new(db));
         let executor = BlockExecutor::new(evm, chain_store);
 
@@ -854,5 +1009,120 @@ mod tests {
         };
         let receipts = executor.execute_and_commit(&later).unwrap();
         assert!(!receipts[0].success, "replay in a later block");
+    }
+
+    fn signed_transfer(seed: u8, nonce: u64) -> Transaction {
+        let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+        let mut tx = Transaction::simple_transfer([0; 20], [9; 20], 1, nonce, 1);
+        tx.max_priority_fee_per_gas = 1_000_000_000;
+        tx.sign_with(&key);
+        tx
+    }
+
+    #[tokio::test]
+    async fn produced_block_commits_to_state_root_and_validates() {
+        let (mut producer, pool) = make_test_setup();
+        pool.add_transaction(signed_transfer(3, 0)).unwrap();
+        let parent = producer.block_executor.latest_block().unwrap();
+        let block = producer.produce_block().await.unwrap();
+        assert_eq!(block.header.state_root, TEST_ROOT);
+        assert_eq!(block.extrinsics.len(), 1);
+
+        let ok = validate_block(&block, &parent, 0, &TEST_ROOT, 1, 30_000_000);
+        assert!(ok.is_ok(), "{:?}", ok);
+
+        // A node whose state differs rejects it.
+        assert!(validate_block(&block, &parent, 0, &[8u8; 32], 1, 30_000_000).is_err());
+
+        // Wrong slot / chain id / tampered tx list.
+        assert!(validate_block(&block, &parent, 1, &TEST_ROOT, 1, 30_000_000).is_err());
+        assert!(validate_block(&block, &parent, 0, &TEST_ROOT, 2, 30_000_000).is_err());
+        let mut extra = block.clone();
+        extra.extrinsics.push(signed_transfer(4, 0));
+        assert!(validate_block(&extra, &parent, 0, &TEST_ROOT, 1, 30_000_000).is_err());
+    }
+
+    #[test]
+    fn block_with_unauthenticated_tx_is_invalid() {
+        let parent = Block::genesis();
+        let mut forged = signed_transfer(3, 0);
+        forged.value = 1_000;
+        let mut header = Header::new(parent.hash(), 0);
+        header.state_root = TEST_ROOT;
+        header.base_fee = execution::gas::calculate_next_base_fee(
+            parent.header.gas_used,
+            30_000_000,
+            parent.header.base_fee,
+        );
+        header.extrinsics_root = compute_extrinsics_root(std::slice::from_ref(&forged));
+        let block = Block::new(header, vec![forged]);
+        let err = validate_block(&block, &parent, 0, &TEST_ROOT, 1, 30_000_000).unwrap_err();
+        assert!(err.contains("Invalid signature"), "{}", err);
+    }
+
+    /// Regression: the old Merkle construction duplicated an odd last leaf, so
+    /// `[a, b, c]` and `[a, b, c, c]` had the same root.
+    #[test]
+    fn extrinsics_root_is_not_malleable() {
+        let (a, b, c) = (
+            signed_transfer(1, 0),
+            signed_transfer(2, 0),
+            signed_transfer(3, 0),
+        );
+        let three = compute_extrinsics_root(&[a.clone(), b.clone(), c.clone()]);
+        let four = compute_extrinsics_root(&[a, b, c.clone(), c]);
+        assert_ne!(three, four);
+        assert_ne!(compute_extrinsics_root(&[]), [0u8; 32]);
+    }
+
+    #[test]
+    fn self_transfer_does_not_mint() {
+        let evm = EvmExecutor::with_store(Arc::new(InMemoryStore::default()), 1);
+        let chain_store = Arc::new(ChainStore::new(Arc::new(MemDb::new())));
+        let key = ed25519_dalek::SigningKey::from_bytes(&[6u8; 32]);
+        let sender =
+            common::crypto::derive_address_from_public_key(&key.verifying_key().to_bytes());
+        crate::accounts::store(&chain_store, &sender, 10u128.pow(18), 0).unwrap();
+
+        let mut tx = Transaction::simple_transfer(sender, sender, 500, 0, 1);
+        tx.sign_with(&key);
+        let mut executor = BlockExecutor::new(evm, chain_store.clone());
+        let block = Block::new(Header::new([0; 32], 1), vec![tx.clone()]);
+        let receipts = executor.execute_and_commit(&block).unwrap();
+        assert!(receipts[0].success);
+
+        let gas = tx.gas_limit as u128 * tx.max_fee_per_gas as u128;
+        assert_eq!(
+            crate::accounts::load(&chain_store, &sender),
+            (10u128.pow(18) - gas, 1)
+        );
+    }
+
+    #[test]
+    fn wasm_deploy_tx_registers_module_once() {
+        let evm = EvmExecutor::with_store(Arc::new(InMemoryStore::default()), 1);
+        let chain_store = Arc::new(ChainStore::new(Arc::new(MemDb::new())));
+        let key = ed25519_dalek::SigningKey::from_bytes(&[8u8; 32]);
+        // Smallest valid module: magic + version.
+        let module = b"\0asm\x01\0\0\0".to_vec();
+        let deploy = |nonce: u64| {
+            let mut tx = Transaction::simple_transfer([0; 20], [0; 20], 0, nonce, 1);
+            tx.to = None;
+            tx.payload = [
+                execution::WASM_DEPLOY_PREFIX,
+                b"counter:",
+                module.as_slice(),
+            ]
+            .concat();
+            tx.sign_with(&key);
+            tx
+        };
+        let mut executor = BlockExecutor::new(evm, chain_store.clone());
+        let block = Block::new(Header::new([0; 32], 1), vec![deploy(0), deploy(1)]);
+        let receipts = executor.execute_and_commit(&block).unwrap();
+        assert!(receipts[0].success, "{:?}", receipts[0].revert_reason);
+        assert!(!receipts[1].success, "a name cannot be taken twice");
+        let registry = crate::wasm_registry::WasmRegistry::new(chain_store);
+        assert_eq!(registry.get("counter").unwrap(), Some(module));
     }
 }

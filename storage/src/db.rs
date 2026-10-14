@@ -126,6 +126,10 @@ pub enum ColumnFamily {
 
     /// Node metadata (latest height, genesis hash, chain ID)
     Meta,
+
+    /// Patricia trie nodes and root pointer (kept apart from `State` so the
+    /// flat application state can be committed to on its own).
+    Trie,
 }
 
 impl ColumnFamily {
@@ -138,6 +142,7 @@ impl ColumnFamily {
             ColumnFamily::State => 0x03,
             ColumnFamily::Receipts => 0x04,
             ColumnFamily::Meta => 0x05,
+            ColumnFamily::Trie => 0x06,
         }
     }
 
@@ -149,6 +154,7 @@ impl ColumnFamily {
             ColumnFamily::State => "state",
             ColumnFamily::Receipts => "receipts",
             ColumnFamily::Meta => "meta",
+            ColumnFamily::Trie => "trie",
         }
     }
 }
@@ -164,12 +170,12 @@ impl ColumnFamily {
 /// a commit, the batch is either fully applied or fully rolled back.
 #[derive(Default)]
 pub struct WriteBatch {
-    ops: Vec<BatchOp>,
+    pub(crate) ops: Vec<BatchOp>,
     size_hint: usize, // Estimated byte size for RocksDB
 }
 
 /// Single operation within a batch
-enum BatchOp {
+pub(crate) enum BatchOp {
     Put {
         cf: ColumnFamily,
         key: Vec<u8>,
@@ -609,6 +615,7 @@ pub mod rocks {
                 ColumnFamily::State.name(),
                 ColumnFamily::Receipts.name(),
                 ColumnFamily::Meta.name(),
+                ColumnFamily::Trie.name(),
             ];
 
             let cfs: Vec<ColumnFamilyDescriptor> = cf_names
@@ -798,6 +805,9 @@ pub mod rocks {
 ///
 /// This provides type-safe methods for blockchain-specific operations
 /// while using the underlying KeyValueStore for actual storage.
+/// Meta key for the state root after the latest committed block.
+pub const STATE_ROOT_KEY: &[u8] = b"state_root";
+
 pub struct ChainStore {
     inner: Arc<dyn KeyValueStore>,
 }
@@ -919,6 +929,12 @@ impl ChainStore {
             let arr: [u8; 8] = b.try_into().unwrap_or([0u8; 8]);
             u64::from_le_bytes(arr)
         }))
+    }
+
+    /// State root after the latest committed block (see `node::state_root`).
+    pub fn get_state_root(&self) -> Result<Option<[u8; 32]>, Box<dyn Error>> {
+        let raw = self.inner.get(ColumnFamily::Meta, STATE_ROOT_KEY)?;
+        Ok(raw.and_then(|b| b.as_slice().try_into().ok()))
     }
 
     /// Set the genesis block hash

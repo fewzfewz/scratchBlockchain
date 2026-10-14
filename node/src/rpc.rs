@@ -16,7 +16,6 @@
 //! CORS headers are enabled to allow web wallets and explorers to connect.
 
 use crate::bridge_queue::{BridgeUnlockQueue, PendingUnlock};
-use crate::governance_store;
 use crate::tx_pool::TxPool;
 use common::types::{Block, Transaction};
 use consensus::slashing::SlashingTracker;
@@ -230,19 +229,6 @@ struct BridgeUnlockAckRequest {
     eth_tx_hash: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
-struct RuntimeProposeRequest {
-    spec_version: u32,
-    activation_height: u64,
-    code_hash: String,
-    proposer: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RuntimeApproveRequest {
-    proposal_id: u64,
-}
-
 #[derive(Debug, Serialize)]
 struct BridgeStatusResponse {
     vault_address: String,
@@ -294,6 +280,62 @@ pub struct RpcSecurity {
     pub dev_mode: bool,
     pub admin_token: Option<String>,
     pub cors_origins: Vec<String>,
+    /// Ed25519 seed of a genesis-funded dev account. The dev-mode faucet,
+    /// bridge mint and WASM deploy routes submit real transactions signed by
+    /// it, instead of writing state outside consensus.
+    pub dev_funding_key: Option<[u8; 32]>,
+}
+
+/// Submits node-signed transactions for the dev-mode routes.
+struct DevSigner {
+    key: ed25519_dalek::SigningKey,
+    address: [u8; 20],
+    /// Next nonce to use; transactions may still be pending in the mempool,
+    /// so the on-chain nonce alone would reuse them.
+    next_nonce: Mutex<u64>,
+    chain_store: Arc<ChainStore>,
+    tx_pool: Arc<TxPool>,
+    network_cmd_sender: mpsc::Sender<NetworkCommand>,
+    chain_id: u64,
+}
+
+impl DevSigner {
+    /// Sign and submit a transaction from the dev account; returns its hash.
+    async fn submit(
+        &self,
+        to: Option<[u8; 20]>,
+        value: u64,
+        payload: Vec<u8>,
+    ) -> Result<String, String> {
+        let mut next = self.next_nonce.lock().await;
+        let (_, onchain) = crate::accounts::load(&self.chain_store, &self.address);
+        let nonce = (*next).max(onchain);
+        let mut tx = Transaction {
+            sender: self.address,
+            nonce,
+            public_key: [0; 32],
+            payload,
+            signature: vec![],
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            chain_id: Some(self.chain_id),
+            to,
+            value,
+        };
+        tx.sign_with(&self.key);
+        if let Err(e) = self.tx_pool.add_transaction(tx.clone()) {
+            // Out of sync with the pool (e.g. a tx was dropped): restart from chain.
+            *next = onchain;
+            return Err(e);
+        }
+        *next = nonce + 1;
+        let _ = self
+            .network_cmd_sender
+            .send(NetworkCommand::BroadcastTransaction(tx.clone()))
+            .await;
+        Ok(hex::encode(tx.hash()))
+    }
 }
 
 #[derive(Debug)]
@@ -421,6 +463,24 @@ impl RpcServer {
         let chain_id = self.chain_id;
         let dev = dev_only(&self.security);
         let admin = admin_only(&self.security);
+        let dev_signer: Option<Arc<DevSigner>> = self.security.dev_funding_key.map(|seed| {
+            let key = ed25519_dalek::SigningKey::from_bytes(&seed);
+            let address =
+                common::crypto::derive_address_from_public_key(&key.verifying_key().to_bytes());
+            Arc::new(DevSigner {
+                key,
+                address,
+                next_nonce: Mutex::new(0),
+                chain_store: chain_store.clone(),
+                tx_pool: tx_pool.clone(),
+                network_cmd_sender: network_cmd_sender.clone(),
+                chain_id,
+            })
+        });
+        let with_dev_signer = {
+            let signer = dev_signer.clone();
+            warp::any().map(move || signer.clone())
+        };
 
         // Per-address faucet cooldown tracking (server-side, not client-enforced)
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> =
@@ -587,31 +647,16 @@ impl RpcServer {
             .and(with_arc(slashing_tracker.clone()))
             .and_then(|_, tracker| handle_slashing_events(tracker));
 
-        // POST /delegate - Delegate stake to a validator
-        let delegate_route = warp::path("delegate")
-            .and(admin.clone())
-            .and(with_rate_limit.clone())
-            .and(warp::post())
-            .and(body_limit)
-            .and(warp::body::json())
-            .and(with_arc(state_trie.clone()))
-            .and(with_arc(chain_store.clone()))
-            .and_then(
-                |_, req: DelegateRequest, state_trie, chain_store| async move {
-                    handle_delegate(req, state_trie, chain_store).await
-                },
-            );
-
-        // POST /validators/register - Register a new validator (dynamic set)
+        // POST /delegate, /validators/register — replaced by signed staking
+        // transactions (they wrote any stake into one node's state, and with
+        // a real state root that node would fork off the network).
+        let delegate_route = warp::path("delegate").and(warp::post()).map(|| {
+            gone(r#"Submit a signed transaction with payload {"action":"delegate","validator":"0x…","amount":"<wei>"} to /submit_tx"#)
+        });
         let register_validator = warp::path!("validators" / "register")
-            .and(admin.clone())
-            .and(with_rate_limit.clone())
             .and(warp::post())
-            .and(body_limit)
-            .and(warp::body::json())
-            .and(with_arc(state_trie.clone()))
-            .and_then(|_, req: RegisterValidatorRequest, state_trie| async move {
-                handle_register_validator(req, state_trie).await
+            .map(|| {
+                gone(r#"Submit a signed transaction with payload {"action":"register_validator","stake":"<wei>","commission_rate":10} to /submit_tx"#)
             });
 
         // GET /ws - WebSocket subscriptions (newHead events)
@@ -774,33 +819,14 @@ impl RpcServer {
                 handle_runtime_upgrades(state_trie).await
             });
 
-        // POST /runtime/propose — propose a runtime upgrade (testnet admin)
+        // POST /runtime/propose, /runtime/approve — removed: runtime upgrades
+        // go through governance ("software_upgrade" proposal, then "execute").
         let runtime_propose = warp::path!("runtime" / "propose")
-            .and(admin.clone())
-            .and(with_rate_limit.clone())
             .and(warp::post())
-            .and(body_limit)
-            .and(warp::body::json())
-            .and(with_arc(state_trie.clone()))
-            .and_then(
-                |_, req: RuntimeProposeRequest, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
-                    handle_runtime_propose(req, state_trie).await
-                },
-            );
-
-        // POST /runtime/approve — approve a pending runtime upgrade
+            .map(|| gone("Propose a software_upgrade through governance (signed tx)"));
         let runtime_approve = warp::path!("runtime" / "approve")
-            .and(admin.clone())
-            .and(with_rate_limit.clone())
             .and(warp::post())
-            .and(body_limit)
-            .and(warp::body::json())
-            .and(with_arc(state_trie.clone()))
-            .and_then(
-                |_, req: RuntimeApproveRequest, state_trie: Arc<Mutex<PatriciaTrie>>| async move {
-                    handle_runtime_approve(req, state_trie).await
-                },
-            );
+            .map(|| gone("Runtime upgrades are approved by executing the governance proposal"));
 
         // POST /faucet/request - Request test tokens (directly credits the account)
         let faucet_request = warp::path!("faucet" / "request")
@@ -809,14 +835,14 @@ impl RpcServer {
             .and(warp::post())
             .and(body_limit)
             .and(warp::body::json())
-            .and(with_arc(chain_store.clone()))
+            .and(with_dev_signer.clone())
             .and(with_arc(faucet_cooldowns.clone()))
             .and_then(
                 |_,
                  req: serde_json::Value,
-                 chain_store: Arc<ChainStore>,
+                 signer: Option<Arc<DevSigner>>,
                  faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>>| async move {
-                    handle_faucet_request(req, chain_store, faucet_cooldowns).await
+                    handle_faucet_request(req, signer, faucet_cooldowns).await
                 },
             );
 
@@ -827,10 +853,10 @@ impl RpcServer {
             .and(warp::post())
             .and(body_limit)
             .and(warp::body::json())
-            .and(with_arc(chain_store.clone()))
+            .and(with_dev_signer.clone())
             .and_then(
-                |_, req: DeployWasmRequest, chain_store: Arc<ChainStore>| async move {
-                    handle_deploy_wasm(req, chain_store).await
+                |_, req: DeployWasmRequest, signer: Option<Arc<DevSigner>>| async move {
+                    handle_deploy_wasm(req, signer).await
                 },
             );
 
@@ -915,13 +941,15 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(chain_store.clone()))
+            .and(with_dev_signer.clone())
             .and(with_arc(bridge_minted.clone()))
             .and_then(
                 |_,
                  req: BridgeMintRequest,
                  chain_store: Arc<ChainStore>,
+                 signer: Option<Arc<DevSigner>>,
                  bridge_minted: Arc<Mutex<HashSet<String>>>| async move {
-                    handle_bridge_mint(req, chain_store, bridge_minted).await
+                    handle_bridge_mint(req, chain_store, signer, bridge_minted).await
                 },
             );
 
@@ -1703,107 +1731,22 @@ async fn handle_runtime_upgrades(
     }
 }
 
-async fn handle_runtime_propose(
-    req: RuntimeProposeRequest,
-    state_trie: Arc<Mutex<PatriciaTrie>>,
-) -> Result<impl warp::Reply, Infallible> {
-    use crate::runtime_upgrade::RuntimeVersion;
-
-    let proposer = match parse_address_20(&req.proposer) {
-        Some(a) => a,
-        None => {
-            return Ok(warp::reply::json(
-                &serde_json::json!({ "error": "Invalid proposer" }),
-            ))
-        }
-    };
-    let hash_bytes = hex::decode(req.code_hash.trim_start_matches("0x")).unwrap_or_default();
-    if hash_bytes.len() != 32 {
-        return Ok(warp::reply::json(
-            &serde_json::json!({ "error": "code_hash must be 32 bytes" }),
-        ));
-    }
-    let mut code_hash = [0u8; 32];
-    code_hash.copy_from_slice(&hash_bytes);
-
-    let new_version = RuntimeVersion {
-        spec_name: "nebula".into(),
-        impl_name: "nebula-node".into(),
-        authoring_version: 1,
-        spec_version: req.spec_version,
-        impl_version: req.spec_version,
-    };
-
-    match crate::runtime_upgrade_store::propose_upgrade(
-        &state_trie,
-        new_version,
-        code_hash,
-        req.activation_height,
-        proposer,
-    )
-    .await
-    {
-        Ok(id) => Ok(warp::reply::json(&serde_json::json!({
-            "status": "proposed",
-            "proposal_id": id,
-        }))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
-    }
-}
-
-async fn handle_runtime_approve(
-    req: RuntimeApproveRequest,
-    state_trie: Arc<Mutex<PatriciaTrie>>,
-) -> Result<impl warp::Reply, Infallible> {
-    match crate::runtime_upgrade_store::approve_upgrade(&state_trie, req.proposal_id).await {
-        Ok(()) => Ok(warp::reply::json(&serde_json::json!({
-            "status": "approved",
-            "proposal_id": req.proposal_id,
-        }))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
-    }
-}
-
-async fn credit_account_balance(
-    chain_store: &ChainStore,
-    address: &str,
-    amount: u128,
-) -> Result<String, String> {
-    let addr_clean = address.trim_start_matches("0x").to_lowercase();
-    let addr_bytes = hex::decode(&addr_clean).map_err(|_| "Invalid address".to_string())?;
-    if addr_bytes.len() != 20 {
-        return Err("Invalid address length".into());
-    }
-
-    let mut balance = 0u128;
-    if let Ok(Some(encoded)) = chain_store.get_state(&addr_bytes) {
-        if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
-            if let Some(b) = acc.get("balance").and_then(|v| v.as_str()) {
-                balance = b.parse().unwrap_or(0);
-            }
-        }
-    }
-    balance += amount;
-
-    let account = serde_json::json!({
-        "balance": balance.to_string(),
-        "nonce": 0,
-    });
-    chain_store
-        .put_state(&addr_bytes, &serde_json::to_vec(&account).unwrap())
-        .map_err(|e| e.to_string())?;
-    Ok(balance.to_string())
-}
-
 /// State key prefix recording ETH lock txs that were already minted, so the
 /// replay check survives restarts.
-const BRIDGE_MINTED_PREFIX: &[u8] = b"bridge:minted:";
+/// Under `local:`, so it is node-local bookkeeping outside the state root.
+const BRIDGE_MINTED_PREFIX: &[u8] = b"local:bridge:minted:";
 
 async fn handle_bridge_mint(
     req: BridgeMintRequest,
     chain_store: Arc<ChainStore>,
+    signer: Option<Arc<DevSigner>>,
     bridge_minted: Arc<Mutex<HashSet<String>>>,
 ) -> Result<impl warp::Reply, Infallible> {
+    let Some(signer) = signer else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "Bridge mint disabled: set api.dev_funding_key (NODE_API_DEV_FUNDING_KEY)",
+        })));
+    };
     let recipient = req.recipient.trim().to_lowercase();
     if hex::decode(recipient.trim_start_matches("0x"))
         .map(|b| b.len() != 20)
@@ -1818,7 +1761,17 @@ async fn handle_bridge_mint(
         .amount
         .as_ref()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(100_000_000_000_000_000_000u128);
+        .unwrap_or(10_000_000_000_000_000_000u128);
+    let Ok(amount_u64) = u64::try_from(amount) else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "Amount exceeds the per-transaction limit (u64 wei, ~18.4 tokens)",
+        })));
+    };
+    let Some(recipient_bytes) = parse_address(&recipient) else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "Invalid recipient address",
+        })));
+    };
 
     // Every mint must be backed by an Ethereum lock tx; there is no free mint.
     let Some(eth_hash) = req.eth_tx_hash.as_deref() else {
@@ -1865,18 +1818,30 @@ async fn handle_bridge_mint(
                 "error": format!("Failed to record ETH lock: {}", e),
             })));
         }
-        minted.insert(eth_hash_lower);
-    }
-
-    match credit_account_balance(&chain_store, &recipient, amount).await {
-        Ok(balance) => Ok(warp::reply::json(&serde_json::json!({
-            "status": "minted",
-            "recipient": format!("0x{}", recipient.trim_start_matches("0x")),
-            "amount": amount.to_string(),
-            "balance": balance,
-            "eth_tx_hash": req.eth_tx_hash,
-        }))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
+        // Paid from the genesis-funded dev account as an ordinary transfer,
+        // so every node applies it (crediting the balance directly changed
+        // only this node's state).
+        match signer
+            .submit(Some(recipient_bytes), amount_u64, vec![])
+            .await
+        {
+            Ok(hash) => {
+                minted.insert(eth_hash_lower);
+                Ok(warp::reply::json(&serde_json::json!({
+                    "status": "minted",
+                    "recipient": format!("0x{}", hex::encode(recipient_bytes)),
+                    "amount": amount.to_string(),
+                    "hash": hash,
+                    "eth_tx_hash": req.eth_tx_hash,
+                })))
+            }
+            Err(e) => {
+                let _ = chain_store.delete_state(&replay_key);
+                Ok(warp::reply::json(&serde_json::json!({
+                    "error": format!("Mint transfer failed: {}", e),
+                })))
+            }
+        }
     }
 }
 
@@ -2400,28 +2365,29 @@ fn status_str(s: &ProposalStatus) -> &'static str {
 // ============================================================================
 
 /// Directly credit an account with test tokens (dev faucet, no transaction needed)
+/// Largest faucet drip: a transaction's `value` is a u64 (~18.4 tokens).
+const FAUCET_MAX_DRIP: u128 = 10_000_000_000_000_000_000; // 10 tokens
+
 async fn handle_faucet_request(
     req: serde_json::Value,
-    chain_store: Arc<ChainStore>,
+    signer: Option<Arc<DevSigner>>,
     faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>>,
 ) -> Result<impl warp::Reply, Infallible> {
-    let address = match req.get("address").and_then(|v| v.as_str()) {
-        Some(addr) => addr.trim_start_matches("0x").to_lowercase(),
-        None => {
-            return Ok(warp::reply::json(
-                &serde_json::json!({"error": "Missing address"}),
-            ))
-        }
+    let Some(signer) = signer else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "Faucet disabled: set api.dev_funding_key (NODE_API_DEV_FUNDING_KEY)",
+        })));
     };
-
-    let addr_bytes = match hex::decode(&address) {
-        Ok(b) if b.len() == 20 => b,
-        _ => {
-            return Ok(warp::reply::json(
-                &serde_json::json!({"error": "Invalid address"}),
-            ))
-        }
+    let Some(recipient) = req
+        .get("address")
+        .and_then(|v| v.as_str())
+        .and_then(parse_address)
+    else {
+        return Ok(warp::reply::json(
+            &serde_json::json!({"error": "Missing or invalid address"}),
+        ));
     };
+    let address = hex::encode(recipient);
 
     // Server-side cooldown: enforce a minimum wait between drips to the same address
     let now = SystemTime::now()
@@ -2438,43 +2404,42 @@ async fn handle_faucet_request(
             })));
         }
     }
-    cooldowns.insert(address, now);
-    drop(cooldowns);
 
     let drip_amount: u128 = req
         .get("amount")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse().ok())
-        .unwrap_or(100_000_000_000_000_000_000u128); // default 100 tokens
+        .unwrap_or(FAUCET_MAX_DRIP)
+        .min(FAUCET_MAX_DRIP);
 
-    // Read current account state
-    let mut balance = 0u128;
-    if let Ok(Some(encoded)) = chain_store.get_state(&addr_bytes) {
-        if let Ok(acc) = serde_json::from_slice::<serde_json::Value>(&encoded) {
-            if let Some(b) = acc.get("balance").and_then(|v| v.as_str()) {
-                balance = b.parse::<u128>().unwrap_or(0);
-            }
+    // A real transfer from the dev account, ordered by consensus like any
+    // other — the faucet used to overwrite balances (and reset nonces) on
+    // the one node that served the request.
+    match signer
+        .submit(Some(recipient), drip_amount as u64, vec![])
+        .await
+    {
+        Ok(hash) => {
+            cooldowns.insert(address, now);
+            Ok(warp::reply::json(&serde_json::json!({
+                "status": "success",
+                "amount": drip_amount.to_string(),
+                "hash": hash,
+                "note": "Funds arrive when the transfer is included in a block",
+            })))
         }
+        Err(e) => Ok(warp::reply::json(
+            &serde_json::json!({"error": format!("Faucet transfer failed: {}", e)}),
+        )),
     }
+}
 
-    balance += drip_amount;
-
-    let account = serde_json::json!({
-        "balance": balance.to_string(),
-        "nonce": 0,
-    });
-
-    if let Err(e) = chain_store.put_state(&addr_bytes, &serde_json::to_vec(&account).unwrap()) {
-        return Ok(warp::reply::json(
-            &serde_json::json!({"error": e.to_string()}),
-        ));
-    }
-
-    Ok(warp::reply::json(&serde_json::json!({
-        "status": "success",
-        "amount": drip_amount.to_string(),
-        "balance": balance.to_string(),
-    })))
+/// 410 Gone with a pointer to the replacement.
+fn gone(message: &str) -> warp::reply::WithStatus<warp::reply::Json> {
+    warp::reply::with_status(
+        warp::reply::json(&serde_json::json!({ "error": message })),
+        warp::http::StatusCode::GONE,
+    )
 }
 
 // ============================================================================
@@ -2497,21 +2462,6 @@ struct MevRevealRequest {
 }
 
 #[derive(Debug, Deserialize)]
-struct DelegateRequest {
-    delegator: String,
-    validator: String,
-    amount: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct RegisterValidatorRequest {
-    address: String,
-    public_key: String,
-    stake: String,
-    commission_rate: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
 struct DeployWasmRequest {
     name: String,
     /// Base64-encoded WASM module bytes
@@ -2528,9 +2478,21 @@ struct CallWasmRequest {
 
 async fn handle_deploy_wasm(
     req: DeployWasmRequest,
-    chain_store: Arc<ChainStore>,
+    signer: Option<Arc<DevSigner>>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     use base64::Engine as _;
+    let Some(signer) = signer else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "status": "error",
+            "error": "WASM deploy disabled: set api.dev_funding_key (NODE_API_DEV_FUNDING_KEY)",
+        })));
+    };
+    if req.name.is_empty() || req.name.contains(':') || req.name.len() > 64 {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "status": "error",
+            "error": "Invalid contract name (1-64 chars, no ':')",
+        })));
+    }
     let wasm = match base64::engine::general_purpose::STANDARD.decode(&req.wasm) {
         Ok(b) => b,
         Err(e) => {
@@ -2540,16 +2502,11 @@ async fn handle_deploy_wasm(
             })));
         }
     };
-    let executor = match execution::WasmExecutor::new() {
-        Ok(e) => e,
-        Err(e) => {
-            return Ok(warp::reply::json(&serde_json::json!({
-                "status": "error",
-                "error": format!("WASM engine init: {}", e),
-            })));
-        }
-    };
-    let code_hash = match executor.validate_module(&wasm) {
+    // Validate up front for a clear error; the executor validates again.
+    let code_hash = match execution::WasmExecutor::new()
+        .map_err(|e| e.to_string())
+        .and_then(|exec| exec.validate_module(&wasm).map_err(|e| e.to_string()))
+    {
         Ok(h) => h,
         Err(e) => {
             return Ok(warp::reply::json(&serde_json::json!({
@@ -2558,16 +2515,24 @@ async fn handle_deploy_wasm(
             })));
         }
     };
-    let registry = crate::wasm_registry::WasmRegistry::new(chain_store);
-    match registry.deploy(&req.name, &wasm) {
-        Ok(()) => Ok(warp::reply::json(&serde_json::json!({
+    let payload = [
+        execution::WASM_DEPLOY_PREFIX,
+        req.name.as_bytes(),
+        b":",
+        wasm.as_slice(),
+    ]
+    .concat();
+    match signer.submit(None, 0, payload).await {
+        Ok(hash) => Ok(warp::reply::json(&serde_json::json!({
             "status": "success",
             "name": req.name,
             "code_hash": hex::encode(code_hash),
+            "hash": hash,
+            "note": "The contract is registered when the deploy transaction is included in a block",
         }))),
         Err(e) => Ok(warp::reply::json(&serde_json::json!({
             "status": "error",
-            "error": e.to_string(),
+            "error": e,
         }))),
     }
 }
@@ -2765,50 +2730,6 @@ async fn handle_slashing_events(
         "slashed_validators": slashed,
         "count": slashed.len(),
     })))
-}
-
-async fn handle_delegate(
-    req: DelegateRequest,
-    state_trie: Arc<Mutex<PatriciaTrie>>,
-    chain_store: Arc<ChainStore>,
-) -> Result<impl warp::Reply, Infallible> {
-    let Some(delegator) = parse_address(&req.delegator) else {
-        return Ok(warp::reply::json(
-            &serde_json::json!({"error": "Invalid delegator"}),
-        ));
-    };
-    let Some(validator) = parse_address(&req.validator) else {
-        return Ok(warp::reply::json(
-            &serde_json::json!({"error": "Invalid validator"}),
-        ));
-    };
-    let amount: u128 = req.amount.parse().unwrap_or(0);
-    match governance_store::apply_delegate(&state_trie, &chain_store, delegator, validator, amount)
-        .await
-    {
-        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
-    }
-}
-
-async fn handle_register_validator(
-    req: RegisterValidatorRequest,
-    state_trie: Arc<Mutex<PatriciaTrie>>,
-) -> Result<impl warp::Reply, Infallible> {
-    let Some(address) = parse_address(&req.address) else {
-        return Ok(warp::reply::json(
-            &serde_json::json!({"error": "Invalid address"}),
-        ));
-    };
-    let public_key = hex::decode(req.public_key.trim_start_matches("0x")).unwrap_or_default();
-    let stake: u128 = req.stake.parse().unwrap_or(0);
-    let commission = req.commission_rate.unwrap_or(10);
-    match governance_store::register_validator(&state_trie, address, public_key, stake, commission)
-        .await
-    {
-        Ok(()) => Ok(warp::reply::json(&serde_json::json!({"status": "success"}))),
-        Err(e) => Ok(warp::reply::json(&serde_json::json!({"error": e}))),
-    }
 }
 
 async fn handle_websocket(ws: warp::ws::WebSocket, chain_store: Arc<ChainStore>) {

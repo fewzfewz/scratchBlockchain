@@ -51,13 +51,16 @@
 
 These must be fixed before any public testnet. Operational items further down come after them.
 
-- **Validator set changes**: validators are still added through the dev-only `/validators/register` route, which writes one node's local state; nothing orders the change through consensus or delays it to an epoch boundary, so nodes can disagree on the set. Equivocation evidence is recorded only in each node's local slashing tracker, not slashed on-chain.
-- **No real state root**: the header `state_root` hashes only `parent_root + extrinsics_root`, and blocks are committed before that check runs.
-- **Bridge trust**: in dev mode the relayer routes (`/bridge/mint`, `/bridge/unlock`) still credit balances outside consensus, and the ETH lock check accepts any successful tx with logs and trusts the requested amount.
+- **Validator set changes**: registration is now an ordered, signed transaction, but it takes effect at the next height rather than an epoch boundary, there is no unbonding, and equivocation evidence is recorded only in each node's local slashing tracker, not slashed on-chain.
+- **Bridge trust**: the ETH lock check accepts any successful tx with logs and trusts the requested amount; mints are paid from the dev funding account, so the bridge only exists in dev mode.
+- **Consensus parameters from local config**: the max block gas and the governance params (`GOVERNANCE_*` env) feed consensus-critical checks and genesis state but are read per node; they belong in genesis.
+- **Amounts**: a transaction's `value` is a `u64` (about 18.4 tokens).
 
 Fixed in Phase 1 (transactions carry an explicit `public_key`; tx/header hashes are domain-separated and canonical; the RPC, mempool and every executor branch verify signatures; governance/WASM txs consume nonces; state-writing RPC routes only exist with `api.dev_mode = true`, optionally behind `api.admin_token`). Rewards overflow fixed earlier.
 
 Fixed in Phase 2: quorum is strictly `> 2/3` of stake; votes are verified before they can move the round, and a round skip needs `> 1/3` of stake; a conflicting second vote yields `DoubleSignEvidence` (fed to the slashing tracker) instead of replacing the first; the lock and a last-signed watermark are persisted atomically before every signed message is broadcast; finalized blocks carry a commit certificate (+2/3 precommits) that sync verifies; fork choice no longer reorgs to any higher block; the validator set is only reloaded between heights and compared by keys and stakes. The local devnet has 4 validators, so it keeps finalizing with any one of them down.
+
+Fixed in Phase 3: the header `state_root` commits to all state after the parent block — an LtHash over the flat state (accounts, EVM, WASM) combined with the governance/validator trie root. Validators reject proposals whose root (or parent, slot, extrinsics root, base fee, or any transaction signature) doesn't match, and a node that cannot apply a finalized block stops instead of diverging. Each block's whole transition (execution, rewards, governance, upgrades, root) commits as one atomic batch. Genesis balances and rewards now live where balances are read. Faucet, bridge mint and WASM deploy are transactions from a genesis-funded dev account; validator registration and delegation are signed staking transactions that bond tokens. Nondeterministic `HashMap` serialization in governance and runtime-upgrade state was replaced with `BTreeMap`. The mempool no longer loses transactions selected for a block.
 
 ## Mainnet blockers (operational)
 

@@ -1,7 +1,6 @@
 const { fetchJson, passBanner, failAndExit } = require('./lib/helpers');
 const { fundAddress } = require('./lib/faucet');
-const { adminHeaders } = require('./lib/tx-sign');
-const { generateWallet } = require('./lib/gov-tx');
+const { generateWallet, submitGovTx, waitForReceipt } = require('./lib/gov-tx');
 
 async function test18_RegisterValidator() {
   console.log('🧪 Test 5.3: Validator Registration\n');
@@ -13,17 +12,15 @@ async function test18_RegisterValidator() {
     const beforeList = Array.isArray(before) ? before : before.validators || [];
     const beforeCount = beforeList.length;
 
-    await fetchJson('http://localhost:8545/validators/register', {
-      method: 'POST',
-      headers: adminHeaders(),
-      body: JSON.stringify({
-        address: wallet.address,
-        public_key: wallet.address,
-        stake: '1000000000000000000',
-        commission_rate: 5,
-      }),
+    // Signed staking transaction: the tx's public key becomes the validator key.
+    const hash = await submitGovTx(wallet, {
+      action: 'register_validator',
+      stake: '1000000000000000000',
+      commission_rate: 5,
     });
-    console.log('1. ✅ POST /validators/register succeeded');
+    const receipt = await waitForReceipt(hash);
+    if (!receipt.success) throw new Error(`Register tx failed: ${receipt.revert_reason}`);
+    console.log('1. ✅ register_validator transaction included');
 
     const after = await fetchJson('http://localhost:8545/validators');
     const afterList = Array.isArray(after) ? after : after.validators || [];

@@ -165,7 +165,7 @@ impl PatriciaTrie {
     /// * `Result<Self>` - New trie instance
     pub fn new(db: Arc<dyn KeyValueStore>) -> Result<Self, Box<dyn Error>> {
         // Try to load existing root from database
-        let (root, cache) = if let Some(root_bytes) = db.get(ColumnFamily::State, b"root")? {
+        let (root, cache) = if let Some(root_bytes) = db.get(ColumnFamily::Trie, b"root")? {
             let mut root_hash = [0u8; 32];
             root_hash.copy_from_slice(&root_bytes);
             (root_hash, HashMap::new())
@@ -177,8 +177,8 @@ impl PatriciaTrie {
             let mut c = HashMap::new();
             c.insert(root_hash, empty_node.clone());
 
-            db.put(ColumnFamily::State, b"root", &root_hash)?;
-            db.put(ColumnFamily::State, &root_hash, &empty_node.encode())?;
+            db.put(ColumnFamily::Trie, b"root", &root_hash)?;
+            db.put(ColumnFamily::Trie, &root_hash, &empty_node.encode())?;
             db.flush()?;
 
             (root_hash, c)
@@ -190,6 +190,17 @@ impl PatriciaTrie {
             db,
             stats: Arc::new(RwLock::new(TrieStats::default())),
         })
+    }
+
+    /// Re-read the root pointer from storage, dropping in-memory changes that
+    /// were never committed (e.g. after a discarded block stage).
+    pub fn reload_root(&self) -> Result<(), Box<dyn Error>> {
+        if let Some(root_bytes) = self.db.get(ColumnFamily::Trie, b"root")? {
+            if let Ok(root) = <[u8; 32]>::try_from(root_bytes.as_slice()) {
+                *self.root.write().unwrap() = root;
+            }
+        }
+        Ok(())
     }
 
     /// Get the current root hash
@@ -212,7 +223,7 @@ impl PatriciaTrie {
         *self.root.write().unwrap() = new_root;
 
         // Persist the new root pointer so the trie survives restarts
-        self.db.put(ColumnFamily::State, b"root", &new_root)?;
+        self.db.put(ColumnFamily::Trie, b"root", &new_root)?;
 
         // Persist changed nodes to disk
         for (hash, node) in changed_nodes {
@@ -262,7 +273,7 @@ impl PatriciaTrie {
         *self.root.write().unwrap() = new_root;
 
         // Persist the new root pointer so the trie survives restarts
-        self.db.put(ColumnFamily::State, b"root", &new_root)?;
+        self.db.put(ColumnFamily::Trie, b"root", &new_root)?;
 
         // Persist changed nodes
         for (hash, node) in changed_nodes {
@@ -369,14 +380,14 @@ impl PatriciaTrie {
 
         let mut batch = WriteBatch::new();
         let mut deleted = 0usize;
-        for (key, _) in self.db.iter(ColumnFamily::State)? {
-            if key == b"root" || key.len() != 32 {
+        for (key, _) in self.db.iter(ColumnFamily::Trie)? {
+            if key.len() != 32 {
                 continue;
             }
             let mut hash = [0u8; 32];
             hash.copy_from_slice(&key);
             if !reachable.contains(&hash) {
-                batch.delete(ColumnFamily::State, key);
+                batch.delete(ColumnFamily::Trie, key);
                 deleted += 1;
             }
         }
@@ -432,7 +443,7 @@ impl PatriciaTrie {
             stats.cache_misses += 1;
         }
 
-        if let Some(data) = self.db.get(ColumnFamily::State, &hash)? {
+        if let Some(data) = self.db.get(ColumnFamily::Trie, &hash)? {
             let node = TrieNode::decode(&data)?;
 
             // Cache for future use
@@ -454,7 +465,7 @@ impl PatriciaTrie {
     /// Persist a node to disk and cache
     fn persist_node(&mut self, hash: NodeHash, node: &TrieNode) -> Result<(), Box<dyn Error>> {
         let encoded = node.encode();
-        self.db.put(ColumnFamily::State, &hash, &encoded)?;
+        self.db.put(ColumnFamily::Trie, &hash, &encoded)?;
         self.db.flush()?;
 
         // Update cache
@@ -819,7 +830,7 @@ impl PatriciaTrie {
     pub fn flush(&self) -> Result<(), Box<dyn Error>> {
         // Store root hash
         let root = self.root_hash();
-        self.db.put(ColumnFamily::State, b"root", &root)?;
+        self.db.put(ColumnFamily::Trie, b"root", &root)?;
 
         // Flush database
         self.db.flush()?;

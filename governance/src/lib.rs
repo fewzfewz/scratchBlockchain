@@ -1,7 +1,7 @@
 use common::consensus_types::ValidatorInfo;
 use common::types::Address;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use tracing::info;
 
 // ============================================================================
@@ -617,8 +617,10 @@ pub struct Proposal {
     pub status: ProposalStatus,
     /// Voter address (hex, no 0x prefix) -> choice. String keys keep the
     /// struct JSON-serializable (addresses are fixed-size byte arrays, which
-    /// serde_json cannot use as map keys).
-    pub voters: HashMap<String, VoteChoice>,
+    /// serde_json cannot use as map keys). A `BTreeMap` so the serialized
+    /// bytes — which are committed to in the state root — are the same on
+    /// every node (a `HashMap` iterates in a per-process random order).
+    pub voters: BTreeMap<String, VoteChoice>,
 }
 
 fn addr_key(addr: Address) -> String {
@@ -677,7 +679,7 @@ impl Governance {
             no_votes: 0,
             abstain_votes: 0,
             status: ProposalStatus::Active,
-            voters: HashMap::new(),
+            voters: BTreeMap::new(),
         };
 
         self.proposals.insert(id, proposal);
@@ -936,7 +938,7 @@ impl ChainGovernance {
             no_votes: 0,
             abstain_votes: 0,
             status: ProposalStatus::Active,
-            voters: HashMap::new(),
+            voters: BTreeMap::new(),
         };
 
         self.proposals.push(proposal);
