@@ -786,14 +786,7 @@ impl Node {
                 info!("🔒 Finalizing block at height {}", block.header.slot);
                 self.last_finalize_at = Instant::now();
 
-                // Validators whose precommits finalized the block.
-                let voters: Vec<Vec<u8>> = block
-                    .commit
-                    .as_ref()
-                    .map(|c| c.precommits.iter().map(|v| v.voter.clone()).collect())
-                    .unwrap_or_default();
-
-                if let Err(e) = self.apply_state_transition(&block, proposer, &voters).await {
+                if let Err(e) = self.apply_state_transition(&block, proposer).await {
                     // +2/3 of the stake finalized this block, so failing to apply
                     // it means our state is not theirs. Stop rather than vote on.
                     self.fatal_error = Some(format!(
@@ -923,9 +916,11 @@ impl Node {
                     ConsensusMessage::Proposal(proposal) => {
                         let engine_height = self.bft_engine.lock().await.height;
                         if proposal.height == engine_height {
-                            if let Err(e) =
-                                self.validate_proposed_block(&proposal.block, engine_height)
-                            {
+                            if let Err(e) = self.validate_proposed_block(
+                                &proposal.block,
+                                &proposal.proposer,
+                                engine_height,
+                            ) {
                                 // Not voting for it: we prevote nil on timeout.
                                 warn!(
                                     "Rejecting proposal at height {} round {}: {}",
@@ -1033,7 +1028,16 @@ impl Node {
 
     /// Application-level validity of a proposed block for BFT height
     /// `height` (which finalizes slot `height - 1`) on top of our tip.
-    fn validate_proposed_block(&self, block: &Block, height: u64) -> Result<(), String> {
+    fn validate_proposed_block(
+        &self,
+        block: &Block,
+        proposer: &[u8],
+        height: u64,
+    ) -> Result<(), String> {
+        // Rewards and block stats credit the header's signer, so it must be
+        // the proposer every node saw.
+        common::crypto::verify_signature(proposer, &block.header.hash(), &block.header.signature)
+            .map_err(|_| "block header is not signed by the proposer".to_string())?;
         let parent = latest_block(&self.chain_store).map_err(|e| e.to_string())?;
         let state_root = self
             .chain_store
@@ -1058,20 +1062,25 @@ impl Node {
         // validator set. A proposer signature alone proves nothing — one
         // validator key could otherwise feed us an arbitrary chain.
         // (BFT height h finalizes block slot h - 1.)
-        let voters = match &block.commit {
-            Some(cert) => cert
-                .verify(&block.hash(), block.header.slot + 1, &validators)
-                .map_err(|e| format!("Invalid commit certificate: {}", e))?,
+        match &block.commit {
+            Some(cert) => {
+                cert.verify(&block.hash(), block.header.slot + 1, &validators)
+                    .map_err(|e| format!("Invalid commit certificate: {}", e))?;
+            }
             None => return Err("Block has no commit certificate".into()),
-        };
+        }
         let consensus = EnhancedConsensus::new(validators);
         if let Err(e) = consensus.verify_block(block) {
             warn!("Invalid block: {}", e);
             return Err(format!("Invalid block: {}", e).into());
         }
-        let proposer = consensus.verify_block_author(block).unwrap_or_default();
+        // The proposer's identity feeds rewards and block stats, so it must be
+        // the same on every node: the validator that signed the header.
+        let proposer = consensus
+            .verify_block_author(block)
+            .ok_or("Block header is not signed by a validator")?;
 
-        if let Err(e) = self.apply_state_transition(block, proposer, &voters).await {
+        if let Err(e) = self.apply_state_transition(block, proposer).await {
             // The block is certified, so a failure here means we diverged.
             self.fatal_error = Some(format!(
                 "cannot apply certified block {}: {}",
@@ -1097,7 +1106,6 @@ impl Node {
         &mut self,
         block: &Block,
         proposer: Vec<u8>,
-        voters: &[Vec<u8>],
     ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
         let expected = self
             .chain_store
@@ -1114,7 +1122,7 @@ impl Node {
         }
 
         self.staged.begin()?;
-        let result = self.stage_block_effects(block, proposer, voters).await;
+        let result = self.stage_block_effects(block, proposer).await;
         let receipts = match result {
             Ok(receipts) => receipts,
             Err(e) => {
@@ -1151,7 +1159,6 @@ impl Node {
         &mut self,
         block: &Block,
         proposer: Vec<u8>,
-        voters: &[Vec<u8>],
     ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
         let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
 
@@ -1169,9 +1176,23 @@ impl Node {
             }
         }
 
+        // Vote rewards go to the whole active validator set. They must not
+        // depend on which precommits this node happened to collect (each node
+        // builds its own certificate, so that differs between nodes and
+        // forked the state root). Participation-based rewards need the
+        // proposer to include the previous commit in the block (CometBFT's
+        // LastCommit); until then, every active validator shares equally.
+        let mut voters: Vec<Vec<u8>> = self
+            .get_validator_list()
+            .await?
+            .into_iter()
+            .filter(|v| !v.slashed)
+            .map(|v| v.public_key)
+            .collect();
+        voters.sort();
         let rewards = {
             let mut rm = self.reward_manager.lock().await;
-            rm.process_block(block, proposer, voters, total_fees)
+            rm.process_block(block, proposer, &voters, total_fees)
         };
         for (validator, amount) in rewards {
             if amount > 0 {
