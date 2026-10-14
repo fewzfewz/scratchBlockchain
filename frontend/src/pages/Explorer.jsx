@@ -7,8 +7,8 @@ import ValidatorsTab from './explorer/ValidatorsTab.jsx'
 import StakingTab from './explorer/StakingTab.jsx'
 import BlocksTab from './explorer/BlocksTab.jsx'
 import AddressTab from './explorer/AddressTab.jsx'
+import { getApiUrl } from '../lib/chain.js'
 
-const API_URL = 'http://localhost:8545'
 
 const TABS = [
   { id: 'dashboard', label: 'Dashboard' },
@@ -29,7 +29,7 @@ export default function Explorer() {
     let active = true
     const poll = async () => {
       try {
-        const res = await window.fetch(`${API_URL}/status`)
+        const res = await window.fetch(`${getApiUrl()}/status`)
         if (!res.ok) throw new Error('offline')
         const d = await res.json()
         if (!active) return
@@ -50,7 +50,9 @@ export default function Explorer() {
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
             <span className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'}`} />
             {online ? 'Local testnet live' : 'Node offline'}
-            <span className="text-slate-400 dark:text-slate-500">· 5 nodes · BFT</span>
+            {tip?.peer_count != null && (
+              <span className="text-slate-400 dark:text-slate-500">· {tip.peer_count} peer{tip.peer_count === 1 ? '' : 's'} · BFT</span>
+            )}
           </div>
 
           <div className="flex items-center justify-center gap-3 mb-2">

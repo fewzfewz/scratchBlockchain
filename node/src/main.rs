@@ -282,6 +282,8 @@ struct Node {
     /// Rotates sync requests across connected peers, so one peer that
     /// stops answering cannot stall catch-up forever.
     sync_peer_cursor: usize,
+    /// Peer the in-flight sync request went to.
+    sync_peer: Option<PeerId>,
     last_sync_attempt_at: Instant,
     last_finalize_at: Instant,
     /// Set when the consensus engine signals that we are behind peers
@@ -687,6 +689,7 @@ impl Node {
             bft_state_path,
             syncing: false,
             sync_peer_cursor: 0,
+            sync_peer: None,
             last_sync_attempt_at: Instant::now(),
             last_finalize_at: Instant::now(),
             sync_requested: false,
@@ -1036,6 +1039,7 @@ impl Node {
             );
             self.syncing = true;
             self.last_sync_attempt_at = Instant::now();
+            self.sync_peer = Some(source);
             self.network_cmd_sender
                 .send(NetworkCommand::RequestBlock {
                     peer: source,
@@ -1323,6 +1327,15 @@ impl Node {
                     SYNC_STUCK_SECS
                 );
                 self.syncing = false;
+                // A request that neither completes nor fails means the
+                // connection's request handling is wedged: drop the peer's
+                // connections so the next attempt starts from fresh ones.
+                if let Some(peer) = self.sync_peer.take() {
+                    let _ = self
+                        .network_cmd_sender
+                        .send(NetworkCommand::DisconnectPeer(peer))
+                        .await;
+                }
             } else {
                 return Ok(());
             }
@@ -1379,6 +1392,7 @@ impl Node {
                 );
                 self.syncing = true;
                 self.last_sync_attempt_at = Instant::now();
+                self.sync_peer = Some(peer);
                 self.network_cmd_sender
                     .send(NetworkCommand::RequestBlock {
                         peer,
@@ -1543,6 +1557,7 @@ impl Node {
         // Fetch the next contiguous batch from the same peer.
         let start = if tip == 0 { 0 } else { tip + 1 };
         self.last_sync_attempt_at = Instant::now();
+        self.sync_peer = Some(peer);
         self.network_cmd_sender
             .send(NetworkCommand::RequestBlock {
                 peer,

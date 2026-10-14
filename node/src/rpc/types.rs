@@ -123,11 +123,12 @@ pub(super) struct GasPriceResponse {
 
 #[derive(Debug, Deserialize)]
 pub(super) struct EstimateGasRequest {
-    #[allow(dead_code)] // accepted for API compatibility; not used yet
     pub(super) from: String,
+    /// Empty, "0x" or the zero address for a contract creation.
+    #[serde(default)]
     pub(super) to: String,
+    #[serde(default)]
     pub(super) data: String,
-    #[allow(dead_code)] // accepted for API compatibility; not used yet
     pub(super) value: Option<String>,
     pub(super) max_fee_per_gas: Option<String>,
 }
@@ -138,6 +139,10 @@ pub(super) struct EstimateGasResponse {
     pub(super) base_fee: String,
     pub(super) total_cost_estimate: String,
     pub(super) estimated_priority_fee: String,
+    /// Set when the simulated execution reverted or halted: the transaction
+    /// would fail with any gas limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) error: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -193,6 +198,9 @@ pub(super) struct BridgeStatusResponse {
     pub(super) defi_pool_address: String,
     pub(super) validators_count: usize,
     pub(super) relayers_ready: bool,
+    /// Size of the genesis relayer set and the attestations a mint needs.
+    pub(super) relayer_count: usize,
+    pub(super) relayer_threshold: u32,
     pub(super) eth_rpc_configured: bool,
     pub(super) processed_mints: usize,
     pub(super) processed_unlocks: usize,

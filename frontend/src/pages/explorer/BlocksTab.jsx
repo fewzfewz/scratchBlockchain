@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Blocks, ArrowLeft, ChevronLeft, ChevronRight, Cpu, Fuel, ShieldCheck, Coins, Layers, Fingerprint, FileSignature, RefreshCw } from 'lucide-react'
+import { getApiUrl } from '../../lib/chain.js'
 
-const API_URL = 'http://localhost:8545'
 const PAGE_SIZE = 10
 
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
@@ -27,7 +27,7 @@ export default function BlocksTab() {
     const fetchPage = async (from) => {
       setLoading(true)
       try {
-        const res = await window.fetch(`${API_URL}/block/latest`)
+        const res = await window.fetch(`${getApiUrl()}/block/latest`)
         if (!res.ok) throw new Error('Failed to fetch')
         const { block } = await res.json()
         if (!block) { if (active) setBlocks([]); return }
@@ -37,7 +37,7 @@ export default function BlocksTab() {
         const reqs = []
         for (let s = to; s >= fromSlot; s--) {
           reqs.push(
-            window.fetch(`${API_URL}/block/${s}`)
+            window.fetch(`${getApiUrl()}/block/${s}`)
               .then(r => r.json())
               .then(d => d.block)
               .catch(() => null),
@@ -66,7 +66,7 @@ export default function BlocksTab() {
       const reqs = []
       for (let s = to; s >= fromSlot; s--) {
         reqs.push(
-          window.fetch(`${API_URL}/block/${s}`)
+          window.fetch(`${getApiUrl()}/block/${s}`)
             .then(r => r.json())
             .then(d => d.block)
             .catch(() => null),
@@ -87,7 +87,7 @@ export default function BlocksTab() {
       const reqs = []
       for (let s = to; s >= fromSlot; s--) {
         reqs.push(
-          window.fetch(`${API_URL}/block/${s}`)
+          window.fetch(`${getApiUrl()}/block/${s}`)
             .then(r => r.json())
             .then(d => d.block)
             .catch(() => null),

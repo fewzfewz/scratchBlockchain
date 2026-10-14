@@ -5,8 +5,8 @@ import {
   Terminal, Server, Download, User, ArrowLeftRight, AlertTriangle,
   ArrowRight, Rocket, Compass,
 } from 'lucide-react'
+import { getApiUrl } from '../lib/chain.js'
 
-const RPC_URL = 'http://localhost:8545'
 
 const SECTIONS = [
   { id: 'intro', title: 'Introduction', icon: BookOpen },
@@ -115,9 +115,9 @@ export default function DocsPage() {
     const poll = async () => {
       try {
         const [hr, sr, gr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
         ])
         if (!hr.ok) throw new Error('offline')
         const sd = await sr.json()
@@ -231,11 +231,11 @@ export default function DocsPage() {
         {!backendOnline && (
           <div className="mb-8 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. The docs still work — start the testnet to try the live endpoints.</span>
+            <span>Node not reachable at {getApiUrl()}. The docs still work — start the testnet to try the live endpoints.</span>
           </div>
         )}
 
-        <div className="grid lg:grid-cols-[260px_1fr] gap-8 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-8 items-start">
           {/* ── Sidebar ──────────────────────────────────────────── */}
           <aside className="lg:sticky lg:top-8">
             <div className="hidden lg:block space-y-4">
@@ -316,9 +316,9 @@ export default function DocsPage() {
           <div key={activeSection} className="animate-slide-up">
           {activeSection === 'intro' && (
             <section>
-              <h1 className="text-4xl font-bold text-slate-900 dark:text-white mb-4 bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent">Introduction to Nebula</h1>
+              <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white mb-4 break-words bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent">Introduction to Nebula</h1>
               <p className="text-lg text-blue-600 dark:text-blue-300 mb-4">A high-performance, modular blockchain built in Rust.</p>
-              <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">Nebula is designed for scalability and flexibility, featuring a multi-VM execution environment, validator-based consensus with instant finality, and built-in Layer 2 support.</p>
+              <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">Nebula is designed for scalability and flexibility, with EVM and WASM execution, BFT consensus where a block is final as soon as validators holding more than 2/3 of the stake commit it, and a relayer-secured Ethereum bridge.</p>
               <div className="grid md:grid-cols-3 gap-4">
                 {[
                   { icon: Zap, title: 'High Performance', desc: 'Parallel transaction execution and high-throughput mempool.' },

@@ -8,7 +8,7 @@ import {
   nblToWei, shorten, walletAddress, weiToNbl,
 } from '../lib/chain.js'
 import {
-  connectMetaMask, lockEthOnBridge, waitEthReceipt, createEthPublicClient,
+  connectMetaMask, connectLocalDevAccount, isLocalEthRpc, lockEthOnBridge, waitEthReceipt, createEthPublicClient,
   fetchBridgeStatus, requestNebulaMint, getEthRpcUrl, setEthRpcUrl,
   getBridgeAddress, setBridgeAddress, fetchEthBlockNumber, loadBridgeConfig,
 } from '../lib/ethereum.js'
@@ -28,6 +28,7 @@ export default function BridgePage() {
   const [ethRpc, setEthRpc] = useState(getEthRpcUrl())
   const [bridgeAddr, setBridgeAddr] = useState(getBridgeAddress())
   const [ethAccount, setEthAccount] = useState(null)
+  const [ethConn, setEthConn] = useState(null)
   const [ethBlock, setEthBlock] = useState(null)
   const [lastEthTx, setLastEthTx] = useState('')
   const [showSettings, setShowSettings] = useState(false)
@@ -79,11 +80,12 @@ export default function BridgePage() {
     refresh()
   }
 
-  const connectEth = async () => {
+  const connectEth = async (useDevAccount = false) => {
     try {
-      const { address } = await connectMetaMask()
-      setEthAccount(address)
-      setMsg(`MetaMask connected: ${shorten(address)}`)
+      const conn = useDevAccount ? await connectLocalDevAccount() : await connectMetaMask()
+      setEthConn(conn)
+      setEthAccount(conn.address)
+      setMsg(`${useDevAccount ? 'Local Hardhat account' : 'MetaMask'} connected: ${shorten(conn.address)}`)
       setMsgType('ok')
     } catch (e) {
       setMsg(e.message)
@@ -127,8 +129,8 @@ export default function BridgePage() {
   }
 
   const lockOnEthereum = async () => {
-    if (!ethAccount) {
-      setMsg('Connect MetaMask first')
+    if (!ethConn) {
+      setMsg('Connect an Ethereum wallet first')
       setMsgType('err')
       return
     }
@@ -139,7 +141,7 @@ export default function BridgePage() {
     }
     setSubmitting(true)
     try {
-      const { walletClient, address } = await connectMetaMask()
+      const { walletClient, account } = ethConn
       const recip = recipient.trim() || nebulaAddr
       if (!/^0x[a-fA-F0-9]{40}$/.test(recip)) throw new Error('Invalid Nebula recipient')
 
@@ -148,7 +150,7 @@ export default function BridgePage() {
         amountEth: amount,
         recipientNebula: recip,
         walletClient,
-        account: address,
+        account,
       })
       setLastEthTx(hash)
       const publicClient = createEthPublicClient(ethRpc)
@@ -227,7 +229,7 @@ export default function BridgePage() {
         <div className="grid sm:grid-cols-4 gap-3 mb-6">
           {[
             { label: 'Vault', val: `${vaultBal} NBL` },
-            { label: 'Validators', val: bridgeStatus?.validators_count ?? '—' },
+            { label: 'Relayers', val: bridgeStatus?.relayer_count ? `${bridgeStatus.relayer_threshold}-of-${bridgeStatus.relayer_count}` : '—' },
             { label: 'ETH block', val: ethBlock ?? '—' },
             { label: 'Mints', val: bridgeStatus?.processed_mints ?? 0 },
           ].map(({ label, val }) => (
@@ -258,9 +260,17 @@ export default function BridgePage() {
 
           {tab === 'eth-nebula' ? (
             <>
-              <button type="button" onClick={connectEth} className="w-full py-2.5 rounded-xl border border-amber-500/50 text-amber-600 font-semibold flex items-center justify-center gap-2">
-                <Wallet className="w-4 h-4" /> {ethAccount ? shorten(ethAccount) : 'Connect MetaMask'}
-              </button>
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button type="button" onClick={() => connectEth(false)} className="flex-1 py-2.5 rounded-xl border border-amber-500/50 text-amber-600 font-semibold flex items-center justify-center gap-2">
+                  <Wallet className="w-4 h-4" /> {ethAccount ? shorten(ethAccount) : 'Connect MetaMask'}
+                </button>
+                {!ethAccount && isLocalEthRpc(ethRpc) && (
+                  <button type="button" onClick={() => connectEth(true)} title="Hardhat's default account #0 — local chains only"
+                    className="flex-1 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 font-semibold">
+                    Use local Hardhat account
+                  </button>
+                )}
+              </div>
               <button type="button" disabled={submitting} onClick={lockOnEthereum}
                 className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-semibold disabled:opacity-50">
                 1. Lock ETH on Bridge.sol
@@ -293,7 +303,9 @@ export default function BridgePage() {
             <ul className="text-sm space-y-2">
               <li className="flex items-center gap-2">
                 {bridgeStatus?.relayers_ready ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <AlertCircle className="w-4 h-4 text-red-500" />}
-                {bridgeStatus?.validators_count ?? 0} validators · relayers {bridgeStatus?.relayers_ready ? 'ready' : 'offline'}
+                {bridgeStatus?.relayers_ready
+                  ? `Mints need ${bridgeStatus.relayer_threshold} of ${bridgeStatus.relayer_count} relayer signature${bridgeStatus.relayer_count === 1 ? '' : 's'}`
+                  : 'No relayer set in genesis — mints are disabled'}
               </li>
               <li className="flex items-center gap-2">
                 {bridgeStatus?.eth_rpc_configured ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <AlertCircle className="w-4 h-4 text-amber-500" />}

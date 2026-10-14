@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Cpu, ArrowLeft, ShieldCheck, Clock, Coins, Users, Wallet, TrendingUp, Percent } from 'lucide-react'
+import { getApiUrl } from '../../lib/chain.js'
 
-const API_URL = 'http://localhost:8545'
 const shorten = (v, s = 10, e = 8) => !v ? '--' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}...${v.slice(-e)}`
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 const fmtStake = (s) => !s || isNaN(Number(s)) ? '--' : `${(Number(s) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 2 })} NBL`
@@ -18,7 +18,7 @@ export default function ValidatorsTab() {
     let active = true
     const fetch = async () => {
       try {
-        const res = await window.fetch(`${API_URL}/validators`)
+        const res = await window.fetch(`${getApiUrl()}/validators`)
         if (!res.ok) throw new Error('Failed to fetch')
         const data = await res.json()
         if (!active) return
@@ -51,8 +51,9 @@ export default function ValidatorsTab() {
 
   if (selected) {
     const v = selected
-    const uptime = v.blocks_produced && v.blocks_missed
-      ? ((v.blocks_produced / (v.blocks_produced + v.blocks_missed)) * 100).toFixed(2)
+    const scheduled = (v.blocks_produced || 0) + (v.blocks_missed || 0)
+    const uptime = scheduled > 0
+      ? ((v.blocks_produced || 0) / scheduled * 100).toFixed(2)
       : null
     const rows = [
       { icon: Wallet, label: 'Address', value: v.address || '--', mono: true },
@@ -97,7 +98,7 @@ export default function ValidatorsTab() {
               <TrendingUp className="w-3.5 h-3.5" /> Uptime
             </span>
             <strong className="text-sm text-slate-900 dark:text-white tabular-nums">
-              {uptime ? `${uptime}%` : '--'}
+              {uptime != null ? `${uptime}%` : '--'}
             </strong>
           </div>
         </div>
@@ -110,7 +111,7 @@ export default function ValidatorsTab() {
       <div className="flex items-center justify-between px-1">
         <div>
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">Active Validators</h3>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">BFT set · {validators.length} validators · 2/3 quorum</p>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">BFT set · {validators.length} validators · >2/3 of stake to finalize</p>
         </div>
         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-xs">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
@@ -126,8 +127,9 @@ export default function ValidatorsTab() {
         </div>
       ) : (
         validators.map((v, i) => {
-          const uptime = v.blocks_produced && v.blocks_missed
-            ? Math.round((v.blocks_produced / (v.blocks_produced + v.blocks_missed)) * 100)
+          const scheduled = (v.blocks_produced || 0) + (v.blocks_missed || 0)
+          const uptime = scheduled > 0
+            ? Math.round(((v.blocks_produced || 0) / scheduled) * 100)
             : null
           return (
             <button key={v.address || i} onClick={() => setSelected(v)}

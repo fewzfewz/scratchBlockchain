@@ -48,10 +48,11 @@ async fn seed_governance(
     trie: &Arc<Mutex<PatriciaTrie>>,
 ) -> Result<ChainGovernance, Box<dyn std::error::Error>> {
     let mut params = GovernanceParams::default();
-    if let Ok(v) = std::env::var("GOVERNANCE_VOTING_PERIOD_BLOCKS") {
-        if let Ok(n) = v.parse() {
-            params.voting_period_blocks = n;
-        }
+    let explicit_period: Option<u64> = std::env::var("GOVERNANCE_VOTING_PERIOD_BLOCKS")
+        .ok()
+        .and_then(|v| v.parse().ok());
+    if let Some(n) = explicit_period {
+        params.voting_period_blocks = n;
     }
     if let Ok(v) = std::env::var("GOVERNANCE_QUORUM_BPS") {
         if let Ok(n) = v.parse() {
@@ -64,7 +65,10 @@ async fn seed_governance(
         .ok()
         .is_some_and(|v| v == "1" || v.eq_ignore_ascii_case("true"))
     {
-        params.voting_period_blocks = params.voting_period_blocks.min(20);
+        // A short default period for tests, unless one was set explicitly.
+        if explicit_period.is_none() {
+            params.voting_period_blocks = params.voting_period_blocks.min(20);
+        }
         params.quorum_threshold_bps = params.quorum_threshold_bps.min(100);
         total_stake = total_stake.min(1_000_000);
     }

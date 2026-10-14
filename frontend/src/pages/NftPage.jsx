@@ -20,24 +20,26 @@ export default function NftPage() {
 
   const addr = walletAddress()
 
+  // Contract list: saved deploys plus creations found in the wallet's history.
   const refresh = useCallback(async () => {
     const list = await scanDeployedContracts()
     const nfts = list.filter((c) => c.type === 'ERC721' || c.name?.includes('721') || c.name?.includes('NFT'))
     setContracts(nfts)
-    const pick = nfts[0]?.address || list.find((c) => c.type === 'ERC721')?.address || ''
-    setSelected((s) => s || pick)
-    if (pick && addr) {
-      const items = await loadNftsFromChain(pick, addr)
-      setGallery(items)
-    } else {
-      setGallery([])
-    }
+    setSelected((s) => s || nfts[0]?.address || '')
+  }, [])
+
+  // Gallery: always the selected contract's tokens.
+  const loadGallery = useCallback(async (contract) => {
+    if (!contract || !addr) { setGallery([]); return }
+    setGallery(await loadNftsFromChain(contract, addr))
   }, [addr])
 
   useEffect(() => {
     setMintTo(addr)
     refresh()
   }, [addr, refresh])
+
+  useEffect(() => { loadGallery(selected) }, [selected, loadGallery])
 
   const mint = async () => {
     if (!loadWalletKeyPair()) {
@@ -60,6 +62,7 @@ export default function NftPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: addr, to: selected, data, value: '0' }),
       })
+      if (est.error) throw new Error(`Mint would fail: ${est.error}`)
       const { hash } = await signAndSubmit({
         from: addr,
         to: selected,
@@ -70,7 +73,8 @@ export default function NftPage() {
       await waitForReceipt(hash)
       setStatus(`Minted token #${tokenId} — tx ${shorten(hash, 10, 8)}`)
       setStatusType('ok')
-      refresh()
+      setTokenId((id) => String(Number(id) + 1))
+      loadGallery(selected)
     } catch (e) {
       setStatus(e.message || 'Mint failed')
       setStatusType('err')
@@ -121,7 +125,7 @@ export default function NftPage() {
               {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Mint on-chain
             </button>
-            <button type="button" onClick={refresh} className="px-4 py-3 rounded-xl border border-pink-500/40 text-pink-600">
+            <button type="button" onClick={() => { refresh(); loadGallery(selected) }} title="Refresh" className="px-4 py-3 rounded-xl border border-pink-500/40 text-pink-600">
               <RefreshCw className="w-4 h-4" />
             </button>
             <Link to="/deploy"

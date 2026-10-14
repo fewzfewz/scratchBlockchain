@@ -42,8 +42,19 @@ export default function WasmPage() {
     show('Deploying WASM module…')
     try {
       const res = await deployWasm(name.trim(), wasmB64.trim())
-      show(`Deployed "${res.name}" — hash ${res.code_hash?.slice(0, 12)}…`, 'ok')
-      refresh()
+      // Registered only when the deploy transaction is in a block.
+      show(`Deploy submitted — waiting for "${res.name}" to be included…`)
+      for (let i = 0; i < 30; i++) {
+        const list = await listWasmContracts().catch(() => [])
+        if (list.includes(res.name)) {
+          setContracts(list)
+          setCallName(res.name)
+          show(`Deployed "${res.name}" — code hash ${res.code_hash?.slice(0, 12)}…`, 'ok')
+          return
+        }
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+      show(`"${res.name}" was submitted but is not on chain yet — refresh in a moment`, 'err')
     } catch (e) {
       show(e.message || 'Deploy failed', 'err')
     } finally {

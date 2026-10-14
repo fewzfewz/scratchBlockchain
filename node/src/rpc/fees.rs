@@ -75,27 +75,35 @@ pub(super) async fn handle_estimate_gas(
     request: EstimateGasRequest,
     chain_store: Arc<ChainStore>,
 ) -> Result<impl warp::Reply, Infallible> {
-    // Base transaction cost (21,000 gas)
-    let base_cost = 21_000u64;
-
-    // Calculate data cost (EIP-2028: 16 gas per non-zero byte, 4 gas per zero byte)
-    let data_bytes = hex::decode(request.data.trim_start_matches("0x")).unwrap_or_default();
-    let data_cost: u64 = data_bytes
-        .iter()
-        .map(|&byte| if byte == 0 { 4 } else { 16 })
-        .sum();
-
-    // Contract creation cost (if 'to' is empty or zero)
-    let is_contract_creation =
-        request.to == "0x" || request.to == "0x0000000000000000000000000000000000000000";
-    let contract_cost = if is_contract_creation {
-        32_000 // Contract creation base cost
-    } else {
-        0
+    // Simulate the transaction against current state, like eth_estimateGas.
+    // (A byte-count formula used to under-estimate every contract call and
+    // creation, so transactions sent with its estimate ran out of gas.)
+    let parse_addr = |s: &str| -> Option<revm::primitives::Address> {
+        let clean = s.trim().trim_start_matches("0x");
+        let bytes = hex::decode(clean).ok()?;
+        (bytes.len() == 20).then(|| revm::primitives::Address::from_slice(&bytes))
     };
-
-    // Estimated gas = base + data + contract cost + buffer (10% for safety)
-    let estimated_gas = (base_cost + data_cost + contract_cost) * 110 / 100;
+    let data = hex::decode(request.data.trim().trim_start_matches("0x")).unwrap_or_default();
+    let to = parse_addr(&request.to).filter(|a| *a != revm::primitives::Address::ZERO);
+    let from = parse_addr(&request.from).unwrap_or(revm::primitives::Address::ZERO);
+    let value = request
+        .value
+        .as_deref()
+        .and_then(|v| v.parse::<u128>().ok())
+        .map(revm::primitives::U256::from)
+        .unwrap_or_default();
+    let (estimated_gas, error) = if to.is_some() && data.is_empty() {
+        (21_000, None) // plain transfer
+    } else {
+        let store = Arc::new(crate::evm_store::ChainStoreEvmStore::new(
+            chain_store.clone(),
+        ));
+        match execution::evm::EvmExecutor::simulate(store, from, to, data, value) {
+            // Headroom for gas refunds and state that changes before inclusion.
+            Ok(sim) => (sim.gas_used.saturating_mul(12) / 10, sim.error),
+            Err(e) => (0, Some(e.to_string())),
+        }
+    };
 
     // Get current base fee from latest block
     let latest_height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
@@ -139,6 +147,7 @@ pub(super) async fn handle_estimate_gas(
         base_fee: base_fee.to_string(),
         total_cost_estimate: total_cost.to_string(),
         estimated_priority_fee: estimated_priority.to_string(),
+        error,
     };
 
     Ok(warp::reply::json(&response))

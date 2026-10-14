@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Droplets, CheckCircle, AlertCircle, Clock, Copy, WifiOff, Wallet, History, RefreshCw, Activity, Zap, ShieldCheck, Gauge } from 'lucide-react'
+import { getApiUrl } from '../lib/chain.js'
 
-const RPC_URL = 'http://localhost:8545'
 const DRIP_AMOUNT = 10 // node caps a drip at 10 NBL (one transfer)
 // Local dev: 60s cooldown (matches node RPC). Production UI can use 24h.
 const COOLDOWN_MS = import.meta.env.DEV ? 60 * 1000 : 24 * 60 * 60 * 1000
@@ -55,9 +55,9 @@ export default function FaucetPage() {
     const poll = async () => {
       try {
         const [hr, sr, gr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
         ])
         if (!hr.ok) throw new Error('offline')
         const sd = await sr.json()
@@ -105,7 +105,7 @@ export default function FaucetPage() {
     if (!addr || !addr.match(/^0x[a-fA-F0-9]{40}$/)) { setBalance(null); return }
     setBalanceLoading(true)
     try {
-      const r = await window.fetch(`${RPC_URL}/balance/${addr}`)
+      const r = await window.fetch(`${getApiUrl()}/balance/${addr}`)
       if (r.ok) {
         const d = await r.json()
         setBalance({ nbl: weiToNbl(d.balance), nonce: d.nonce || 0 })
@@ -121,7 +121,7 @@ export default function FaucetPage() {
     setStatusType('info')
     try {
       if (backendOnline) {
-        const res = await window.fetch(`${RPC_URL}/faucet/request`, {
+        const res = await window.fetch(`${getApiUrl()}/faucet/request`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ address }),
@@ -187,7 +187,7 @@ export default function FaucetPage() {
           <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
             <span className={`w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'}`} />
             {backendOnline ? 'Faucet online' : 'Node offline'}
-            <span className="text-slate-400 dark:text-slate-500">· {RPC_URL}</span>
+            <span className="text-slate-400 dark:text-slate-500">· {getApiUrl()}</span>
           </div>
 
           <div className="flex items-center justify-center gap-3 mb-2">
@@ -238,7 +238,7 @@ export default function FaucetPage() {
         {!backendOnline && (
           <div className="mb-6 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. Start the testnet first — the faucet credits the node's state trie directly.</span>
+            <span>Node not reachable at {getApiUrl()}. Start the testnet first — the faucet sends a transfer from the dev account.</span>
           </div>
         )}
 
@@ -251,7 +251,7 @@ export default function FaucetPage() {
               </div>
               <div>
                 <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Request testnet funds</h2>
-                <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">One drip per address, 100 NBL each.</p>
+                <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">One drip of {DRIP_AMOUNT} NBL per request.</p>
               </div>
             </div>
 

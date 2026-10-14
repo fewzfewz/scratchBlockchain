@@ -9,8 +9,8 @@ import {
   ThumbsDown, Minus, Zap, Layers, Target, Loader2,
   Bell, Gauge, ShieldCheck, WifiOff, Copy, PenLine, Rocket, BookOpen,
 } from "lucide-react";
+import { getApiUrl } from '../lib/chain.js'
 
-const RPC_URL = "http://localhost:8545";
 
 // ── Wallet / signing helpers (mirror WalletPage.jsx) ──────────────────────
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
@@ -1063,11 +1063,11 @@ export default function Governance() {
     const poll = async () => {
       try {
         const [hr, sr, gr, gvr, vr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
-          window.fetch(`${RPC_URL}/governance`),
-          window.fetch(`${RPC_URL}/validators`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
+          window.fetch(`${getApiUrl()}/governance`),
+          window.fetch(`${getApiUrl()}/validators`),
         ]);
         if (!hr.ok) throw new Error("offline");
         const sd = await sr.json();
@@ -1114,7 +1114,7 @@ export default function Governance() {
       throw new Error("Create a wallet on the Wallet page before voting");
     }
     const choice = support === "For" ? "yes" : support === "Against" ? "no" : "abstain";
-    return submitGovTx(activeWallet, { action: "vote", proposal_id: proposalId, choice }, RPC_URL);
+    return submitGovTx(activeWallet, { action: "vote", proposal_id: proposalId, choice }, getApiUrl());
   };
 
   const handleExecute = async (proposalId) => {
@@ -1122,7 +1122,7 @@ export default function Governance() {
     if (!activeWallet) {
       throw new Error("Create a wallet on the Wallet page before executing");
     }
-    return submitGovTx(activeWallet, { action: "execute", proposal_id: proposalId }, RPC_URL);
+    return submitGovTx(activeWallet, { action: "execute", proposal_id: proposalId }, getApiUrl());
   };
 
   const submitProposal = async (proposal) => {
@@ -1130,7 +1130,7 @@ export default function Governance() {
     if (!activeWallet) {
       throw new Error("Create a wallet on the Wallet page before proposing");
     }
-    return submitGovTx(activeWallet, { action: "propose", title: proposal.title, description: proposal.description }, RPC_URL);
+    return submitGovTx(activeWallet, { action: "propose", title: proposal.title, description: proposal.description }, getApiUrl());
   };
 
   return (
@@ -1183,7 +1183,7 @@ export default function Governance() {
         {!backendOnline && (
           <div className="mb-6 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. Governance data below is sample data — start the testnet to connect.</span>
+            <span>Node not reachable at {getApiUrl()}. Governance data below is sample data — start the testnet to connect.</span>
           </div>
         )}
 

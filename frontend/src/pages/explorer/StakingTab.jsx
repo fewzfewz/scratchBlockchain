@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Users, Coins, Percent, TrendingUp, Search, Inbox, Cpu } from 'lucide-react'
+import { getApiUrl } from '../../lib/chain.js'
 
-const API_URL = 'http://localhost:8545'
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 const fmtStake = (s) => !s || isNaN(Number(s)) ? '--' : `${(Number(s) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 2 })} NBL`
 const shorten = (v, s = 12, e = 10) => !v ? '--' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}...${v.slice(-e)}`
@@ -24,8 +24,8 @@ export default function StakingTab() {
     const fetch = async () => {
       try {
         const [sr, vr] = await Promise.all([
-          window.fetch(`${API_URL}/status`),
-          window.fetch(`${API_URL}/validators`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/validators`),
         ])
         if (!sr.ok || !vr.ok) throw new Error('Failed to fetch')
         const sd = await sr.json()
@@ -54,7 +54,7 @@ export default function StakingTab() {
     if (!address) return
     setChecked(false)
     try {
-      const res = await window.fetch(`${API_URL}/delegations/${address}`)
+      const res = await window.fetch(`${getApiUrl()}/delegations/${address}`)
       if (!res.ok) throw new Error()
       const data = await res.json()
       setDelegations(Array.isArray(data) ? data : data.delegations || [])

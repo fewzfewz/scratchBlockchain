@@ -72,20 +72,44 @@ impl ChainStoreEvmStore {
     }
 }
 
+/// One ledger: an address's balance and nonce always live in its native
+/// account record (`crate::accounts`), which transfers, rewards, `/balance`
+/// and the EVM all read and write. The EVM record only adds the code hash of
+/// a contract. (They used to be separate copies, synced one way before each
+/// EVM transaction — EVM spending never reached the native balance.)
 impl EvmStore for ChainStoreEvmStore {
     fn get_account(&self, address: &revm::primitives::Address) -> Option<StoredAccount> {
-        self.chain
+        let native = self.chain.get_state(address.as_slice()).ok().flatten();
+        let evm = self
+            .chain
             .get_state(&Self::key_account(address))
             .ok()
             .flatten()
-            .and_then(|b| Self::decode_account(&b))
+            .and_then(|b| Self::decode_account(&b));
+        if native.is_none() && evm.is_none() {
+            return None;
+        }
+        let (balance, nonce) = crate::accounts::decode(native.as_deref());
+        Some(StoredAccount {
+            balance: U256::from(balance),
+            nonce,
+            code_hash: evm.and_then(|a| a.code_hash),
+        })
     }
 
     fn put_account(&self, address: revm::primitives::Address, account: StoredAccount) {
-        let _ = self.chain.put_state(
-            &Self::key_account(&address),
-            &Self::encode_account(&account),
-        );
+        let balance = u128::try_from(account.balance).unwrap_or(u128::MAX);
+        let _ = crate::accounts::store(&self.chain, address.as_slice(), balance, account.nonce);
+        if account.code_hash.is_some() {
+            let _ = self.chain.put_state(
+                &Self::key_account(&address),
+                &Self::encode_account(&StoredAccount {
+                    balance: U256::ZERO,
+                    nonce: 0,
+                    code_hash: account.code_hash,
+                }),
+            );
+        }
     }
 
     fn get_storage(&self, address: &revm::primitives::Address, slot: &U256) -> Option<U256> {
@@ -119,6 +143,7 @@ impl EvmStore for ChainStoreEvmStore {
 
     fn delete_account(&self, address: &revm::primitives::Address) {
         let _ = self.chain.delete_state(&Self::key_account(address));
+        let _ = self.chain.delete_state(address.as_slice());
     }
 
     fn state_root(&self) -> [u8; 32] {

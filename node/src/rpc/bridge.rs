@@ -26,9 +26,10 @@ pub(super) async fn handle_bridge_status(
     };
     let processed_mints = bridge_minted.lock().await.len();
     // Mints need the genesis relayer set; validators are not relayers.
-    let relayers_ready = crate::bridge_mint::load_config(&state_trie)
-        .await
-        .is_some_and(|c| c.threshold > 0 && !c.relayers.is_empty());
+    let config = crate::bridge_mint::load_config(&state_trie).await;
+    let relayer_count = config.as_ref().map(|c| c.relayers.len()).unwrap_or(0);
+    let relayer_threshold = config.as_ref().map(|c| c.threshold).unwrap_or(0);
+    let relayers_ready = relayer_threshold > 0 && relayer_count > 0;
     let queue = bridge_unlock_queue.lock().await;
     let processed_unlocks = queue.processed_count();
     let pending_unlocks = queue.pending().len();
@@ -39,6 +40,8 @@ pub(super) async fn handle_bridge_status(
         defi_pool_address: deterministic_address("nebula-defi-pool-v1"),
         validators_count,
         relayers_ready,
+        relayer_count,
+        relayer_threshold,
         eth_rpc_configured,
         processed_mints,
         processed_unlocks,

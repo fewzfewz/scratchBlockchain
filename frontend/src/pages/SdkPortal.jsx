@@ -5,8 +5,8 @@ import {
   Wrench, Boxes, PlusCircle, Wallet,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { getApiUrl } from '../lib/chain.js'
 
-const RPC_URL = 'http://localhost:8545'
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 
 function CodeBlock({ code, lang = 'bash' }) {
@@ -50,9 +50,9 @@ export default function SdkPortal() {
     const poll = async () => {
       try {
         const [hr, sr, gr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
         ])
         if (!hr.ok) throw new Error('offline')
         const sd = await sr.json()
@@ -120,7 +120,7 @@ export default function SdkPortal() {
         {!backendOnline && (
           <div className="mb-8 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. The SDK code samples still apply — start the testnet to run them.</span>
+            <span>Node not reachable at {getApiUrl()}. The SDK code samples still apply — start the testnet to run them.</span>
           </div>
         )}
 
@@ -129,8 +129,8 @@ export default function SdkPortal() {
             {/* ── Quick stats ────────────────────────────────────── */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               {[
-                { icon: Zap, label: 'Block time', value: '1s', sub: 'Target block interval', chip: 'from-amber-500 to-orange-600' },
-                { icon: Gauge, label: 'Throughput', value: '10k+', sub: 'Transactions / second', chip: 'from-emerald-600 to-teal-600' },
+                { icon: Zap, label: 'Finality', value: '<1s', sub: 'Light load, local devnet', chip: 'from-amber-500 to-orange-600' },
+                { icon: Gauge, label: 'Throughput', value: '~240', sub: 'Tx/s sustained (devnet benchmark)', chip: 'from-emerald-600 to-teal-600' },
                 { icon: Shield, label: 'Cryptography', value: 'Ed25519', sub: 'Signature scheme', chip: 'from-blue-600 to-cyan-600' },
                 { icon: Layers, label: 'Fee market', value: 'EIP-1559', sub: 'Base + priority fees', chip: 'from-violet-600 to-purple-600' },
               ].map(({ icon: Icon, label, value, sub, chip }) => (

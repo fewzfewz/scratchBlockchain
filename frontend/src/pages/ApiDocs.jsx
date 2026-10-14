@@ -6,8 +6,8 @@ import {
   Server, Terminal, Layers, Zap, ArrowLeft,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { getApiUrl } from '../lib/chain.js'
 
-const RPC_URL = 'http://localhost:8545'
 const ENDPOINT_COUNT = 17
 
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
@@ -28,9 +28,9 @@ export default function ApiDocs() {
     const poll = async () => {
       try {
         const [hr, sr, gr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
         ])
         if (!hr.ok) throw new Error('offline')
         const sd = await sr.json()
@@ -73,7 +73,7 @@ export default function ApiDocs() {
           </div>
           <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
             Interactive documentation for every RPC endpoint. Try calls directly from your browser against{' '}
-            <code className="text-xs text-blue-600 dark:text-cyan-400 font-mono">{RPC_URL}</code>.
+            <code className="text-xs text-blue-600 dark:text-cyan-400 font-mono">{getApiUrl()}</code>.
           </p>
 
           {/* Network strip */}
@@ -95,7 +95,7 @@ export default function ApiDocs() {
         {!backendOnline && (
           <div className="mb-8 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. The interactive calls below need a running testnet — start it to try them.</span>
+            <span>Node not reachable at {getApiUrl()}. The interactive calls below need a running testnet — start it to try them.</span>
           </div>
         )}
 

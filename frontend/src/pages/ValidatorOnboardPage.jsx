@@ -4,9 +4,8 @@ import {
   Shield, CheckCircle, AlertCircle, Server, Cpu, Wifi, ExternalLink,
   Copy, RefreshCw, BookOpen, Activity, Gauge,
 } from 'lucide-react'
-import { signAndSubmit, waitForReceipt, walletAddress } from '../lib/chain.js'
+import { signAndSubmit, waitForReceipt, walletAddress, getApiUrl } from '../lib/chain.js'
 
-const API_URL = 'http://localhost:8545'
 const GRAFANA_URL = 'http://localhost:3002/d/validator-onboarding/validator-onboarding'
 const ONBOARDING_DOC = 'https://github.com/fewzfewz/scratchBlockchain/blob/main/docs/validator-onboarding.md'
 
@@ -28,7 +27,7 @@ export default function ValidatorOnboardPage() {
     const next = {}
     for (const check of CHECKS) {
       try {
-        const r = await window.fetch(`${API_URL}${check.path}`)
+        const r = await window.fetch(`${getApiUrl()}${check.path}`)
         next[check.id] = { ok: r.ok, detail: r.ok ? 'OK' : `HTTP ${r.status}` }
       } catch (e) {
         next[check.id] = { ok: false, detail: e.message }

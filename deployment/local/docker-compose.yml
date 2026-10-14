@@ -87,7 +87,7 @@ services:
       # Bridge contract from configs/bridge-deployment.json (Hardhat's first deploy).
       - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -125,7 +125,7 @@ services:
       - VALIDATOR_NAME=validator2
       - RUST_LOG=info
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -162,7 +162,7 @@ services:
       - VALIDATOR_NAME=validator3
       - RUST_LOG=info
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -199,7 +199,7 @@ services:
       - VALIDATOR_NAME=validator4
       - RUST_LOG=info
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -238,7 +238,7 @@ services:
       - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       # Governance params are part of genesis state: every node must match.
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
       - NEBULA_CHAIN_ID=100
       - ETH_CHAIN_ID=1
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
@@ -279,7 +279,7 @@ services:
       - RUST_LOG=info
       # Governance params are part of genesis state: every node must match.
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:

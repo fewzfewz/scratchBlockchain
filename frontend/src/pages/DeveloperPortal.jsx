@@ -5,8 +5,8 @@ import {
   Wallet, Layers, ArrowRight, Package, FileCode, Boxes,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { getApiUrl } from '../lib/chain.js'
 
-const RPC_URL = 'http://localhost:8545'
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 
 function CodeBlock({ code, lang = 'bash' }) {
@@ -50,9 +50,9 @@ export default function DeveloperPortal() {
     const poll = async () => {
       try {
         const [hr, sr, gr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
         ])
         if (!hr.ok) throw new Error('offline')
         const sd = await sr.json()
@@ -120,7 +120,7 @@ export default function DeveloperPortal() {
         {!backendOnline && (
           <div className="mb-8 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. Starter kits and SDK samples still work — start the testnet to deploy against it.</span>
+            <span>Node not reachable at {getApiUrl()}. Starter kits and SDK samples still work — start the testnet to deploy against it.</span>
           </div>
         )}
 

@@ -5,12 +5,16 @@ use super::*;
 pub(super) async fn handle_status(
     chain_store: Arc<ChainStore>,
     tx_pool: Arc<TxPool>,
+    metrics: Arc<crate::metrics::Metrics>,
     chain_id: u64,
 ) -> Result<impl warp::Reply, Infallible> {
     let height = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
     let finalized_height = Some(height);
     let mempool_size = tx_pool.size();
-    let peer_count = 0; // Would need network service connection for this
+    // Refreshed from the network service by the node's metrics tick.
+    let peer_count = metrics
+        .peer_count
+        .load(std::sync::atomic::Ordering::Relaxed);
 
     Ok(warp::reply::json(&StatusResponse {
         height,
@@ -255,61 +259,70 @@ pub(super) async fn handle_txs_for_address(
     };
 
     let limit = query.limit.unwrap_or(25).min(100);
-    let latest = chain_store.get_latest_height().unwrap_or(None).unwrap_or(0);
-    let max_scan = 100u64;
-    let start = latest.saturating_sub(max_scan.saturating_sub(1));
+
+    // Newest first, from the per-address index written at block commit.
+    let mut prefix = crate::block_producer::TX_INDEX_PREFIX.to_vec();
+    prefix.extend_from_slice(&query_addr);
+    let mut end = prefix.clone();
+    end.extend_from_slice(&[0xff; 12]);
+    let mut locations: Vec<(u64, usize)> = chain_store
+        .inner()
+        .scan(storage::ColumnFamily::State, &prefix, &end)
+        .map(|it| {
+            it.filter_map(|(k, _)| {
+                let rest = k.get(prefix.len()..)?;
+                let height = u64::from_be_bytes(rest.get(..8)?.try_into().ok()?);
+                let index = u32::from_be_bytes(rest.get(8..12)?.try_into().ok()?);
+                Some((height, index as usize))
+            })
+            .collect()
+        })
+        .unwrap_or_default();
+    locations.sort_unstable_by(|a, b| b.cmp(a));
+    locations.truncate(limit);
+
     let mut found = Vec::new();
-    let mut scanned = 0u64;
-
-    for height in (start..=latest).rev() {
-        if found.len() >= limit {
-            break;
-        }
-        scanned += 1;
-        let Ok(Some(encoded)) = chain_store.get_block_by_height(height) else {
-            continue;
-        };
-        let Ok(block) = serde_json::from_slice::<Block>(&encoded) else {
-            continue;
-        };
-
-        for tx in &block.extrinsics {
-            let matches_sender = tx.sender == query_addr;
-            let matches_to = tx.to.map(|t| t == query_addr).unwrap_or(false);
-            if !matches_sender && !matches_to {
-                continue;
-            }
-
-            let hash = tx.hash();
-            let status = chain_store
-                .get_receipt(&hash)
+    let mut cached: Option<(u64, Block)> = None;
+    for (height, index) in &locations {
+        if cached.as_ref().map(|(h, _)| h) != Some(height) {
+            let Some(block) = chain_store
+                .get_block_by_height(*height)
                 .ok()
                 .flatten()
-                .and_then(|encoded| serde_json::from_slice::<serde_json::Value>(&encoded).ok())
-                .map(|receipt| {
-                    if receipt
-                        .get("success")
-                        .and_then(|s| s.as_bool())
-                        .unwrap_or(false)
-                    {
-                        "confirmed".to_string()
-                    } else {
-                        "failed".to_string()
-                    }
-                });
-
-            found.push(TxHistoryEntry {
-                hash: format!("0x{}", hex::encode(hash)),
-                block_height: height,
-                sender: address_hex(&tx.sender),
-                to: tx.to.map(|t| address_hex(&t)),
-                value: tx.value,
-                nonce: tx.nonce,
-                is_contract_creation: tx.to.is_none() && !tx.payload.is_empty(),
-                status,
-            });
+                .and_then(|b| serde_json::from_slice::<Block>(&b).ok())
+            else {
+                continue; // pruned
+            };
+            cached = Some((*height, block));
         }
+        let Some(tx) = cached.as_ref().and_then(|(_, b)| b.extrinsics.get(*index)) else {
+            continue;
+        };
+        let hash = tx.hash();
+        let status = chain_store
+            .get_receipt(&hash)
+            .ok()
+            .flatten()
+            .and_then(|encoded| serde_json::from_slice::<serde_json::Value>(&encoded).ok())
+            .map(|receipt| {
+                let ok = receipt
+                    .get("success")
+                    .and_then(|s| s.as_bool())
+                    .unwrap_or(false);
+                if ok { "confirmed" } else { "failed" }.to_string()
+            });
+        found.push(TxHistoryEntry {
+            hash: format!("0x{}", hex::encode(hash)),
+            block_height: *height,
+            sender: address_hex(&tx.sender),
+            to: tx.to.map(|t| address_hex(&t)),
+            value: tx.value,
+            nonce: tx.nonce,
+            is_contract_creation: tx.to.is_none() && !tx.payload.is_empty(),
+            status,
+        });
     }
+    let scanned = locations.len() as u64;
 
     Ok(warp::reply::json(&TxHistoryResponse {
         address: address_str,

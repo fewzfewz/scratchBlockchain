@@ -41,7 +41,7 @@ const PILLARS = [
 const STACK = [
   { icon: Layers2, layer: 'Frontend', detail: '16-route SPA · 3D dashboard · Wallet · DeFi · Bridge' },
   { icon: Server, layer: 'Node RPC', detail: '34 HTTP routes · bridge mint · call_contract' },
-  { icon: GitFork, layer: 'Consensus', detail: 'BFT · 2/3 quorum · validator hot-reload' },
+  { icon: GitFork, layer: 'Consensus', detail: 'BFT · >2/3 stake quorum · stake-weighted proposers' },
   { icon: Workflow, layer: 'Execution', detail: 'EVM · WASM · EIP-1559 · persistent state' },
   { icon: Boxes, layer: 'Networking', detail: 'libp2p · gossipsub · Kademlia DHT' },
   { icon: Database, layer: 'Storage', detail: 'RocksDB · Patricia trie · pruning' },

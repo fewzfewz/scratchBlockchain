@@ -11,6 +11,7 @@ import {
   getApiUrl,
   txHash,
 } from '../lib/chain.js'
+import demoContracts from '../lib/demoContracts.json'
 
 const fromHex = (hex) => {
   const clean = hex.replace(/^0x/, '')
@@ -19,18 +20,11 @@ const fromHex = (hex) => {
   return b
 }
 
-const CONTRACT_PRESETS = {
-  ERC20: {
-    label: 'ERC20 Token',
-    bytecode:
-      '608060405260405180604001604052806007815260200166455243323056360bc1b815250604051806040016040528060038152602001624554360ea1b815250601260006101000a81548160ff021916908360ff160217905550336000806101000a81548173ffffffffffffffffffffffffffffffffffffffff021916908373ffffffffffffffffffffffffffffffffffffffff160217905550',
-  },
-  ERC721: {
-    label: 'ERC721 NFT',
-    bytecode:
-      '6080604052604051806040016040528060058152602001644552433732360d81b815250604051806040016040528060038152602001624e465460ea1b815250816000908051906020019061005c92919061008c565b50806001908051906020019061007392919061008c565b505061010b565b828054610086906100da565b6000825580601f1061009857506100b7565b601f0160209004906000526020600020908101906100b791906100ba565b50565b5b808211156100d357600081556001016100bb565b5090565b600060028204905060005b600660040b8281049050600081526020016001815182026020019150505b92915050565b6101cd8061011a6000396000f3fe',
-  },
-}
+// Real compiled contracts (interop/contracts/demo, exported by
+// interop/scripts/export-demo-contracts.js).
+const CONTRACT_PRESETS = Object.fromEntries(
+  Object.entries(demoContracts).map(([k, v]) => [k, { label: v.label, bytecode: v.bytecode.replace(/^0x/, '') }]),
+)
 
 const inputCls =
   'w-full px-3 py-2.5 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 font-mono'
@@ -112,34 +106,28 @@ export default function ContractDeployPage() {
     }
   }, [preset])
 
+  // Simulated by the node against current state (POST /estimate_gas).
+  const requestEstimate = async () => {
+    const r = await window.fetch(`${apiUrl}/estimate_gas`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: address, to: '', data: '0x' + bytecode.replace(/^0x/, '').trim(), value: '0' }),
+    })
+    if (!r.ok) throw new Error(`estimate failed (${r.status})`)
+    const d = await r.json()
+    if (d.error) throw new Error(`deployment would fail: ${d.error}`)
+    return d.estimated_gas
+  }
+
   const estimateGas = async () => {
     if (!address || !bytecode) return
     try {
-      const payload = Array.from(fromHex(bytecode.replace(/^0x/, '')))
-      const r = await window.fetch(`${apiUrl}/estimate_gas`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          sender: Array.from(fromHex(address.replace('0x', ''))),
-          payload,
-          gas_limit: gasLimit,
-          max_fee_per_gas: 1e9,
-          max_priority_fee_per_gas: 1e9,
-          chain_id: 1,
-          value: 0,
-        }),
-      })
-      if (r.ok) {
-        const d = await r.json()
-        const est = d.gas_estimate || d.gas || gasLimit
-        setEstimatedGas(est)
-        setGasLimit(est)
-        showMsg(`Estimated gas: ${est.toLocaleString()}`, 'success')
-      } else {
-        showMsg('Gas estimation unavailable — using manual limit', 'info')
-      }
-    } catch {
-      showMsg('Could not reach node for gas estimate', 'error')
+      const est = await requestEstimate()
+      setEstimatedGas(est)
+      setGasLimit(est)
+      showMsg(`Estimated gas: ${est.toLocaleString()}`, 'success')
+    } catch (e) {
+      showMsg(e.message.startsWith('deployment would fail') ? e.message : 'Gas estimation unavailable — using manual limit', 'error')
     }
   }
 
@@ -161,6 +149,15 @@ export default function ContractDeployPage() {
     setLoading(true)
     setDeployResult(null)
     try {
+      showMsg('Estimating gas...', 'info')
+      let limit = gasLimit
+      try {
+        limit = await requestEstimate()
+        setEstimatedGas(limit)
+        setGasLimit(limit)
+      } catch (err) {
+        if (String(err.message).startsWith('deployment would fail')) throw err
+      }
       showMsg('Preparing deployment transaction...', 'info')
       const nonce = await fetchNonce()
       const tx = await buildSignedDeployTx({
@@ -168,7 +165,7 @@ export default function ContractDeployPage() {
         from: address,
         bytecodeHex: clean,
         nonce,
-        gasLimit,
+        gasLimit: limit,
       })
 
       showMsg('Submitting contract creation...', 'info')

@@ -448,18 +448,15 @@ impl BlockExecutor {
 
             let evm_data = Bytes::from(tx.payload.clone());
 
-            let caller = Address::from_slice(&tx.sender);
-            let (native_bal, native_nonce) =
-                Self::load_account_state(&self.chain_store, &state_diffs, &tx.sender);
-            if let Err(e) = self
-                .evm
-                .prepare_native_account(caller, native_bal, native_nonce)
-            {
-                warn!(
-                    "Failed to sync EVM account for {}: {}",
-                    hex::encode(&tx.sender[..6]),
-                    e
-                );
+            // The EVM reads and writes the same account records directly, so
+            // it must see every earlier transaction of this block: apply the
+            // pending native diffs first (they would otherwise be written at
+            // commit, on top of — and clobbering — the EVM's changes).
+            for (key, value) in state_diffs.drain(..) {
+                match value {
+                    Some(v) => self.chain_store.put_state(&key, &v)?,
+                    None => self.chain_store.delete_state(&key)?,
+                }
             }
 
             let stx = SignedTransaction {
@@ -499,6 +496,21 @@ impl BlockExecutor {
         let block_height = block.header.slot;
         let block_encoded =
             serde_json::to_vec(block).map_err(|e| format!("Failed to encode block: {}", e))?;
+
+        // Per-address transaction index (node-local, outside the state root):
+        // `/txs/<address>` reads it instead of scanning recent blocks.
+        for (i, tx) in block.extrinsics.iter().enumerate() {
+            let mut parties = vec![tx.sender];
+            if let Some(to) = tx.to.filter(|t| *t != tx.sender) {
+                parties.push(to);
+            }
+            for party in parties {
+                state_diffs.push((
+                    tx_index_key(&party, block.header.slot, i as u32),
+                    Some(vec![]),
+                ));
+            }
+        }
 
         // Atomic commit: block + height index + receipts + latest_height
         self.chain_store.commit_block(
@@ -882,6 +894,20 @@ pub fn validate_block(
     Ok(())
 }
 
+/// Prefix of the node-local per-address transaction index.
+pub const TX_INDEX_PREFIX: &[u8] = b"local:txidx:";
+
+/// `local:txidx:<address><height BE><tx index BE>`: sorted by height, so a
+/// range scan over one address returns its transactions in chain order.
+pub fn tx_index_key(address: &[u8; 20], height: u64, index: u32) -> Vec<u8> {
+    let mut key = Vec::with_capacity(TX_INDEX_PREFIX.len() + 32);
+    key.extend_from_slice(TX_INDEX_PREFIX);
+    key.extend_from_slice(address);
+    key.extend_from_slice(&height.to_be_bytes());
+    key.extend_from_slice(&index.to_be_bytes());
+    key
+}
+
 /// Check `block.last_commit` — the precommits that finalized `parent` — and
 /// return the validators that signed it, sorted (the vote-reward recipients).
 ///
@@ -1260,6 +1286,67 @@ mod tests {
         let four = compute_extrinsics_root(&[a, b, c.clone(), c]);
         assert_ne!(three, four);
         assert_ne!(compute_extrinsics_root(&[]), [0u8; 32]);
+    }
+
+    /// EVM and native transactions share one ledger: the EVM used to keep its
+    /// own copy of balance and nonce, so `/balance` showed a stale nonce (the
+    /// next transaction failed) and EVM spending never left the native
+    /// balance.
+    #[test]
+    fn evm_and_native_transactions_share_one_ledger() {
+        let chain_store = Arc::new(ChainStore::new(Arc::new(MemDb::new())));
+        let evm = EvmExecutor::with_store(
+            Arc::new(crate::evm_store::ChainStoreEvmStore::new(
+                chain_store.clone(),
+            )),
+            1,
+        );
+        let mut executor = BlockExecutor::new(evm, chain_store.clone());
+        let key = ed25519_dalek::SigningKey::from_bytes(&[21u8; 32]);
+        let sender =
+            common::crypto::derive_address_from_public_key(&key.verifying_key().to_bytes());
+        let funded = 10u128.pow(18);
+        crate::accounts::store(&chain_store, &sender, funded, 0).unwrap();
+
+        let tx = |nonce: u64, to: Option<[u8; 20]>, value: u64, payload: Vec<u8>| {
+            let mut t = Transaction::simple_transfer(sender, [0; 20], value, nonce, 1);
+            t.to = to;
+            t.payload = payload;
+            t.gas_limit = 100_000;
+            t.max_priority_fee_per_gas = 1_000_000_000;
+            t.sign_with(&key);
+            t
+        };
+        // Contract creation (init code returning empty runtime code), a native
+        // transfer, then an EVM call — consecutive nonces in one block.
+        let block = Block::new(
+            Header::new([0; 32], 1),
+            vec![
+                tx(0, None, 0, vec![0x60, 0x00, 0x60, 0x00, 0xf3]),
+                tx(1, Some([9; 20]), 5, vec![]),
+                tx(2, Some([7; 20]), 0, vec![0x01]),
+            ],
+        );
+        let receipts = executor.execute_and_commit(&block).unwrap();
+        for r in &receipts {
+            assert!(r.success, "{:?}", r.revert_reason);
+        }
+        let (balance, nonce) = crate::accounts::load(&chain_store, &sender);
+        assert_eq!(nonce, 3, "every transaction advances the one nonce");
+        assert!(
+            balance < funded - 5,
+            "EVM gas is paid from the native balance"
+        );
+        assert_eq!(crate::accounts::load(&chain_store, &[9; 20]).0, 5);
+
+        // The next block's EVM transaction uses the nonce `/balance` reports.
+        let next = Block::new(
+            Header::new([0; 32], 2),
+            vec![tx(3, Some([7; 20]), 0, vec![0x02])],
+        );
+        let receipts = executor.execute_and_commit(&next).unwrap();
+        assert!(receipts[0].success, "{:?}", receipts[0].revert_reason);
+        assert_eq!(crate::accounts::load(&chain_store, &sender).1, 4);
     }
 
     #[test]

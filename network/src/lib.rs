@@ -52,7 +52,7 @@ use libp2p::{
 use protocol::{BlockExchangeProtocol, BlockRequest, BlockResponse};
 use rate_limiter::{MessageType, RateLimitConfig, RateLimiter};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::iter;
 use std::net::Ipv4Addr;
@@ -147,6 +147,10 @@ pub enum NetworkCommand {
     /// Start listening on a specific multiaddress
     StartListening(Multiaddr),
 
+    /// Close every connection to a peer (e.g. one whose requests hang); it
+    /// is redialed by the reconnect loop with fresh connection state.
+    DisconnectPeer(PeerId),
+
     /// Dial (connect to) a specific peer address
     Dial(Multiaddr),
 
@@ -239,6 +243,9 @@ pub struct NetworkService {
 
     /// Reconnection interval for maintaining peer connections
     reconnect_interval: tokio::time::Interval,
+    /// Peer behind each address we dialed, so the reconnect loop does not
+    /// open yet another connection to a peer that is already connected.
+    dialed_peers: HashMap<String, PeerId>,
 
     /// Flag indicating if shutdown has been initiated
     shutting_down: bool,
@@ -399,6 +406,7 @@ impl NetworkService {
             peer_store,
             reputation_file,
             reconnect_interval: tokio::time::interval(Duration::from_secs(15)),
+            dialed_peers: HashMap::new(),
             shutting_down: false,
             bytes_rx: 0,
             bytes_tx: 0,
@@ -599,18 +607,22 @@ impl NetworkService {
             } => {
                 info!("🔗 Connection established with peer: {}", peer_id);
 
-                // Add to peer store for future reconnection
-                let remote_addr = endpoint.get_remote_address();
-                self.peer_store.add_peer(remote_addr);
-                if let Err(e) = self.peer_store.save() {
-                    warn!("Failed to save peer store: {}", e);
+                // Only an address we dialed is the peer's listen address. On
+                // an inbound connection the remote address is an ephemeral
+                // port: storing it filled the peer store with addresses that
+                // were redialed (and refused) forever.
+                if endpoint.is_dialer() {
+                    let remote_addr = endpoint.get_remote_address();
+                    self.dialed_peers.insert(remote_addr.to_string(), peer_id);
+                    self.peer_store.add_peer(remote_addr);
+                    if let Err(e) = self.peer_store.save() {
+                        warn!("Failed to save peer store: {}", e);
+                    }
+                    self.swarm
+                        .behaviour_mut()
+                        .kademlia
+                        .add_address(&peer_id, remote_addr.clone());
                 }
-
-                // Add address to Kademlia for discovery
-                self.swarm
-                    .behaviour_mut()
-                    .kademlia
-                    .add_address(&peer_id, remote_addr.clone());
             }
 
             SwarmEvent::ConnectionClosed { peer_id, cause, .. } => {
@@ -788,6 +800,11 @@ impl NetworkService {
                 self.broadcast_consensus_message(msg);
             }
 
+            NetworkCommand::DisconnectPeer(peer) => {
+                info!("Disconnecting {} to reset its connections", peer);
+                let _ = self.swarm.disconnect_peer_id(peer);
+            }
+
             NetworkCommand::RequestBlock {
                 peer,
                 start_height,
@@ -957,6 +974,14 @@ impl NetworkService {
 
     /// Attempt to dial a known address (non-blocking)
     fn try_dial_known_addr(&mut self, addr: Multiaddr) {
+        // Already connected to whoever listens there: dialing again only
+        // piled up duplicate connections (bootstrap addresses carry no peer
+        // id, so libp2p cannot dedupe them itself).
+        if let Some(peer) = self.dialed_peers.get(&addr.to_string()) {
+            if self.swarm.is_connected(peer) {
+                return;
+            }
+        }
         debug!("🔄 Attempting to connect to known peer: {}", addr);
         if let Err(e) = self.swarm.dial(addr.clone()) {
             debug!("Failed to dial {}: {}", addr, e);

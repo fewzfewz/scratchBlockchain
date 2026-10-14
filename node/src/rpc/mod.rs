@@ -177,9 +177,10 @@ impl RpcServer {
             .and(warp::get())
             .and(with_arc(chain_store.clone()))
             .and(with_arc(tx_pool.clone()))
+            .and(with_arc(metrics.clone()))
             .and(warp::any().map(move || chain_id_rpc))
-            .and_then(|_, chain_store, tx_pool, chain_id| {
-                handle_status(chain_store, tx_pool, chain_id)
+            .and_then(|_, chain_store, tx_pool, metrics, chain_id| {
+                handle_status(chain_store, tx_pool, metrics, chain_id)
             });
 
         // GET /mempool - List pending transactions

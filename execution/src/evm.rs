@@ -298,8 +298,23 @@ impl SignedTransaction {
 // EvmExecutor
 // =============================================================================
 
+/// Executes transactions directly against the persistent [`EvmStore`].
+///
+/// There is deliberately no in-memory cache between them: committed changes
+/// must land in the store, where they are part of the state root, survive a
+/// restart, are seen by RPC reads, and are discarded with a rejected block.
+/// (A `CacheDB` here once kept every contract's state in node memory only.)
+/// Outcome of [`EvmExecutor::simulate`].
+#[derive(Debug, Clone)]
+pub struct Simulation {
+    pub success: bool,
+    pub gas_used: u64,
+    pub output: Vec<u8>,
+    pub error: Option<String>,
+}
+
 pub struct EvmExecutor {
-    db: CacheDB<EvmDb>,
+    db: EvmDb,
     chain_id: u64,
 }
 
@@ -310,9 +325,8 @@ impl EvmExecutor {
     }
 
     pub fn with_store(store: Arc<dyn EvmStore>, chain_id: u64) -> Self {
-        let evm_db = EvmDb::new(store);
         Self {
-            db: CacheDB::new(evm_db),
+            db: EvmDb::new(store),
             chain_id,
         }
     }
@@ -325,48 +339,19 @@ impl EvmExecutor {
     where
         F: Fn(u64) -> B256 + Send + Sync + 'static,
     {
-        self.db.db = EvmDb::new(self.db.db.store.clone()).with_block_hash_provider(provider);
+        self.db = EvmDb::new(self.db.store.clone()).with_block_hash_provider(provider);
     }
 
     pub fn set_balance(&mut self, address: &str, balance: u64) -> Result<()> {
         let addr =
             Address::from_str(address).map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
-        self.db.insert_account_info(
+        let existing = self.db.store.get_account(&addr);
+        self.db.store.put_account(
             addr,
-            AccountInfo {
+            StoredAccount {
                 balance: U256::from(balance),
-                nonce: 0,
-                code_hash: revm::primitives::KECCAK_EMPTY,
-                code: None,
-            },
-        );
-        Ok(())
-    }
-
-    /// Mirror native-chain balance/nonce into the EVM account before execution.
-    pub fn prepare_native_account(
-        &mut self,
-        caller: Address,
-        native_balance: u128,
-        native_nonce: u64,
-    ) -> Result<()> {
-        let existing = self.db.basic(caller)?;
-        let evm_balance = existing.as_ref().map(|a| a.balance).unwrap_or(U256::ZERO);
-        let native = U256::from(native_balance);
-        let balance = if evm_balance > native {
-            evm_balance
-        } else {
-            native
-        };
-        let evm_nonce = existing.as_ref().map(|a| a.nonce).unwrap_or(0);
-        let nonce = native_nonce.max(evm_nonce);
-        self.db.insert_account_info(
-            caller,
-            AccountInfo {
-                balance,
-                nonce,
-                code_hash: revm::primitives::KECCAK_EMPTY,
-                code: existing.and_then(|a| a.code),
+                nonce: existing.as_ref().map(|a| a.nonce).unwrap_or(0),
+                code_hash: existing.and_then(|a| a.code_hash),
             },
         );
         Ok(())
@@ -384,7 +369,7 @@ impl EvmExecutor {
         }
 
         // 2. Check nonce (the caller is authenticated upstream; see SignedTransaction)
-        let account = self.db.basic(tx.caller)?;
+        let account = DatabaseRef::basic(&self.db, tx.caller)?;
         if let Some(acc) = account {
             if tx.nonce != acc.nonce {
                 anyhow::bail!("Invalid nonce: expected {}, got {}", acc.nonce, tx.nonce);
@@ -397,7 +382,7 @@ impl EvmExecutor {
         }
 
         // 3. Check balance for gas + value
-        let account = self.db.basic(tx.caller)?;
+        let account = DatabaseRef::basic(&self.db, tx.caller)?;
         let balance = account.map(|a| a.balance).unwrap_or(U256::ZERO);
         let total_cost = tx.value + (tx.gas_price * U256::from(tx.gas_limit));
         if balance < total_cost {
@@ -437,7 +422,7 @@ impl EvmExecutor {
             .transact()
             .map_err(|e| anyhow::anyhow!("EVM execution error: {:?}", e))?;
 
-        self.db.commit(result_and_state.state);
+        DatabaseCommit::commit(&mut self.db, result_and_state.state);
 
         match result_and_state.result {
             ExecutionResult::Success {
@@ -448,9 +433,11 @@ impl EvmExecutor {
             } => {
                 let (output_bytes, created_address) = match output {
                     Output::Call(bytes) => (bytes.to_vec(), None),
+                    // `addr` is already an Option; wrapping it again made
+                    // receipts report "Some(0x…)" as the contract address.
                     Output::Create(bytes, addr) => {
                         tracing::info!("Contract deployed at {:?}", addr);
-                        (bytes.to_vec(), Some(addr))
+                        (bytes.to_vec(), addr)
                     }
                 };
                 Ok(TransactionReceipt {
@@ -497,28 +484,33 @@ impl EvmExecutor {
     pub fn get_nonce(&mut self, address: &str) -> Result<u64> {
         let addr =
             Address::from_str(address).map_err(|e| anyhow::anyhow!("Invalid address: {}", e))?;
-        let account = self.db.basic(addr)?;
+        let account = DatabaseRef::basic(&self.db, addr)?;
         Ok(account.map(|a| a.nonce).unwrap_or(0))
     }
 
     /// Current EVM state root (for rollups and fraud proofs).
     pub fn state_root(&self) -> [u8; 32] {
-        self.db.db.state_root()
+        self.db.state_root()
     }
 
-    /// Read-only EVM call (no state commit, no signature required).
-    pub fn static_call(
+    /// Run a call or contract creation against current state without
+    /// committing anything (no signature, nonce or balance checks). Used for
+    /// read-only calls and for gas estimation.
+    pub fn simulate(
         store: Arc<dyn EvmStore>,
         from: Address,
-        to: Address,
+        to: Option<Address>,
         data: Vec<u8>,
         value: U256,
-    ) -> Result<Vec<u8>> {
+    ) -> Result<Simulation> {
         let mut db = CacheDB::new(EvmDb::new(store));
         let mut evm = EVM::new();
         evm.database(&mut db);
         evm.env.tx.caller = from;
-        evm.env.tx.transact_to = TransactTo::Call(to);
+        evm.env.tx.transact_to = match to {
+            Some(addr) => TransactTo::Call(addr),
+            None => TransactTo::Create(CreateScheme::Create),
+        };
         evm.env.tx.data = Bytes::from(data);
         evm.env.tx.value = value;
         evm.env.tx.gas_limit = 30_000_000;
@@ -531,18 +523,45 @@ impl EvmExecutor {
         let result = evm
             .transact()
             .map_err(|e| anyhow::anyhow!("EVM call error: {:?}", e))?;
-
-        match result.result {
-            ExecutionResult::Success { output, .. } => match output {
-                Output::Call(bytes) => Ok(bytes.to_vec()),
-                Output::Create(bytes, _) => Ok(bytes.to_vec()),
+        Ok(match result.result {
+            ExecutionResult::Success {
+                output, gas_used, ..
+            } => Simulation {
+                success: true,
+                gas_used,
+                output: match output {
+                    Output::Call(bytes) => bytes.to_vec(),
+                    Output::Create(bytes, _) => bytes.to_vec(),
+                },
+                error: None,
             },
-            ExecutionResult::Revert { output, .. } => {
-                anyhow::bail!("Call reverted: 0x{}", hex::encode(output))
-            }
-            ExecutionResult::Halt { reason, .. } => {
-                anyhow::bail!("Call halted: {:?}", reason)
-            }
+            ExecutionResult::Revert { output, gas_used } => Simulation {
+                success: false,
+                gas_used,
+                error: Some(format!("reverted: 0x{}", hex::encode(&output))),
+                output: output.to_vec(),
+            },
+            ExecutionResult::Halt { reason, gas_used } => Simulation {
+                success: false,
+                gas_used,
+                output: vec![],
+                error: Some(format!("halted: {:?}", reason)),
+            },
+        })
+    }
+
+    /// Read-only EVM call (no state commit, no signature required).
+    pub fn static_call(
+        store: Arc<dyn EvmStore>,
+        from: Address,
+        to: Address,
+        data: Vec<u8>,
+        value: U256,
+    ) -> Result<Vec<u8>> {
+        let sim = Self::simulate(store, from, Some(to), data, value)?;
+        match sim.error {
+            None => Ok(sim.output),
+            Some(e) => anyhow::bail!("Call {}", e),
         }
     }
 }
@@ -657,5 +676,82 @@ mod tests {
         let tx2 = make_test_tx(ALICE, Some(BOB), 100, 1);
         let result = executor.execute_transaction(tx2);
         assert!(result.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::*;
+
+    #[test]
+    fn creation_receipt_reports_plain_contract_address() {
+        let store = Arc::new(InMemoryStore::default());
+        let mut executor = EvmExecutor::with_store(store, 1);
+        executor
+            .set_balance("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 10_000_000)
+            .unwrap();
+        let init = vec![0x60, 0x00, 0x60, 0x00, 0xf3]; // returns empty runtime code
+        let tx = SignedTransaction::new(
+            Address::from([0xAA; 20]),
+            None,
+            U256::ZERO,
+            init,
+            0,
+            100_000,
+            U256::from(1),
+            1,
+        );
+        let receipt = executor.execute_transaction(tx).unwrap();
+        let addr = receipt
+            .created_address
+            .expect("creation reports an address");
+        assert!(addr.starts_with("0x") && addr.len() == 42, "{}", addr);
+    }
+
+    #[test]
+    fn simulate_reports_gas_and_never_commits() {
+        let store = Arc::new(InMemoryStore::default());
+        let from = Address::from([0xAA; 20]);
+        // Init code storing 1 at slot 0, then returning empty runtime code:
+        // PUSH1 1 PUSH1 0 SSTORE PUSH1 0 PUSH1 0 RETURN
+        let init = vec![0x60, 0x01, 0x60, 0x00, 0x55, 0x60, 0x00, 0x60, 0x00, 0xf3];
+        let sim = EvmExecutor::simulate(store.clone(), from, None, init, U256::ZERO).unwrap();
+        assert!(sim.success, "{:?}", sim.error);
+        // Intrinsic 21k + creation 32k + a cold SSTORE: far above a byte count.
+        assert!(sim.gas_used > 70_000, "gas {}", sim.gas_used);
+        assert!(store.get_account(&from).is_none(), "simulation wrote state");
+
+        // A revert is reported, not hidden.
+        let revert = vec![0x60, 0x00, 0x60, 0x00, 0xfd]; // PUSH1 0 PUSH1 0 REVERT
+        let sim = EvmExecutor::simulate(store, from, None, revert, U256::ZERO).unwrap();
+        assert!(!sim.success && sim.error.is_some());
+    }
+
+    #[test]
+    fn executed_state_reaches_the_store() {
+        let store = Arc::new(InMemoryStore::default());
+        let mut executor = EvmExecutor::with_store(store.clone(), 1);
+        let alice = Address::from([0xAA; 20]);
+        let bob = Address::from([0xBB; 20]);
+        executor
+            .set_balance("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", 1_000_000)
+            .unwrap();
+        let tx = SignedTransaction::new(
+            alice,
+            Some(bob),
+            U256::from(100),
+            vec![],
+            0,
+            21_000,
+            U256::from(1),
+            1,
+        );
+        assert!(executor.execute_transaction(tx).unwrap().success);
+        let stored = store.get_account(&bob).map(|a| a.balance);
+        assert_eq!(
+            stored,
+            Some(U256::from(100)),
+            "bob's balance is not in the store"
+        );
     }
 }

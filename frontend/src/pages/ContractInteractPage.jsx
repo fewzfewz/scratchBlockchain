@@ -34,6 +34,11 @@ export default function ContractInteractPage() {
     try {
       const d = await estimateGas(from, contract, calldata, value)
       setEstimate(d)
+      if (d.error) {
+        setStatus(`This call would fail: ${d.error}`)
+        setStatusType('err')
+        return
+      }
       setStatus(`Estimated gas: ${d.estimated_gas}`)
       setStatusType('ok')
     } catch {
@@ -71,6 +76,7 @@ export default function ContractInteractPage() {
     setStatus('Submitting contract call…')
     try {
       const est = estimate || await estimateGas(from, contract, calldata, value)
+      if (est.error) throw new Error(`This call would fail: ${est.error}`)
       const { hash } = await signAndSubmit({
         from,
         to: contract,

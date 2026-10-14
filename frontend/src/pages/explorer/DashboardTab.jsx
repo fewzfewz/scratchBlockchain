@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Activity, ShieldCheck, Layers, Gauge, Blocks, Inbox, RefreshCw } from 'lucide-react'
+import { getApiUrl } from '../../lib/chain.js'
 
-const API_URL = 'http://localhost:8545'
 
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 const shorten = (v, s = 10, e = 8) => !v ? '--' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}...${v.slice(-e)}`
@@ -19,19 +19,19 @@ export default function DashboardTab() {
     const fetch = async () => {
       try {
         const [sr, mr] = await Promise.all([
-          window.fetch(`${API_URL}/status`),
-          window.fetch(`${API_URL}/mempool`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/mempool`),
         ])
         if (!sr.ok || !mr.ok) throw new Error('Node returned unexpected response')
         const [sd, md] = await Promise.all([sr.json(), mr.json()])
         if (!active) return
         setStatus(sd); setMempool(md); setLastUpdated(new Date()); setError('')
-      } catch { if (active) setError('Unable to reach the local node at http://localhost:8545.') }
+      } catch { if (active) setError(`Unable to reach the node at ${getApiUrl()}.`) }
       finally { if (active) setLoading(false) }
     }
     const fetchBlocks = async () => {
       try {
-        const res = await window.fetch(`${API_URL}/block/latest`)
+        const res = await window.fetch(`${getApiUrl()}/block/latest`)
         if (!res.ok) throw new Error('offline')
         const { block } = await res.json()
         if (!block) return
@@ -40,7 +40,7 @@ export default function DashboardTab() {
         const reqs = []
         for (let s = latest; s >= from; s--) {
           reqs.push(
-            window.fetch(`${API_URL}/block/${s}`)
+            window.fetch(`${getApiUrl()}/block/${s}`)
               .then((r) => r.json())
               .then((d) => d.block)
               .catch(() => null),
@@ -106,7 +106,7 @@ export default function DashboardTab() {
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4">Chain Snapshot</h3>
           <div className="space-y-2">
             {[
-              ['RPC endpoint', API_URL],
+              ['RPC endpoint', getApiUrl()],
               ['Synchronization', error ? 'Disconnected' : 'Healthy'],
               ['Pending capacity', txs.length > 0 ? `${fmt(txs.length)} tx visible` : 'Queue clear'],
               ['Connected peers', fmt(status?.peer_count)],
@@ -119,7 +119,7 @@ export default function DashboardTab() {
           </div>
           {!error && (
             <div className="mt-4 p-3 rounded-xl bg-gradient-to-r from-blue-500/10 to-cyan-500/10 border border-blue-500/10 text-xs text-slate-400 dark:text-slate-500">
-              BFT consensus finalizing blocks every second.
+              BFT consensus: a block is final as soon as validators holding more than 2/3 of the stake sign it.
             </div>
           )}
         </div>
