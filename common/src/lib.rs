@@ -1,3 +1,4 @@
+pub mod bridge;
 pub mod consensus_types;
 pub mod crypto;
 pub mod merkle;

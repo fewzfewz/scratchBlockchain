@@ -18,6 +18,7 @@ members = [
     "runtime",
     "monitoring",
     "benchmarks",
+    "relayer",
 ]
 resolver = "2"
 

@@ -28,7 +28,17 @@ impl DevSigner {
     ) -> Result<String, String> {
         let mut next = self.next_nonce.lock().await;
         let (_, onchain) = crate::accounts::load(&self.chain_store, &self.address);
-        let nonce = (*next).max(onchain);
+        // Our transactions still waiting in the pool. If one was dropped after
+        // it was accepted, `next` would point past a gap forever and every
+        // later transaction would wait behind it: never run ahead of
+        // on-chain nonce + pending.
+        let pending = self
+            .tx_pool
+            .mempool_snapshot(100_000)
+            .iter()
+            .filter(|t| t.sender == self.address && t.nonce >= onchain)
+            .count() as u64;
+        let nonce = (*next).clamp(onchain, onchain + pending);
         let mut tx = Transaction {
             sender: self.address,
             nonce,

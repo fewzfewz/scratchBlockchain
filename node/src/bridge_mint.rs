@@ -17,14 +17,15 @@
 //!  "amount": "<u128 wei>", "attestations": [{"relayer": "<hex ed25519 pk>", "signature": "<hex>"}]}
 //! ```
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+pub use common::bridge::{
+    attestation_message, decode_fixed, parse_mint as parse, verify_attestations, Attestation,
+    BridgeConfig, BridgeMint, BRIDGE_MINT_DOMAIN,
+};
 use std::sync::Arc;
 use storage::trie::PatriciaTrie;
 use storage::ChainStore;
 use tokio::sync::Mutex;
 
-pub const BRIDGE_MINT_DOMAIN: &[u8] = b"NEBULA_BRIDGE_MINT_V1";
 /// Trie key holding the relayer set and threshold (seeded from genesis).
 pub const BRIDGE_CONFIG_KEY: &[u8] = b"bridge_config";
 /// Flat-state prefix (inside the state root) for minted ETH lock tx hashes.
@@ -32,110 +33,12 @@ pub const MINTED_PREFIX: &[u8] = b"bridge:minted:";
 /// Flat-state key for the total amount minted by the bridge.
 pub const TOTAL_MINTED_KEY: &[u8] = b"bridge:total_minted";
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BridgeConfig {
-    /// Hex Ed25519 public keys of the relayers.
-    pub relayers: Vec<String>,
-    /// Distinct relayer attestations a mint needs.
-    pub threshold: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Attestation {
-    pub relayer: String,
-    pub signature: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BridgeMint {
-    pub eth_tx_hash: String,
-    pub recipient: String,
-    pub amount: String,
-    #[serde(default)]
-    pub attestations: Vec<Attestation>,
-}
-
-/// What a relayer signs for one mint.
-pub fn attestation_message(
-    chain_id: u64,
-    eth_tx_hash: &[u8; 32],
-    recipient: &[u8; 20],
-    amount: u128,
-) -> Vec<u8> {
-    let mut msg = Vec::with_capacity(BRIDGE_MINT_DOMAIN.len() + 76);
-    msg.extend_from_slice(BRIDGE_MINT_DOMAIN);
-    msg.extend_from_slice(&chain_id.to_le_bytes());
-    msg.extend_from_slice(eth_tx_hash);
-    msg.extend_from_slice(recipient);
-    msg.extend_from_slice(&amount.to_le_bytes());
-    msg
-}
-
 pub fn is_bridge_mint_payload(payload: &[u8]) -> bool {
     payload.first() == Some(&b'{')
         && serde_json::from_slice::<serde_json::Value>(payload)
             .ok()
             .and_then(|v| v.get("action")?.as_str().map(|a| a == "bridge_mint"))
             .unwrap_or(false)
-}
-
-fn decode_fixed<const N: usize>(hex_str: &str) -> Option<[u8; N]> {
-    hex::decode(hex_str.trim().trim_start_matches("0x"))
-        .ok()?
-        .try_into()
-        .ok()
-}
-
-/// Parsed and checked fields of a mint: (eth tx hash, recipient, amount).
-pub fn parse(payload: &[u8]) -> Result<(BridgeMint, [u8; 32], [u8; 20], u128), String> {
-    let mint: BridgeMint =
-        serde_json::from_slice(payload).map_err(|e| format!("bad bridge_mint: {}", e))?;
-    let eth_tx_hash = decode_fixed::<32>(&mint.eth_tx_hash).ok_or("bad eth_tx_hash")?;
-    let recipient = decode_fixed::<20>(&mint.recipient).ok_or("bad recipient")?;
-    let amount = mint
-        .amount
-        .parse::<u128>()
-        .ok()
-        .filter(|a| *a > 0)
-        .ok_or("bad amount")?;
-    Ok((mint, eth_tx_hash, recipient, amount))
-}
-
-/// Check that `threshold` distinct relayers of `config` signed this mint.
-pub fn verify_attestations(
-    config: &BridgeConfig,
-    chain_id: u64,
-    mint: &BridgeMint,
-    eth_tx_hash: &[u8; 32],
-    recipient: &[u8; 20],
-    amount: u128,
-) -> Result<(), String> {
-    if config.threshold == 0 || config.relayers.is_empty() {
-        return Err("bridge has no relayer set".into());
-    }
-    let relayers: HashSet<String> = config.relayers.iter().map(|r| r.to_lowercase()).collect();
-    let msg = attestation_message(chain_id, eth_tx_hash, recipient, amount);
-    let mut signed = HashSet::new();
-    for att in &mint.attestations {
-        let relayer = att.relayer.trim_start_matches("0x").to_lowercase();
-        if !relayers.contains(&relayer) {
-            continue; // not a relayer: carries no weight
-        }
-        let pk = hex::decode(&relayer).map_err(|_| "bad relayer key")?;
-        let sig = hex::decode(att.signature.trim_start_matches("0x"))
-            .map_err(|_| "bad attestation signature")?;
-        common::crypto::verify_signature(&pk, &msg, &sig)
-            .map_err(|_| format!("invalid attestation from relayer {}", &relayer[..8]))?;
-        signed.insert(relayer);
-    }
-    if (signed.len() as u64) < u64::from(config.threshold) {
-        return Err(format!(
-            "{} of {} required relayer attestations",
-            signed.len(),
-            config.threshold
-        ));
-    }
-    Ok(())
 }
 
 pub async fn load_config(trie: &Arc<Mutex<PatriciaTrie>>) -> Option<BridgeConfig> {

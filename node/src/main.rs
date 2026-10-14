@@ -938,11 +938,19 @@ impl Node {
                         engine.handle_vote(vote)
                     }
                     ConsensusMessage::Proposal(proposal) => {
-                        let engine_height = self.bft_engine.lock().await.height;
+                        let (engine_height, validator_keys) = {
+                            let engine = self.bft_engine.lock().await;
+                            let keys: Vec<Vec<u8>> = engine
+                                .validator_set()
+                                .into_iter()
+                                .map(|(pk, _)| pk)
+                                .collect();
+                            (engine.height, keys)
+                        };
                         if proposal.height == engine_height {
                             if let Err(e) = self.validate_proposed_block(
                                 &proposal.block,
-                                &proposal.proposer,
+                                &validator_keys,
                                 engine_height,
                             ) {
                                 // Not voting for it: we prevote nil on timeout.
@@ -1056,13 +1064,21 @@ impl Node {
     fn validate_proposed_block(
         &self,
         block: &Block,
-        proposer: &[u8],
+        validator_keys: &[Vec<u8>],
         height: u64,
     ) -> Result<(), String> {
-        // Rewards and block stats credit `header.proposer` (covered by the
-        // block hash), so it must be the validator proposing it this round.
-        if block.header.proposer.as_slice() != proposer {
-            return Err("block header names a different proposer".into());
+        // Rewards and block stats credit `header.proposer`, the validator
+        // that built and signed the block (checked in validate_block). It
+        // need not be this round's proposer: under the Tendermint rules a
+        // proposer re-proposes a block that was already prevoted in an
+        // earlier round, built by someone else. (Requiring a match rejected
+        // those and cost rounds.) The round's proposer is authenticated by
+        // the engine through the proposal signature.
+        if !validator_keys
+            .iter()
+            .any(|k| k.as_slice() == block.header.proposer.as_slice())
+        {
+            return Err("block was not built by a validator".into());
         }
         let parent = latest_block(&self.chain_store).map_err(|e| e.to_string())?;
         let state_root = self

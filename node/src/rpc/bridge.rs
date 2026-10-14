@@ -83,16 +83,9 @@ pub(super) async fn handle_bridge_unlock_ack(
     }
 }
 
-/// keccak256("TokensLocked(uint64,address,address,uint256,bytes32)")
-const TOKENS_LOCKED_TOPIC: &str =
-    "0x1b3a88149ad03e75e48758d7d1b76a639a6883d27b6949badde69a6033bd90de";
-
-/// A native-ETH lock read from a `TokensLocked` event of the bridge contract.
-#[derive(Debug, PartialEq, Eq)]
-pub(super) struct EthLock {
-    pub amount: u128,
-    pub recipient: [u8; 20],
-}
+pub(super) use common::bridge::EthLock;
+#[cfg(test)]
+use common::bridge::TOKENS_LOCKED_TOPIC;
 
 /// Find the native-ETH `TokensLocked` event emitted by `bridge` in a receipt.
 /// The amount and recipient a relayer attests to come from here, never from
@@ -101,50 +94,14 @@ pub(super) fn parse_eth_lock(receipt: &serde_json::Value, bridge: &str) -> Resul
     if receipt.get("status").and_then(|s| s.as_str()) != Some("0x1") {
         return Err("ETH transaction failed".into());
     }
-    let bridge = bridge.trim().to_lowercase();
     let logs = receipt
         .get("logs")
         .and_then(|l| l.as_array())
         .ok_or("ETH receipt has no logs")?;
     for log in logs {
-        let from_bridge = log
-            .get("address")
-            .and_then(|a| a.as_str())
-            .is_some_and(|a| a.to_lowercase() == bridge);
-        let topics: Vec<&str> = log
-            .get("topics")
-            .and_then(|t| t.as_array())
-            .map(|t| t.iter().filter_map(|x| x.as_str()).collect())
-            .unwrap_or_default();
-        if !from_bridge || topics.len() != 4 || topics[0].to_lowercase() != TOKENS_LOCKED_TOPIC {
-            continue;
+        if let Some(lock) = common::bridge::parse_tokens_locked_log(log, bridge)? {
+            return Ok(lock);
         }
-        // topics: [sig, messageId, user, token]; token must be address(0).
-        let token = hex::decode(topics[3].trim_start_matches("0x")).unwrap_or_default();
-        if token.len() != 32 || token.iter().any(|b| *b != 0) {
-            return Err("only native ETH locks can be bridged".into());
-        }
-        // data: amount (uint256) ‖ recipient (bytes32, address left-padded)
-        let data = log
-            .get("data")
-            .and_then(|d| d.as_str())
-            .and_then(|d| hex::decode(d.trim_start_matches("0x")).ok())
-            .filter(|d| d.len() == 64)
-            .ok_or("malformed TokensLocked data")?;
-        if data[..16].iter().any(|b| *b != 0) {
-            return Err("locked amount exceeds u128".into());
-        }
-        let mut amount = [0u8; 16];
-        amount.copy_from_slice(&data[16..32]);
-        if data[32..44].iter().any(|b| *b != 0) {
-            return Err("lock recipient is not a 20-byte address".into());
-        }
-        let mut recipient = [0u8; 20];
-        recipient.copy_from_slice(&data[44..64]);
-        return Ok(EthLock {
-            amount: u128::from_be_bytes(amount),
-            recipient,
-        });
     }
     Err("no TokensLocked event from the bridge contract in this transaction".into())
 }
@@ -190,8 +147,10 @@ pub(super) async fn verify_eth_lock_tx(
 pub(super) async fn handle_bridge_mint(
     req: BridgeMintRequest,
     chain_store: Arc<ChainStore>,
+    state_trie: Arc<Mutex<PatriciaTrie>>,
     signer: Option<Arc<DevSigner>>,
     bridge_minted: Arc<Mutex<HashSet<String>>>,
+    attestation_pool: Arc<Mutex<super::attestations::AttestationPool>>,
 ) -> Result<impl warp::Reply, Infallible> {
     let Some(signer) = signer else {
         return Ok(warp::reply::json(&serde_json::json!({
@@ -276,41 +235,69 @@ pub(super) async fn handle_bridge_mint(
     }
     let amount = lock.amount;
 
-    let msg = crate::bridge_mint::attestation_message(
+    // This node is one relayer of the set: pool its attestation with the
+    // others', and submit the mint once the threshold is met (otherwise the
+    // standalone relayers complete it).
+    let sub = super::attestations::AttestationSubmission {
+        eth_tx_hash: format!("0x{}", hex::encode(eth_hash_bytes)),
+        recipient: format!("0x{}", hex::encode(recipient_bytes)),
+        amount: amount.to_string(),
+        attestation: common::bridge::attest(
+            &signer.key,
+            signer.chain_id,
+            &eth_hash_bytes,
+            &recipient_bytes,
+            amount,
+        ),
+    };
+    let (count, config, minted) = match super::attestations::add_attestation(
+        &sub,
+        &state_trie,
+        &chain_store,
+        &attestation_pool,
         signer.chain_id,
-        &eth_hash_bytes,
-        &recipient_bytes,
-        amount,
-    );
-    let attestation = {
-        use ed25519_dalek::Signer;
-        serde_json::json!({
-            "relayer": hex::encode(signer.key.verifying_key().to_bytes()),
-            "signature": hex::encode(signer.key.sign(&msg).to_bytes()),
-        })
+    )
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => return Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
     };
-    let payload = serde_json::json!({
-        "action": "bridge_mint",
-        "eth_tx_hash": format!("0x{}", hex::encode(eth_hash_bytes)),
-        "recipient": format!("0x{}", hex::encode(recipient_bytes)),
-        "amount": amount.to_string(),
-        "attestations": [attestation],
-    });
-    let payload = match serde_json::to_vec(&payload) {
-        Ok(p) => p,
-        Err(e) => {
-            return Ok(warp::reply::json(
-                &serde_json::json!({ "error": e.to_string() }),
-            ));
-        }
-    };
+    if minted {
+        return Ok(warp::reply::json(
+            &serde_json::json!({ "error": "ETH lock already processed" }),
+        ));
+    }
+    if (count as u64) < u64::from(config.threshold) {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "status": "attested",
+            "attestations": count,
+            "threshold": config.threshold,
+            "note": "Waiting for the other relayers to attest; one of them submits the mint",
+            "eth_tx_hash": sub.eth_tx_hash,
+        })));
+    }
+    let attestations: Vec<common::bridge::Attestation> = attestation_pool
+        .lock()
+        .await
+        .get(&hex::encode(eth_hash_bytes))
+        .into_iter()
+        .find(|e| e.recipient == recipient_bytes && e.amount == amount)
+        .map(|e| e.attestations.into_values().collect())
+        .unwrap_or_default();
+    let payload = common::bridge::BridgeMint {
+        eth_tx_hash: sub.eth_tx_hash.clone(),
+        recipient: sub.recipient.clone(),
+        amount: sub.amount.clone(),
+        attestations,
+    }
+    .to_payload();
     match signer.submit(None, 0, payload).await {
         Ok(hash) => {
             pending.insert(eth_hash_lower);
             Ok(warp::reply::json(&serde_json::json!({
                 "status": "submitted",
-                "recipient": format!("0x{}", hex::encode(recipient_bytes)),
-                "amount": amount.to_string(),
+                "recipient": sub.recipient,
+                "amount": sub.amount,
                 "hash": hash,
                 "eth_tx_hash": req.eth_tx_hash,
             })))

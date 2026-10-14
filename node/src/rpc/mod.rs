@@ -34,6 +34,7 @@ use tokio::sync::Mutex;
 use warp::Filter;
 
 mod aa_mev;
+mod attestations;
 mod bridge;
 mod chain;
 mod dev;
@@ -134,6 +135,8 @@ impl RpcServer {
         let faucet_cooldowns: Arc<Mutex<HashMap<String, u64>>> =
             Arc::new(Mutex::new(HashMap::new()));
         let bridge_minted: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
+        let attestation_pool: Arc<Mutex<attestations::AttestationPool>> =
+            Arc::new(Mutex::new(attestations::AttestationPool::default()));
         let bridge_unlock_queue: Arc<Mutex<BridgeUnlockQueue>> =
             Arc::new(Mutex::new(BridgeUnlockQueue::new()));
 
@@ -590,17 +593,48 @@ impl RpcServer {
             .and(body_limit)
             .and(warp::body::json())
             .and(with_arc(chain_store.clone()))
+            .and(with_arc(state_trie.clone()))
             .and(with_dev_signer.clone())
             .and(with_arc(bridge_minted.clone()))
+            .and(with_arc(attestation_pool.clone()))
             .and_then(
                 |_,
                  req: BridgeMintRequest,
                  chain_store: Arc<ChainStore>,
+                 state_trie: Arc<Mutex<PatriciaTrie>>,
                  signer: Option<Arc<DevSigner>>,
-                 bridge_minted: Arc<Mutex<HashSet<String>>>| async move {
-                    handle_bridge_mint(req, chain_store, signer, bridge_minted).await
+                 bridge_minted: Arc<Mutex<HashSet<String>>>,
+                 pool: Arc<Mutex<attestations::AttestationPool>>| async move {
+                    handle_bridge_mint(req, chain_store, state_trie, signer, bridge_minted, pool)
+                        .await
                 },
             );
+
+        // POST /bridge/attestations — a relayer's signed attestation for an
+        // Ethereum lock (public: only valid genesis-relayer signatures count)
+        let bridge_attest = warp::path!("bridge" / "attestations")
+            .and(with_rate_limit.clone())
+            .and(warp::post())
+            .and(body_limit)
+            .and(warp::body::json())
+            .and(with_arc(state_trie.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and(with_arc(attestation_pool.clone()))
+            .and(warp::any().map(move || chain_id_rpc))
+            .and_then(|_, sub, state_trie, chain_store, pool, chain_id| {
+                attestations::handle_post_attestation(sub, state_trie, chain_store, pool, chain_id)
+            });
+
+        // GET /bridge/attestations/<eth tx hash> — pooled attestations + minted flag
+        let bridge_attestations = warp::path!("bridge" / "attestations" / String)
+            .and(with_rate_limit.clone())
+            .and(warp::get())
+            .and(with_arc(state_trie.clone()))
+            .and(with_arc(chain_store.clone()))
+            .and(with_arc(attestation_pool.clone()))
+            .and_then(|hash, _, state_trie, chain_store, pool| {
+                attestations::handle_get_attestations(hash, state_trie, chain_store, pool)
+            });
 
         // POST /bridge/unlock — relayer unlock on Ethereum after Nebula lock
         let bridge_unlock = warp::path!("bridge" / "unlock")
@@ -657,6 +691,8 @@ impl RpcServer {
             .or(call_contract)
             .or(bridge_status)
             .or(bridge_mint)
+            .or(bridge_attest)
+            .or(bridge_attestations)
             .or(bridge_unlock)
             .or(bridge_pending_unlocks)
             .or(bridge_unlock_ack)
