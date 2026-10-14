@@ -164,33 +164,29 @@ const steps = [
   ['bridge: Nebula → ETH lock', async () => {
     await page.goto(`${UI}/bridge`, 4000)
     await page.click('Nebula → ETH')
-    await page.fill('Amount', '0.1')
-    await page.fill('Recipient on destination chain', '0x70997970C51812dc3A010C7d01b50e0d17dc79C8')
-    const btns = await page.evaluate(`[...document.querySelectorAll('button')].filter(window.__vis).map(b => b.innerText.trim())`)
-    const lock = btns.find((b) => /lock/i.test(b))
-    if (!lock) throw new Error('no lock button: ' + JSON.stringify(btns))
+    await page.fill('Amount (NBL)', '0.1')
+    await page.fill('Ethereum recipient', '0x70997970C51812dc3A010C7d01b50e0d17dc79C8')
     await mark()
-    await page.click(lock)
-    return await expectStatus('(lock tx|locked|submitted|queued)[^\\n]*', 'failed|error|invalid', 60000)
+    await page.click('Lock 0.1 NBL on Nebula')
+    return await expectStatus('Nebula lock tx[^\\n]*', 'failed|error|invalid', 60000)
   }],
-  ['bridge: ETH → Nebula lock + mint', async () => {
+  ['bridge: ETH → Nebula — relayers mint without a mint click', async () => {
     await page.goto(`${UI}/bridge`, 3000)
     await page.evaluate(ETH_SHIM)
     await page.click('ETH → Nebula')
     await mark()
     await page.click('Connect MetaMask')
-    await expectStatus('connected[^\\n]*', 'not installed|error|failed', 15000)
-    await page.fill('Amount', '0.25')
-    await page.fill('Recipient on destination chain', addr)
+    await expectStatus('MetaMask connected[^\\n]*', 'not installed|error|failed', 15000)
+    await page.fill('Amount (ETH)', '0.25')
+    await page.fill('Nebula recipient', addr)
     const before = await bal(addr)
     await mark()
-    await page.click('1. Lock ETH on Bridge.sol')
-    await expectStatus('(locked|confirmed|tx)[^\\n]*', 'failed|error|reverted', 60000)
-    await mark()
-    await page.click('2. Relayer mint on Nebula')
-    await expectStatus('(submitted|minted|success)[^\\n]*', 'failed|error|do not match', 60000)
-    for (let i = 0; i < 30; i++) { const b = await bal(addr); if (b > before) return `+${b - before} wei`; await sleep(1000) }
-    throw new Error('mint not credited')
+    await page.click('Lock 0.25 ETH')
+    await expectStatus('ETH locked[^\\n]*', 'failed|error|reverted', 60000)
+    // No mint button: the standalone relayers attest and submit on their own.
+    await page.waitText(/Minted on Nebula/, 60000)
+    for (let i = 0; i < 20; i++) { const b = await bal(addr); if (b > before) return `+${b - before} wei, minted by relayers`; await sleep(1000) }
+    throw new Error('UI shows minted but the balance did not change')
   }],
   ['explorer: staking tab', async () => {
     await page.goto(`${UI}/explorer`, 3000)

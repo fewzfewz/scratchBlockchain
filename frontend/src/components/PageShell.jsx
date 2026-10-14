@@ -1,18 +1,5 @@
+// Page wrapper. The background glow lives on <body> (index.css), so pages
+// sit on one calm, static canvas instead of their own animated blobs.
 export default function PageShell({ children, className = '' }) {
-  return (
-    <div className={`relative min-h-screen overflow-hidden ${className}`}>
-      {/* Aurora */}
-      <div className="absolute -top-40 -left-40 w-[42rem] h-[42rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
-      <div className="absolute top-20 -right-40 w-[36rem] h-[36rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.4), transparent 70%)' }} />
-      <div className="absolute -bottom-32 left-1/4 w-[34rem] h-[34rem] rounded-full opacity-15 animate-float-slow pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(52,211,153,0.35), transparent 70%)' }} />
-
-      <div className="absolute inset-0 particle-field pointer-events-none" />
-
-      <div className="absolute inset-0 bg-grid pointer-events-none z-[1]" />
-      <div className="relative z-10">{children}</div>
-    </div>
-  )
+  return <div className={`relative min-h-screen ${className}`}>{children}</div>
 }

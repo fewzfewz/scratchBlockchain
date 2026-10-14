@@ -14,8 +14,8 @@ function BlockCore() {
     <Float speed={1.8} rotationIntensity={0.35} floatIntensity={0.6}>
       <Icosahedron ref={ref} args={[1.15, 1]}>
         <MeshDistortMaterial
-          color="#38bdf8"
-          emissive="#0284c7"
+          color="#8f7ffa"
+          emissive="#6847e6"
           emissiveIntensity={0.45}
           distort={0.22}
           speed={1.8}
@@ -34,7 +34,7 @@ function ChainRing() {
   })
   return (
     <Torus ref={ref} args={[2.1, 0.07, 20, 80]} rotation={[Math.PI / 2.8, 0.3, 0]}>
-      <meshStandardMaterial color="#c084fc" emissive="#7c3aed" emissiveIntensity={0.35} metalness={0.9} roughness={0.1} />
+      <meshStandardMaterial color="#2fcfc1" emissive="#0f8f88" emissiveIntensity={0.35} metalness={0.9} roughness={0.1} />
     </Torus>
   )
 }
@@ -58,7 +58,7 @@ function Satellites() {
         </Sphere>
       ))}
       <Ring args={[2.35, 2.38, 64]} rotation={[Math.PI / 2, 0, 0]}>
-        <meshBasicMaterial color="#38bdf8" transparent opacity={0.25} />
+        <meshBasicMaterial color="#8f7ffa" transparent opacity={0.25} />
       </Ring>
     </group>
   )
@@ -68,8 +68,8 @@ function SceneContent() {
   return (
     <>
       <ambientLight intensity={0.35} />
-      <pointLight position={[8, 8, 6]} intensity={1.1} color="#38bdf8" />
-      <pointLight position={[-6, -4, 4]} intensity={0.55} color="#a78bfa" />
+      <pointLight position={[8, 8, 6]} intensity={1.1} color="#8f7ffa" />
+      <pointLight position={[-6, -4, 4]} intensity={0.55} color="#2fcfc1" />
       <Stars radius={90} depth={45} count={2500} factor={2.5} fade speed={0.4} />
       <BlockCore />
       <ChainRing />

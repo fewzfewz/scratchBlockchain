@@ -1,336 +1,357 @@
 import { useState, useEffect, useCallback } from 'react'
-import { GitBranch, Shield, CheckCircle, AlertCircle, RefreshCw, Wallet, Settings, ExternalLink } from 'lucide-react'
-import PageShell from '../components/PageShell.jsx'
-import AnimatedSection from '../components/AnimatedSection.jsx'
 import {
-  BRIDGE_VAULT, encodeBridgePayload,
-  fetchBalance, fetchTxHistory, signAndSubmit, loadWalletKeyPair,
-  nblToWei, shorten, walletAddress, weiToNbl,
+  GitBranch, CheckCircle2, AlertCircle, Wallet, Settings, Loader2, ArrowRight, ShieldCheck,
+  Circle, ArrowDownUp,
+} from 'lucide-react'
+import PageShell from '../components/PageShell.jsx'
+import {
+  BRIDGE_VAULT, encodeBridgePayload, fetchBalance, fetchTxHistory, signAndSubmit,
+  loadWalletKeyPair, nblToWei, shorten, walletAddress, weiToNbl,
 } from '../lib/chain.js'
 import {
-  connectMetaMask, connectLocalDevAccount, isLocalEthRpc, lockEthOnBridge, waitEthReceipt, createEthPublicClient,
-  fetchBridgeStatus, requestNebulaMint, getEthRpcUrl, setEthRpcUrl,
-  getBridgeAddress, setBridgeAddress, fetchEthBlockNumber, loadBridgeConfig,
+  connectMetaMask, connectLocalDevAccount, isLocalEthRpc, lockEthOnBridge, waitEthReceipt,
+  createEthPublicClient, fetchBridgeStatus, requestNebulaMint, getEthRpcUrl, setEthRpcUrl,
+  getBridgeAddress, setBridgeAddress, fetchEthBlockNumber, loadBridgeConfig, fetchLockAttestations,
 } from '../lib/ethereum.js'
 
+const input =
+  'w-full h-11 px-3.5 rounded-xl bg-white dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500/40 focus:border-blue-500/60 transition'
+const primary =
+  'inline-flex items-center justify-center gap-2 h-11 px-5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-sm font-semibold hover:opacity-95 disabled:opacity-50 disabled:cursor-not-allowed transition'
+const secondary =
+  'inline-flex items-center justify-center gap-2 h-11 px-4 rounded-xl glass text-sm font-semibold text-slate-900 dark:text-white disabled:opacity-50 transition'
+
+function Field({ label, hint, children }) {
+  return (
+    <label className="block">
+      <span className="block text-xs font-medium text-slate-600 dark:text-slate-300 mb-1.5">{label}</span>
+      {children}
+      {hint && <span className="block mt-1.5 text-xs text-slate-500">{hint}</span>}
+    </label>
+  )
+}
+
+function Step({ n, title, state, children }) {
+  // state: 'todo' | 'active' | 'done'
+  return (
+    <li className="relative pl-12">
+      <span className={`absolute left-0 top-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-semibold ${
+        state === 'done' ? 'bg-emerald-500/15 text-emerald-500'
+          : state === 'active' ? 'bg-blue-600 text-white'
+          : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+        {state === 'done' ? <CheckCircle2 className="w-5 h-5" /> : n}
+      </span>
+      <h3 className={`font-semibold leading-8 ${state === 'todo' ? 'text-slate-400' : 'text-slate-900 dark:text-white'}`}>{title}</h3>
+      <div className="mt-3 mb-8">{children}</div>
+    </li>
+  )
+}
+
+function Notice({ type, children }) {
+  if (!children) return null
+  const ok = type === 'ok'
+  return (
+    <div className={`flex items-start gap-2 p-3 rounded-xl text-sm ${ok ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400' : 'bg-rose-500/10 text-rose-600 dark:text-rose-400'}`}>
+      {ok ? <CheckCircle2 className="w-4 h-4 mt-0.5 shrink-0" /> : <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />}
+      <span className="break-all">{children}</span>
+    </div>
+  )
+}
+
+/** Live view of one lock: confirmations → relayer attestations → minted. */
+function RelayerProgress({ lockHash, nebulaRecipient, onDevAttest, devBusy }) {
+  const [state, setState] = useState(null)
+  const [since] = useState(() => Date.now())
+  const [, tick] = useState(0)
+
+  useEffect(() => {
+    if (!lockHash) return undefined
+    let active = true
+    const poll = async () => {
+      try {
+        const d = await fetchLockAttestations(lockHash)
+        if (active) setState(d)
+      } catch { /* keep last */ }
+      tick((t) => t + 1)
+    }
+    poll()
+    const t = setInterval(poll, 1500)
+    return () => { active = false; clearInterval(t) }
+  }, [lockHash])
+
+  if (!lockHash) return <p className="text-sm text-slate-500">Lock ETH above, or paste a lock transaction hash to track it.</p>
+
+  const entry = state?.entries?.[0]
+  const signed = new Set((entry?.attestations || []).map((a) => a.relayer.toLowerCase()))
+  const threshold = state?.threshold || 0
+  const minted = state?.minted
+  const waitedLong = Date.now() - since > 20000
+
+  return (
+    <div className="rounded-2xl glass-strong p-5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-mono text-xs text-slate-500 truncate">Lock {shorten(lockHash, 10, 8)}</div>
+        <span className={`inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-xs font-medium ${minted ? 'bg-emerald-500/15 text-emerald-500' : 'bg-blue-500/10 text-blue-600 dark:text-blue-300'}`}>
+          {minted ? <><CheckCircle2 className="w-3.5 h-3.5" /> Minted on Nebula</> : <><Loader2 className="w-3.5 h-3.5 animate-spin" /> {signed.size}/{threshold || '…'} relayers</>}
+        </span>
+      </div>
+
+      <ul className="mt-4 space-y-2">
+        {(state?.relayers || []).map((r, i) => {
+          const done = minted || signed.has(r.toLowerCase())
+          return (
+            <li key={r} className="flex items-center gap-3 text-sm">
+              {done ? <CheckCircle2 className="w-4 h-4 text-emerald-500" /> : <Circle className="w-4 h-4 text-slate-300 dark:text-slate-600" />}
+              <span className="text-slate-600 dark:text-slate-300">Relayer {i + 1}</span>
+              <span className="font-mono text-xs text-slate-400">{shorten(r, 6, 4)}</span>
+              <span className="ml-auto text-xs text-slate-500">{done ? 'attested' : 'waiting'}</span>
+            </li>
+          )
+        })}
+      </ul>
+
+      {minted && nebulaRecipient && (
+        <p className="mt-4 text-sm text-emerald-600 dark:text-emerald-400">Credited to {shorten(nebulaRecipient, 8, 6)} — check your wallet.</p>
+      )}
+      {!minted && waitedLong && onDevAttest && (
+        <div className="mt-4 pt-4 border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-xs text-slate-500">Relayers slow or offline? On the devnet this node holds one relayer key.</p>
+          <button type="button" onClick={onDevAttest} disabled={devBusy} className={`${secondary} h-9`}>
+            {devBusy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />} Attest from this node
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function BridgePage() {
-  const [tab, setTab] = useState('eth-nebula')
-  const [amount, setAmount] = useState('1')
+  const [tab, setTab] = useState('in')
+  const [amount, setAmount] = useState('0.5')
   const [recipient, setRecipient] = useState('')
-  const [vaultBal, setVaultBal] = useState('—')
+  const [vaultBal, setVaultBal] = useState(null)
   const [bridgeStatus, setBridgeStatus] = useState(null)
   const [locks, setLocks] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [submitting, setSubmitting] = useState(false)
-  const [msg, setMsg] = useState('')
-  const [msgType, setMsgType] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState({ type: '', text: '' })
 
   const [ethRpc, setEthRpc] = useState(getEthRpcUrl())
   const [bridgeAddr, setBridgeAddr] = useState(getBridgeAddress())
-  const [ethAccount, setEthAccount] = useState(null)
   const [ethConn, setEthConn] = useState(null)
   const [ethBlock, setEthBlock] = useState(null)
-  const [lastEthTx, setLastEthTx] = useState('')
+  const [lockHash, setLockHash] = useState('')
+  const [trackInput, setTrackInput] = useState('')
   const [showSettings, setShowSettings] = useState(false)
 
   const nebulaAddr = walletAddress()
+  const ok = (text) => setMsg({ type: 'ok', text })
+  const err = (text) => setMsg({ type: 'err', text })
 
   const refresh = useCallback(async () => {
-    setLoading(true)
     try {
       const vault = await BRIDGE_VAULT()
-      const [status, vb] = await Promise.all([
-        fetchBridgeStatus().catch(() => null),
-        fetchBalance(vault),
-      ])
+      const [status, vb] = await Promise.all([fetchBridgeStatus().catch(() => null), fetchBalance(vault)])
       setBridgeStatus(status)
       setVaultBal(weiToNbl(vb.balance))
-
       if (nebulaAddr) {
         const hist = await fetchTxHistory(nebulaAddr, 30)
         setLocks((hist.transactions || []).filter((t) => t.to?.toLowerCase() === vault.toLowerCase()))
-        if (!recipient) setRecipient(nebulaAddr)
       }
-
-      try {
-        const block = await fetchEthBlockNumber(ethRpc)
-        setEthBlock(block?.toString())
-      } catch {
-        setEthBlock(null)
-      }
-    } catch {
-      setVaultBal('0')
-    } finally {
-      setLoading(false)
-    }
-  }, [nebulaAddr, ethRpc, recipient])
+      setEthBlock((await fetchEthBlockNumber(ethRpc).catch(() => null))?.toString() ?? null)
+    } catch { /* offline */ }
+  }, [nebulaAddr, ethRpc])
 
   useEffect(() => {
+    if (nebulaAddr) setRecipient((r) => r || nebulaAddr)
     loadBridgeConfig().then((cfg) => {
       if (cfg?.ethRpcUrl) setEthRpc(cfg.ethRpcUrl)
       if (cfg?.bridge) setBridgeAddr(cfg.bridge)
     })
     refresh()
-  }, [refresh])
+    const t = setInterval(refresh, 10000)
+    return () => clearInterval(t)
+  }, [refresh, nebulaAddr])
 
-  const saveSettings = () => {
-    setEthRpcUrl(ethRpc)
-    setBridgeAddress(bridgeAddr)
-    setShowSettings(false)
-    refresh()
-  }
+  useEffect(() => { setMsg({ type: '', text: '' }) }, [tab])
 
-  const connectEth = async (useDevAccount = false) => {
+  const connect = async (dev) => {
     try {
-      const conn = useDevAccount ? await connectLocalDevAccount() : await connectMetaMask()
-      setEthConn(conn)
-      setEthAccount(conn.address)
-      setMsg(`${useDevAccount ? 'Local Hardhat account' : 'MetaMask'} connected: ${shorten(conn.address)}`)
-      setMsgType('ok')
-    } catch (e) {
-      setMsg(e.message)
-      setMsgType('err')
-    }
+      const conn = dev ? await connectLocalDevAccount() : await connectMetaMask()
+      setEthConn({ ...conn, dev })
+      ok(`${dev ? 'Local Hardhat account' : 'MetaMask'} connected: ${shorten(conn.address)}`)
+    } catch (e) { err(e.message) }
   }
 
-  const lockOnNebula = async () => {
-    if (!loadWalletKeyPair()) {
-      setMsg('Create a Nebula wallet on /wallet first')
-      setMsgType('err')
-      return
-    }
+  const lockEth = async () => {
     const recip = recipient.trim()
-    if (!/^0x[a-fA-F0-9]{40}$/.test(recip)) {
-      setMsg('Invalid destination address')
-      setMsgType('err')
-      return
-    }
-    setSubmitting(true)
+    if (!/^0x[a-fA-F0-9]{40}$/.test(recip)) return err('Enter the Nebula address that should receive NBL')
+    if (!bridgeAddr) return err('Set the Bridge.sol address under Settings')
+    setBusy(true)
+    try {
+      const hash = await lockEthOnBridge({
+        bridgeAddress: bridgeAddr, amountEth: amount, recipientNebula: recip,
+        walletClient: ethConn.walletClient, account: ethConn.account,
+      })
+      await waitEthReceipt(createEthPublicClient(ethRpc), hash)
+      setLockHash(hash)
+      ok('ETH locked — relayers are picking it up')
+    } catch (e) { err(e.shortMessage || e.message) } finally { setBusy(false) }
+  }
+
+  const devAttest = async () => {
+    setBusy(true)
+    try {
+      const r = await requestNebulaMint({ recipient: recipient.trim(), ethTxHash: lockHash })
+      ok(r.status === 'submitted' ? 'Threshold reached — mint submitted' : `Attested (${r.attestations}/${r.threshold})`)
+    } catch (e) { err(e.message) } finally { setBusy(false) }
+  }
+
+  const lockNbl = async () => {
+    if (!loadWalletKeyPair()) return err('Create a Nebula wallet first')
+    const dest = recipient.trim()
+    if (!/^0x[a-fA-F0-9]{40}$/.test(dest)) return err('Enter the Ethereum address that should receive ETH')
+    setBusy(true)
     try {
       const vault = await BRIDGE_VAULT()
-      const payload = encodeBridgePayload('ethereum', recip)
-      const wei = nblToWei(amount)
       const { hash } = await signAndSubmit({
-        from: nebulaAddr,
-        to: vault,
-        valueWei: wei,
-        payload,
-        gasLimit: 120000,
+        from: nebulaAddr, to: vault, valueWei: nblToWei(amount),
+        payload: encodeBridgePayload('ethereum', dest), gasLimit: 120000,
       })
-      setMsg(`Nebula lock tx: ${shorten(hash, 10, 8)}`)
-      setMsgType('ok')
+      ok(`Nebula lock tx: ${shorten(hash, 10, 8)} — the unlock relayer releases ETH on Ethereum`)
       refresh()
-    } catch (e) {
-      setMsg(e.message)
-      setMsgType('err')
-    } finally {
-      setSubmitting(false)
-    }
+    } catch (e) { err(e.message) } finally { setBusy(false) }
   }
 
-  const lockOnEthereum = async () => {
-    if (!ethConn) {
-      setMsg('Connect an Ethereum wallet first')
-      setMsgType('err')
-      return
-    }
-    if (!bridgeAddr) {
-      setMsg('Set Bridge.sol address in settings (deploy via interop/scripts/deploy.js)')
-      setMsgType('err')
-      return
-    }
-    setSubmitting(true)
-    try {
-      const { walletClient, account } = ethConn
-      const recip = recipient.trim() || nebulaAddr
-      if (!/^0x[a-fA-F0-9]{40}$/.test(recip)) throw new Error('Invalid Nebula recipient')
-
-      const hash = await lockEthOnBridge({
-        bridgeAddress: bridgeAddr,
-        amountEth: amount,
-        recipientNebula: recip,
-        walletClient,
-        account,
-      })
-      setLastEthTx(hash)
-      const publicClient = createEthPublicClient(ethRpc)
-      await waitEthReceipt(publicClient, hash)
-      setMsg(`ETH lock confirmed: ${shorten(hash, 10, 8)}`)
-      setMsgType('ok')
-    } catch (e) {
-      setMsg(e.message)
-      setMsgType('err')
-    } finally {
-      setSubmitting(false)
-    }
-  }
-
-  const claimOnNebula = async () => {
-    if (!lastEthTx) {
-      setMsg('Lock on Ethereum first, or paste an ETH tx hash below')
-      setMsgType('err')
-      return
-    }
-    const recip = recipient.trim() || nebulaAddr
-    setSubmitting(true)
-    try {
-      const wei = nblToWei(amount)
-      const result = await requestNebulaMint({
-        recipient: recip,
-        amount: wei.toString(),
-        ethTxHash: lastEthTx,
-        ethRpcUrl: ethRpc,
-        ethBridgeAddress: bridgeAddr,
-      })
-      setMsg(`Minted on Nebula — balance ${weiToNbl(result.balance)} NBL`)
-      setMsgType('ok')
-      refresh()
-    } catch (e) {
-      setMsg(e.message)
-      setMsgType('err')
-    } finally {
-      setSubmitting(false)
-    }
-  }
+  const relayerSet = bridgeStatus?.relayer_count ? `${bridgeStatus.relayer_threshold}-of-${bridgeStatus.relayer_count}` : '—'
 
   return (
     <PageShell>
-      <div className="max-w-3xl mx-auto px-4 py-10">
-        <AnimatedSection className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white mb-4 shadow-lg shadow-emerald-500/30">
-            <GitBranch className="w-7 h-7" />
+      <div className="max-w-5xl mx-auto px-4 py-12">
+        <header className="flex flex-wrap items-end justify-between gap-6 mb-8">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-blue-600 dark:text-blue-300"><GitBranch className="w-4 h-4" /> Bridge</div>
+            <h1 className="mt-2 text-3xl sm:text-4xl font-semibold text-slate-900 dark:text-white">Move value between Ethereum and Nebula</h1>
+            <p className="mt-2 text-slate-500 max-w-2xl">
+              Locks on Ethereum are minted on Nebula once {bridgeStatus?.relayer_threshold ?? 'enough'} independent relayers have signed for them — consensus checks every signature.
+            </p>
           </div>
-          <h1 className="text-3xl font-bold mb-2">Cross-Chain Bridge</h1>
-          <p className="text-slate-500">Ethereum Bridge.sol ↔ Nebula relayer mint · full two-way flow</p>
-        </AnimatedSection>
-
-        <AnimatedSection delay={80} className="glass-strong rounded-2xl p-4 mb-6">
-          <button type="button" onClick={() => setShowSettings(!showSettings)} className="flex items-center gap-2 text-sm font-semibold text-slate-600 dark:text-slate-300 w-full">
-            <Settings className="w-4 h-4" /> Bridge configuration
+          <button type="button" onClick={() => setShowSettings((s) => !s)} className={`${secondary} h-9`}>
+            <Settings className="w-4 h-4" /> Settings
           </button>
-          {showSettings && (
-            <div className="mt-4 space-y-3 pt-4 border-t border-slate-200/50 dark:border-slate-700/50">
-              <div>
-                <label className="text-xs text-slate-500">ETH RPC URL (Hardhat / Sepolia)</label>
-                <input value={ethRpc} onChange={(e) => setEthRpc(e.target.value)} placeholder="http://127.0.0.1:8545"
-                  className="w-full mt-1 px-3 py-2 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-              </div>
-              <div>
-                <label className="text-xs text-slate-500">Bridge.sol address (from interop deploy)</label>
-                <input value={bridgeAddr} onChange={(e) => setBridgeAddr(e.target.value)} placeholder="0x…"
-                  className="w-full mt-1 px-3 py-2 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-              </div>
-              <button type="button" onClick={saveSettings} className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-sm font-semibold">Save</button>
-              <p className="text-xs text-slate-400">Set <code className="font-mono">ETH_RPC_URL</code> on the Nebula node for server-side tx verification.</p>
-            </div>
-          )}
-        </AnimatedSection>
+        </header>
 
-        <div className="grid sm:grid-cols-4 gap-3 mb-6">
+        {showSettings && (
+          <div className="glass-strong rounded-2xl p-5 mb-6 grid sm:grid-cols-2 gap-4">
+            <Field label="Ethereum RPC URL"><input value={ethRpc} onChange={(e) => setEthRpc(e.target.value)} className={`${input} font-mono`} /></Field>
+            <Field label="Bridge.sol address"><input value={bridgeAddr} onChange={(e) => setBridgeAddr(e.target.value)} className={`${input} font-mono`} /></Field>
+            <div className="sm:col-span-2 flex justify-end">
+              <button type="button" className={primary} onClick={() => { setEthRpcUrl(ethRpc); setBridgeAddress(bridgeAddr); setShowSettings(false); refresh() }}>Save</button>
+            </div>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-8">
           {[
-            { label: 'Vault', val: `${vaultBal} NBL` },
-            { label: 'Relayers', val: bridgeStatus?.relayer_count ? `${bridgeStatus.relayer_threshold}-of-${bridgeStatus.relayer_count}` : '—' },
-            { label: 'ETH block', val: ethBlock ?? '—' },
-            { label: 'Mints', val: bridgeStatus?.processed_mints ?? 0 },
-          ].map(({ label, val }) => (
-            <div key={label} className="glass-strong rounded-2xl p-4 text-center card-hover-3d">
-              <p className="text-xs text-slate-500">{label}</p>
-              <p className="font-mono font-bold text-sm">{val}</p>
+            ['Relayer set', relayerSet],
+            ['Locked in vault', vaultBal != null ? `${vaultBal} NBL` : '—'],
+            ['Ethereum block', ethBlock ?? '—'],
+            ['ETH node', bridgeStatus?.eth_rpc_configured ? 'Connected' : '—'],
+          ].map(([k, v]) => (
+            <div key={k} className="rounded-2xl glass-strong p-4">
+              <div className="text-[11px] uppercase tracking-wider text-slate-500">{k}</div>
+              <div className="mt-1 font-display text-lg font-semibold tabular-nums text-slate-900 dark:text-white">{v}</div>
             </div>
           ))}
         </div>
 
-        <div className="flex gap-2 mb-6">
-          {[
-            { id: 'eth-nebula', label: 'ETH → Nebula' },
-            { id: 'nebula-eth', label: 'Nebula → ETH' },
-          ].map(({ id, label }) => (
-            <button key={id} type="button" onClick={() => setTab(id)}
-              className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${tab === id ? 'bg-emerald-600 text-white shadow-lg' : 'glass text-slate-500'}`}>
+        <div role="tablist" className="inline-flex p-1 rounded-xl bg-slate-100 dark:bg-slate-900 border border-slate-200 dark:border-slate-800 mb-8">
+          {[['in', 'ETH → Nebula'], ['out', 'Nebula → ETH']].map(([id, label]) => (
+            <button key={id} role="tab" aria-selected={tab === id} type="button" onClick={() => setTab(id)}
+              className={`h-9 px-4 rounded-lg text-sm font-medium transition ${tab === id ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-white shadow-sm' : 'text-slate-500 hover:text-slate-900 dark:hover:text-white'}`}>
               {label}
             </button>
           ))}
         </div>
 
-        <AnimatedSection delay={120} className="glass-strong rounded-2xl p-6 space-y-4 mb-6">
-          <input type="number" step="0.01" value={amount} onChange={(e) => setAmount(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl font-mono bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" placeholder="Amount" />
-          <input value={recipient} onChange={(e) => setRecipient(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" placeholder="Recipient on destination chain (0x…)" />
-
-          {tab === 'eth-nebula' ? (
-            <>
-              <div className="flex flex-col sm:flex-row gap-2">
-                <button type="button" onClick={() => connectEth(false)} className="flex-1 py-2.5 rounded-xl border border-amber-500/50 text-amber-600 font-semibold flex items-center justify-center gap-2">
-                  <Wallet className="w-4 h-4" /> {ethAccount ? shorten(ethAccount) : 'Connect MetaMask'}
-                </button>
-                {!ethAccount && isLocalEthRpc(ethRpc) && (
-                  <button type="button" onClick={() => connectEth(true)} title="Hardhat's default account #0 — local chains only"
-                    className="flex-1 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 font-semibold">
-                    Use local Hardhat account
+        <div className="grid lg:grid-cols-[1.4fr_1fr] gap-8">
+          <div>
+            {tab === 'in' ? (
+              <ol>
+                <Step n={1} title="Connect an Ethereum account" state={ethConn ? 'done' : 'active'}>
+                  {ethConn ? (
+                    <div className="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
+                      <Wallet className="w-4 h-4" /> <span className="font-mono">{shorten(ethConn.address, 8, 6)}</span>
+                      <span className="text-slate-400">· {ethConn.dev ? 'local Hardhat account' : 'MetaMask'}</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2">
+                      <button type="button" className={primary} onClick={() => connect(false)}><Wallet className="w-4 h-4" /> Connect MetaMask</button>
+                      {isLocalEthRpc(ethRpc) && (
+                        <button type="button" className={secondary} onClick={() => connect(true)} title="Hardhat's default account #0 — local chains only">Use local Hardhat account</button>
+                      )}
+                    </div>
+                  )}
+                </Step>
+                <Step n={2} title="Lock ETH on Ethereum" state={lockHash ? 'done' : ethConn ? 'active' : 'todo'}>
+                  <div className="grid sm:grid-cols-[160px_1fr] gap-3">
+                    <Field label="Amount (ETH)"><input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" className={input} /></Field>
+                    <Field label="Nebula recipient" hint={recipient && recipient === nebulaAddr ? 'Your Nebula wallet' : undefined}>
+                      <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="0x…" className={`${input} font-mono`} />
+                    </Field>
+                  </div>
+                  <button type="button" className={`${primary} mt-4`} disabled={!ethConn || busy} onClick={lockEth}>
+                    {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />} Lock {amount || 0} ETH
                   </button>
+                </Step>
+                <Step n={3} title="Relayers mint NBL on Nebula" state={lockHash ? 'active' : 'todo'}>
+                  <RelayerProgress lockHash={lockHash} nebulaRecipient={recipient} onDevAttest={devAttest} devBusy={busy} />
+                  <div className="mt-3 flex gap-2">
+                    <input value={trackInput} onChange={(e) => setTrackInput(e.target.value)} placeholder="Track an existing lock: 0x… tx hash" className={`${input} h-9 font-mono text-xs`} />
+                    <button type="button" className={`${secondary} h-9`} onClick={() => trackInput.trim() && setLockHash(trackInput.trim())}>Track</button>
+                  </div>
+                </Step>
+              </ol>
+            ) : (
+              <div className="space-y-4">
+                <div className="grid sm:grid-cols-[160px_1fr] gap-3">
+                  <Field label="Amount (NBL)"><input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" className={input} /></Field>
+                  <Field label="Ethereum recipient"><input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="0x…" className={`${input} font-mono`} /></Field>
+                </div>
+                <button type="button" className={primary} disabled={busy} onClick={lockNbl}>
+                  {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowDownUp className="w-4 h-4" />} Lock {amount || 0} NBL on Nebula
+                </button>
+                {locks.length > 0 && (
+                  <div className="rounded-2xl glass-strong p-5">
+                    <h3 className="font-semibold text-slate-900 dark:text-white mb-3">Your locks</h3>
+                    <ul className="space-y-2">
+                      {locks.map((t) => (
+                        <li key={t.hash} className="flex items-center justify-between text-sm">
+                          <span className="font-mono text-slate-500">{shorten(t.hash, 10, 8)}</span>
+                          <span className="tabular-nums text-slate-900 dark:text-white">{weiToNbl(String(t.value))} NBL</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </div>
-              <button type="button" disabled={submitting} onClick={lockOnEthereum}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-amber-500 to-orange-600 text-white font-semibold disabled:opacity-50">
-                1. Lock ETH on Bridge.sol
-              </button>
-              <input value={lastEthTx} onChange={(e) => setLastEthTx(e.target.value)} placeholder="ETH tx hash (auto-filled after lock)"
-                className="w-full px-4 py-2 rounded-xl font-mono text-xs bg-slate-100 dark:bg-slate-900/50 border border-slate-200 dark:border-slate-700" />
-              <button type="button" disabled={submitting} onClick={claimOnNebula}
-                className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-semibold disabled:opacity-50">
-                2. Relayer mint on Nebula
-              </button>
-            </>
-          ) : (
-            <button type="button" disabled={submitting} onClick={lockOnNebula}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white font-semibold disabled:opacity-50">
-              Lock NBL on Nebula vault
-            </button>
-          )}
+            )}
+            <div className="mt-2"><Notice type={msg.type}>{msg.text}</Notice></div>
+          </div>
 
-          {msg && (
-            <p className={`text-sm flex gap-2 ${msgType === 'err' ? 'text-red-500' : 'text-emerald-600'}`}>
-              {msgType === 'err' ? <AlertCircle className="w-4 h-4 shrink-0" /> : <CheckCircle className="w-4 h-4 shrink-0" />}
-              {msg}
+          <aside className="space-y-4">
+            <div className="rounded-2xl glass-strong p-5">
+              <h3 className="font-semibold text-slate-900 dark:text-white">How the bridge is secured</h3>
+              <ul className="mt-3 space-y-3 text-sm text-slate-500">
+                <li className="flex gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-cyan-500 shrink-0" />Each relayer watches Ethereum on its own and signs only locks it has seen confirmed.</li>
+                <li className="flex gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-cyan-500 shrink-0" />A mint needs {relayerSet} relayer signatures; every validator re-checks them.</li>
+                <li className="flex gap-2"><ShieldCheck className="w-4 h-4 mt-0.5 text-cyan-500 shrink-0" />The lock's transaction hash is recorded on chain, so it can never mint twice.</li>
+              </ul>
+            </div>
+            <p className="text-xs text-slate-500 px-1">
+              Deploy Bridge.sol with <code className="font-mono">cd interop && npx hardhat run scripts/deploy.js</code>; relayers run as <code className="font-mono">nebula-relayer</code>.
             </p>
-          )}
-        </AnimatedSection>
-
-        <AnimatedSection delay={160} className="glass rounded-2xl p-5 mb-6">
-          <h3 className="font-semibold mb-3 flex items-center gap-2"><Shield className="w-4 h-4" /> Relayer status</h3>
-          {loading ? <RefreshCw className="w-5 h-5 animate-spin" /> : (
-            <ul className="text-sm space-y-2">
-              <li className="flex items-center gap-2">
-                {bridgeStatus?.relayers_ready ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <AlertCircle className="w-4 h-4 text-red-500" />}
-                {bridgeStatus?.relayers_ready
-                  ? `Mints need ${bridgeStatus.relayer_threshold} of ${bridgeStatus.relayer_count} relayer signature${bridgeStatus.relayer_count === 1 ? '' : 's'}`
-                  : 'No relayer set in genesis — mints are disabled'}
-              </li>
-              <li className="flex items-center gap-2">
-                {bridgeStatus?.eth_rpc_configured ? <CheckCircle className="w-4 h-4 text-emerald-500" /> : <AlertCircle className="w-4 h-4 text-amber-500" />}
-                Node ETH_RPC_URL {bridgeStatus?.eth_rpc_configured ? 'configured' : 'not set — pass eth_rpc_url in mint request'}
-              </li>
-              <li className="text-xs text-slate-400 font-mono">Vault: {bridgeStatus?.vault_address || '…'}</li>
-            </ul>
-          )}
-        </AnimatedSection>
-
-        {locks.length > 0 && (
-          <AnimatedSection className="glass rounded-2xl p-5 mb-6">
-            <h3 className="font-semibold mb-3">Your Nebula locks</h3>
-            <ul className="space-y-2 text-xs font-mono">
-              {locks.map((t) => (
-                <li key={t.hash} className="flex justify-between"><span>{shorten(t.hash)}</span><span>{weiToNbl(t.value)} NBL</span></li>
-              ))}
-            </ul>
-          </AnimatedSection>
-        )}
-
-        <p className="text-center text-xs text-slate-400">
-          Deploy Bridge: <code className="font-mono">cd interop && npx hardhat run scripts/deploy.js</code>
-          <a href="https://github.com/fewzfewz/scratchBlockchain/blob/main/interop/README.md" target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 ml-2 text-emerald-500"><ExternalLink className="w-3 h-3" /> docs</a>
-        </p>
+          </aside>
+        </div>
       </div>
     </PageShell>
   )

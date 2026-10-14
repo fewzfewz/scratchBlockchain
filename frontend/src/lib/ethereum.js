@@ -172,3 +172,11 @@ export async function fetchBridgeStatus() {
   if (!r.ok) throw new Error('Bridge status unavailable')
   return r.json()
 }
+
+/** Relayer attestations pooled on the node for one Ethereum lock. */
+export async function fetchLockAttestations(ethTxHash) {
+  const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
+  const r = await window.fetch(`${base}/bridge/attestations/${ethTxHash}`)
+  if (!r.ok) throw new Error('Attestation status unavailable')
+  return r.json()
+}
