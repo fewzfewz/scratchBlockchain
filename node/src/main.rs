@@ -279,6 +279,9 @@ struct Node {
 
     // Block sync / catch-up state
     syncing: bool,
+    /// Rotates sync requests across connected peers, so one peer that
+    /// stops answering cannot stall catch-up forever.
+    sync_peer_cursor: usize,
     last_sync_attempt_at: Instant,
     last_finalize_at: Instant,
     /// Set when the consensus engine signals that we are behind peers
@@ -683,6 +686,7 @@ impl Node {
             stats: NodeStats::new(),
             bft_state_path,
             syncing: false,
+            sync_peer_cursor: 0,
             last_sync_attempt_at: Instant::now(),
             last_finalize_at: Instant::now(),
             sync_requested: false,
@@ -799,11 +803,11 @@ impl Node {
                     .await?;
             }
 
-            BftEvent::FinalizeBlock(block, proposer) => {
+            BftEvent::FinalizeBlock(block, _) => {
                 info!("🔒 Finalizing block at height {}", block.header.slot);
                 self.last_finalize_at = Instant::now();
 
-                if let Err(e) = self.apply_state_transition(&block, proposer).await {
+                if let Err(e) = self.apply_state_transition(&block).await {
                     // +2/3 of the stake finalized this block, so failing to apply
                     // it means our state is not theirs. Stop rather than vote on.
                     self.fatal_error = Some(format!(
@@ -1051,10 +1055,11 @@ impl Node {
         proposer: &[u8],
         height: u64,
     ) -> Result<(), String> {
-        // Rewards and block stats credit the header's signer, so it must be
-        // the proposer every node saw.
-        common::crypto::verify_signature(proposer, &block.header.hash(), &block.header.signature)
-            .map_err(|_| "block header is not signed by the proposer".to_string())?;
+        // Rewards and block stats credit `header.proposer` (covered by the
+        // block hash), so it must be the validator proposing it this round.
+        if block.header.proposer.as_slice() != proposer {
+            return Err("block header names a different proposer".into());
+        }
         let parent = latest_block(&self.chain_store).map_err(|e| e.to_string())?;
         let state_root = self
             .chain_store
@@ -1093,13 +1098,13 @@ impl Node {
             warn!("Invalid block: {}", e);
             return Err(format!("Invalid block: {}", e).into());
         }
-        // The proposer's identity feeds rewards and block stats, so it must be
-        // the same on every node: the validator that signed the header.
-        let proposer = consensus
-            .verify_block_author(block)
-            .ok_or("Block header is not signed by a validator")?;
+        // The proposer named in the header (and signing it) must be one of
+        // the validators.
+        if consensus.verify_block_author(block).as_deref() != Some(&block.header.proposer[..]) {
+            return Err("Block header is not signed by its proposer".into());
+        }
 
-        if let Err(e) = self.apply_state_transition(block, proposer).await {
+        if let Err(e) = self.apply_state_transition(block).await {
             // The block is certified, so a failure here means we diverged.
             self.fatal_error = Some(format!(
                 "cannot apply certified block {}: {}",
@@ -1124,7 +1129,6 @@ impl Node {
     async fn apply_state_transition(
         &mut self,
         block: &Block,
-        proposer: Vec<u8>,
     ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
         let expected = self
             .chain_store
@@ -1139,6 +1143,16 @@ impl Node {
             )
             .into());
         }
+
+        // Rewards and block stats credit the proposer named in the header,
+        // never one derived from local bookkeeping (identical blocks from two
+        // proposers once made nodes disagree on who proposed).
+        if !block.header.verify_proposer_signature() {
+            return Err(
+                format!("block {} is not signed by its proposer", block.header.slot).into(),
+            );
+        }
+        let proposer = block.header.proposer.to_vec();
 
         self.staged.begin()?;
         let result = self.stage_block_effects(block, proposer).await;
@@ -1347,7 +1361,15 @@ impl Node {
             .ok()
             .and_then(|r| r.ok())
             .unwrap_or_default();
-        let peer = peers.into_iter().next();
+        // A different peer on each attempt: a peer whose request stream hangs
+        // (no response and no failure event) once wedged a validator that
+        // kept asking it forever.
+        let peer = if peers.is_empty() {
+            None
+        } else {
+            self.sync_peer_cursor = self.sync_peer_cursor.wrapping_add(1);
+            peers.get(self.sync_peer_cursor % peers.len()).copied()
+        };
 
         match peer {
             Some(peer) => {
@@ -1392,8 +1414,14 @@ impl Node {
         let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
         if start_height <= tip {
             let end = (start_height + limit as u64 - 1).min(tip);
+            // Keep the response under the sync codec's message limit.
+            let mut bytes = 0usize;
             for height in start_height..=end {
                 if let Some(data) = self.chain_store.get_block_by_height(height)? {
+                    bytes = bytes.saturating_add(data.len());
+                    if bytes > network::protocol::MAX_MESSAGE_BYTES / 2 && !blocks.is_empty() {
+                        break;
+                    }
                     if let Ok(block) = serde_json::from_slice::<Block>(&data) {
                         blocks.push(block);
                     }
@@ -1425,8 +1453,15 @@ impl Node {
         blocks: Vec<Block>,
         pending_events: &mut Vec<BftEvent>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // A response can arrive after the watchdog stopped waiting for it.
+        // Its blocks are verified like any other, so use them if they extend
+        // our chain instead of dropping them.
         if !self.syncing {
-            return Ok(());
+            let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+            if !blocks.iter().any(|b| b.header.slot > tip) {
+                return Ok(());
+            }
+            self.syncing = true;
         }
 
         let total_received = blocks.len();
@@ -1825,7 +1860,12 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
+    // RUST_LOG selects levels per target (e.g. `info,network=debug`).
     tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .with_target(true)
         .with_thread_ids(true)
         .init();

@@ -17,7 +17,11 @@ pub struct TimeoutConfig {
     pub propose_timeout_ms: u64,
     pub prevote_timeout_ms: u64,
     pub precommit_timeout_ms: u64,
-    pub timeout_increase_factor: f64,
+    /// Added per round (Tendermint's linear increase). An exponential
+    /// increase made a node recovering from a long stall wait minutes per
+    /// step.
+    pub timeout_delta_ms: u64,
+    pub max_timeout_ms: u64,
 }
 
 impl Default for TimeoutConfig {
@@ -26,7 +30,8 @@ impl Default for TimeoutConfig {
             propose_timeout_ms: 3000,
             prevote_timeout_ms: 1000,
             precommit_timeout_ms: 1000,
-            timeout_increase_factor: 1.1,
+            timeout_delta_ms: 500,
+            max_timeout_ms: 30_000,
         }
     }
 }
@@ -593,11 +598,9 @@ impl BftEngine {
             Step::Precommit => self.timeout_config.precommit_timeout_ms,
             Step::Commit => return Duration::from_secs(0),
         };
-        let multiplier = self
-            .timeout_config
-            .timeout_increase_factor
-            .powi(round.min(i32::MAX as u64) as i32);
-        let timeout_ms = (base_timeout_ms as f64 * multiplier).min(600_000.0) as u64;
+        let timeout_ms = base_timeout_ms
+            .saturating_add(self.timeout_config.timeout_delta_ms.saturating_mul(round))
+            .min(self.timeout_config.max_timeout_ms.max(base_timeout_ms));
         Duration::from_millis(timeout_ms)
     }
 
@@ -759,6 +762,7 @@ mod tests {
                 gas_used: 0,
                 base_fee: 0,
                 last_commit_hash: [0; 32],
+                proposer: [0; 32],
             },
             extrinsics: vec![],
             commit: None,
@@ -836,6 +840,17 @@ mod tests {
         let engine = engine_for(vals, infos, 0);
         let pk = engine.select_proposer(height, round);
         vals.iter().position(|v| v.pk == pk).unwrap()
+    }
+
+    #[test]
+    fn round_timeouts_grow_linearly_and_are_capped() {
+        let (vals, infos) = validator_set(1, 100);
+        let engine = engine_for(&vals, &infos, 0);
+        let t = |round| engine.calculate_timeout(Step::Propose, round).as_millis();
+        assert_eq!(t(0), 3_000);
+        assert_eq!(t(4), 5_000);
+        assert_eq!(t(29), 17_500);
+        assert_eq!(t(10_000), 30_000);
     }
 
     #[test]

@@ -622,9 +622,19 @@ impl BlockProducer {
         // Step 2: Calculate gas limits and filter transactions
         let mut total_gas_used = 0u64;
         let mut valid_transactions = Vec::new();
+        // Room for the header, last commit and JSON framing.
+        let mut bytes_left = common::types::MAX_BLOCK_BYTES.saturating_sub(128 * 1024);
 
         for tx in transactions {
+            let tx_bytes = serde_json::to_vec(&tx)
+                .map(|b| b.len() + 1)
+                .unwrap_or(usize::MAX);
+            if tx_bytes > bytes_left {
+                debug!("Block size budget reached");
+                break;
+            }
             if total_gas_used + tx.gas_limit <= self.config.max_gas_per_block {
+                bytes_left -= tx_bytes;
                 total_gas_used += tx.gas_limit;
                 valid_transactions.push(tx);
             } else {
@@ -676,6 +686,11 @@ impl BlockProducer {
             )
         };
         header.last_commit_hash = last_commit.as_ref().map(|c| c.hash()).unwrap_or([0; 32]);
+        header.proposer = self
+            .signing_key
+            .public_key()
+            .try_into()
+            .map_err(|_| "signing key is not a 32-byte Ed25519 key")?;
 
         // Step 7: Sign the header
         let header_hash = header.hash();
@@ -819,6 +834,19 @@ pub fn validate_block(
     }
     if header.parent_hash != parent.hash() {
         return Err("parent hash does not match our tip".into());
+    }
+    if !header.verify_proposer_signature() {
+        return Err("header is not signed by its proposer".into());
+    }
+    let size = serde_json::to_vec(block)
+        .map(|b| b.len())
+        .unwrap_or(usize::MAX);
+    if size > common::types::MAX_BLOCK_BYTES {
+        return Err(format!(
+            "block is {} bytes, over the {} limit",
+            size,
+            common::types::MAX_BLOCK_BYTES
+        ));
     }
     verify_last_commit(block, parent, parent_validators)?;
     if &header.state_root != expected_state_root {
@@ -1185,9 +1213,38 @@ mod tests {
             parent.header.base_fee,
         );
         header.extrinsics_root = compute_extrinsics_root(std::slice::from_ref(&forged));
+        let key = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        header.proposer = key.verifying_key().to_bytes();
+        header.signature = {
+            use ed25519_dalek::Signer;
+            key.sign(&header.hash()).to_bytes().to_vec()
+        };
         let block = Block::new(header, vec![forged]);
         let err = validate_block(&block, &parent, &[], 0, &TEST_ROOT, 1, 30_000_000).unwrap_err();
         assert!(err.contains("Invalid signature"), "{}", err);
+    }
+
+    /// A block over MAX_BLOCK_BYTES could not be gossiped, so its round could
+    /// never complete: validators must refuse it.
+    #[test]
+    fn oversized_block_is_invalid() {
+        let parent = Block::genesis();
+        let key = ed25519_dalek::SigningKey::from_bytes(&[3u8; 32]);
+        let mut big = Transaction::simple_transfer([0; 20], [9; 20], 1, 0, 1);
+        big.payload = vec![7u8; common::types::MAX_BLOCK_BYTES / 2];
+        big.sign_with(&key);
+        let mut header = Header::new(parent.hash(), 0);
+        header.state_root = TEST_ROOT;
+        header.extrinsics_root = compute_extrinsics_root(std::slice::from_ref(&big));
+        let proposer = ed25519_dalek::SigningKey::from_bytes(&[9u8; 32]);
+        header.proposer = proposer.verifying_key().to_bytes();
+        header.signature = {
+            use ed25519_dalek::Signer;
+            proposer.sign(&header.hash()).to_bytes().to_vec()
+        };
+        let block = Block::new(header, vec![big]);
+        let err = validate_block(&block, &parent, &[], 0, &TEST_ROOT, 1, 30_000_000).unwrap_err();
+        assert!(err.contains("over the"), "{}", err);
     }
 
     /// Regression: the old Merkle construction duplicated an odd last leaf, so

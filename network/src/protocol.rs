@@ -89,11 +89,21 @@ impl Codec for BlockExchangeCodec {
     }
 }
 
+/// Largest block-sync request/response accepted (a full batch of blocks).
+pub const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
+
 async fn read_length_prefixed<T>(io: &mut T) -> io::Result<Vec<u8>>
 where
     T: AsyncRead + Unpin,
 {
     let len = read_varint(io).await?;
+    // The length comes from the peer: bound it before allocating.
+    if len > MAX_MESSAGE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("message of {} bytes exceeds {}", len, MAX_MESSAGE_BYTES),
+        ));
+    }
     let mut buf = vec![0u8; len];
     io.read_exact(&mut buf).await?;
     Ok(buf)
@@ -160,6 +170,7 @@ mod tests {
                 gas_used: 0,
                 base_fee: 0,
                 last_commit_hash: [0; 32],
+                proposer: [0; 32],
             },
             extrinsics: vec![],
             commit: None,
@@ -191,6 +202,21 @@ mod tests {
             .unwrap();
 
         assert_eq!(original_request, decoded_request);
+    }
+
+    #[tokio::test]
+    async fn oversized_length_prefix_is_rejected_before_allocating() {
+        let mut codec = BlockExchangeCodec;
+        let protocol = BlockExchangeProtocol();
+        // A peer claims a ~1 TB message (varint of 2^40).
+        let mut buf = [0u8; 10];
+        let prefix = unsigned_varint::encode::usize(1 << 40, &mut buf);
+        let mut read_cursor = Cursor::new(prefix.to_vec());
+        let err = codec
+            .read_response(&protocol, &mut read_cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[tokio::test]

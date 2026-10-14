@@ -19,7 +19,7 @@ pub struct RateLimitConfig {
 impl Default for RateLimitConfig {
     fn default() -> Self {
         Self {
-            transactions_per_second: 10,
+            transactions_per_second: 2_000,
             block_requests_per_second: 5,
             consensus_msgs_per_second: 100,
             ban_duration_secs: 300, // 5 minutes
@@ -150,28 +150,14 @@ impl RateLimiter {
 
     /// Record a rate limit violation
     fn record_violation(&mut self, peer: &PeerId, msg_type: MessageType) {
-        // Consensus messages must never escalate to a peer ban. They come from
-        // the (permissioned) validator set, and bursts are a symptom of a peer
-        // being behind, not an attack. Banning a lagging validator drops its
-        // votes and stalls finality. Worse, violation counts never reset, so a
-        // temporary ban would be re-triggered the instant it expires — a
-        // permanent self-inflicted liveness failure. Excess consensus traffic
-        // is simply dropped.
-        if msg_type == MessageType::ConsensusMessage {
-            return;
-        }
-
+        // Exceeding a rate limit only sheds the excess; it never escalates to
+        // a ban. Bursts are what honest relays forward (a burst of user
+        // transactions once got every validator banned by its peers, and the
+        // ban also dropped their consensus messages, halting the chain).
+        // Peers are banned for invalid content, via the reputation system.
+        let _ = msg_type;
         let count = self.violation_counts.entry(*peer).or_insert(0);
-        *count += 1;
-
-        // Ban peer after 10 violations
-        if *count >= 10 {
-            self.ban_peer(
-                peer,
-                Duration::from_secs(self.config.ban_duration_secs),
-                format!("Repeated rate limit violations ({:?})", msg_type),
-            );
-        }
+        *count = count.saturating_add(1);
     }
 
     /// Manually ban a peer
@@ -330,7 +316,10 @@ mod tests {
 
     #[test]
     fn test_rate_limiter_basic() {
-        let config = RateLimitConfig::default();
+        let config = RateLimitConfig {
+            transactions_per_second: 10,
+            ..RateLimitConfig::default()
+        };
         let mut limiter = RateLimiter::new(config);
         let peer = PeerId::random();
 
@@ -387,24 +376,24 @@ mod tests {
         assert!(!limiter.is_banned(&peer));
     }
 
+    /// Exceeding the rate only drops the excess. It must never ban the
+    /// peer: honest relays forward user bursts, and a ban also dropped their
+    /// consensus messages (a 500-tx burst once halted the devnet this way).
     #[test]
-    fn test_violation_auto_ban() {
-        let config = RateLimitConfig::default();
+    fn rate_violations_never_ban() {
+        let config = RateLimitConfig {
+            transactions_per_second: 10,
+            ..RateLimitConfig::default()
+        };
         let mut limiter = RateLimiter::new(config);
         let peer = PeerId::random();
-
-        // Exhaust tokens
-        for _ in 0..20 {
+        for _ in 0..1_000 {
             let _ = limiter.check_and_consume(&peer, MessageType::Transaction);
         }
-
-        // Trigger violations
-        for _ in 0..10 {
-            let _ = limiter.check_and_consume(&peer, MessageType::Transaction);
-        }
-
-        // Should be auto-banned after 10 violations
-        assert!(limiter.is_banned(&peer));
+        assert!(!limiter.is_banned(&peer));
+        assert!(limiter
+            .check_and_consume(&peer, MessageType::ConsensusMessage)
+            .is_ok());
     }
 
     #[test]

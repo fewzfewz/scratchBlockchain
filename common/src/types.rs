@@ -11,6 +11,11 @@ pub type PublicKey = [u8; 32];
 /// Domain tags keep transaction and header hashes from ever colliding with each
 /// other (or with any other signed message), and version the encodings.
 pub const TX_DOMAIN: &[u8] = b"NEBULA_TX_V1";
+
+/// Largest block, as encoded on the wire (JSON). Proposals and blocks are
+/// gossiped whole, so this must stay below the gossip message limit; a block
+/// over it would be dropped by every peer and its round could never finish.
+pub const MAX_BLOCK_BYTES: usize = 1024 * 1024;
 pub const HEADER_DOMAIN: &[u8] = b"NEBULA_HEADER_V1";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -28,6 +33,12 @@ pub struct Header {
     /// previous block's precommits are fixed by this header's signature.
     #[serde(default)]
     pub last_commit_hash: Hash,
+    /// Ed25519 key of the validator that proposed (and signs) this block.
+    /// Part of the hash: two proposers can otherwise build byte-identical
+    /// blocks (e.g. empty ones on the same parent), and nodes then disagreed
+    /// about who proposed the block they finalized — and so about rewards.
+    #[serde(default)]
+    pub proposer: PublicKey,
 }
 
 impl Header {
@@ -43,6 +54,7 @@ impl Header {
             gas_used: 0,
             base_fee: 1_000_000_000, // 1 Gwei default
             last_commit_hash: [0; 32],
+            proposer: [0; 32],
         }
     }
 
@@ -60,7 +72,13 @@ impl Header {
         hasher.update(self.gas_used.to_le_bytes());
         hasher.update(self.base_fee.to_le_bytes());
         hasher.update(self.last_commit_hash);
+        hasher.update(self.proposer);
         hasher.finalize().into()
+    }
+
+    /// The header is signed by the key it names as its proposer.
+    pub fn verify_proposer_signature(&self) -> bool {
+        crate::crypto::verify_signature(&self.proposer, &self.hash(), &self.signature).is_ok()
     }
 }
 
@@ -448,5 +466,30 @@ mod devnet_genesis_tests {
                 down.public_key
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod header_proposer_tests {
+    use super::*;
+
+    #[test]
+    fn identical_blocks_from_different_proposers_have_different_hashes() {
+        let sign = |seed: u8| {
+            let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+            let mut h = Header::new([1; 32], 5);
+            h.proposer = key.verifying_key().to_bytes();
+            use ed25519_dalek::Signer;
+            h.signature = key.sign(&h.hash()).to_bytes().to_vec();
+            h
+        };
+        let (a, b) = (sign(1), sign(2));
+        assert_ne!(a.hash(), b.hash());
+        assert!(a.verify_proposer_signature() && b.verify_proposer_signature());
+
+        // Claiming someone else as proposer breaks the signature.
+        let mut forged = a.clone();
+        forged.proposer = b.proposer;
+        assert!(!forged.verify_proposer_signature());
     }
 }

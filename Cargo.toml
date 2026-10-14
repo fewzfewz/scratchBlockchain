@@ -17,6 +17,7 @@ members = [
     "tools/genesis-builder",
     "runtime",
     "monitoring",
+    "benchmarks",
 ]
 resolver = "2"
 

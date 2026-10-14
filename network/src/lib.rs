@@ -289,7 +289,9 @@ impl NetworkService {
             // accepted messages are forwarded, so a forged vote or tx is not
             // relayed across the network before anyone looks at it.
             .validate_messages()
-            .max_transmit_size(64 * 1024) // 64KB max message size
+            // A proposal carries a whole block (up to MAX_BLOCK_BYTES) plus
+            // its signature; leave room for the envelope.
+            .max_transmit_size(2 * common::types::MAX_BLOCK_BYTES)
             .build()
             .map_err(|e| format!("Failed to build gossipsub config: {}", e))?;
 
@@ -651,9 +653,12 @@ impl NetworkService {
         use gossipsub::MessageAcceptance::{Accept, Ignore, Reject};
         let topic = message.topic.as_str();
 
-        if self.reputation.is_banned(&source) {
-            warn!("🚫 Ignoring message from banned peer: {}", source);
-            return Reject;
+        // Consensus messages are signed by validators and verified on their
+        // own merits, and `source` is often only relaying someone else's vote:
+        // a ban on the relay must not cut a validator off from consensus.
+        if topic != CONSENSUS_TOPIC && self.reputation.is_banned(&source) {
+            debug!("🚫 Ignoring message from banned peer: {}", source);
+            return Ignore;
         }
 
         self.bytes_rx += message.data.len() as u64;
@@ -663,11 +668,12 @@ impl NetworkService {
                 {
                     let mut limiter = self.rate_limiter.lock().await;
                     if let Err(e) = limiter.check_and_consume(&source, MessageType::Transaction) {
-                        warn!(
+                        // Shed load, but don't blame the peer: an honest node
+                        // relays every burst its users submit.
+                        debug!(
                             "⏱️ Rate limit exceeded for transaction from {}: {}",
                             source, e
                         );
-                        self.reputation.report_bad_behavior(source, 5);
                         return Ignore;
                     }
                 }
