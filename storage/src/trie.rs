@@ -19,11 +19,12 @@
 //! - **Extension**: Shared path prefix pointing to another node
 //! - **Branch**: 16-way split node (for hex-nibble paths)
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tracing::debug;
 
 use crate::db::ColumnFamily;
@@ -197,7 +198,7 @@ impl PatriciaTrie {
     pub fn reload_root(&self) -> Result<(), Box<dyn Error>> {
         if let Some(root_bytes) = self.db.get(ColumnFamily::Trie, b"root")? {
             if let Ok(root) = <[u8; 32]>::try_from(root_bytes.as_slice()) {
-                *self.root.write().unwrap() = root;
+                *self.root.write() = root;
             }
         }
         Ok(())
@@ -205,7 +206,7 @@ impl PatriciaTrie {
 
     /// Get the current root hash
     pub fn root_hash(&self) -> NodeHash {
-        *self.root.read().unwrap()
+        *self.root.read()
     }
 
     /// Insert a key-value pair into the trie
@@ -220,7 +221,7 @@ impl PatriciaTrie {
         let (new_root, changed_nodes) = self.insert_at(current_root, &path, value.to_vec())?;
 
         // Update root
-        *self.root.write().unwrap() = new_root;
+        *self.root.write() = new_root;
 
         // Persist the new root pointer so the trie survives restarts
         self.db.put(ColumnFamily::Trie, b"root", &new_root)?;
@@ -232,7 +233,7 @@ impl PatriciaTrie {
 
         // Update stats
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write();
             stats.total_nodes += 1;
         }
 
@@ -270,7 +271,7 @@ impl PatriciaTrie {
         let (new_root, changed_nodes) = self.delete_at(current_root, &path)?;
 
         // Update root
-        *self.root.write().unwrap() = new_root;
+        *self.root.write() = new_root;
 
         // Persist the new root pointer so the trie survives restarts
         self.db.put(ColumnFamily::Trie, b"root", &new_root)?;
@@ -369,7 +370,7 @@ impl PatriciaTrie {
 
     /// Get trie statistics
     pub fn get_stats(&self) -> TrieStats {
-        self.stats.read().unwrap().clone()
+        self.stats.read().clone()
     }
 
     /// Remove Patricia trie nodes not reachable from the current root.
@@ -394,7 +395,7 @@ impl PatriciaTrie {
 
         if deleted > 0 {
             self.db.write_batch(batch)?;
-            let mut cache = self.node_cache.write().unwrap();
+            let mut cache = self.node_cache.write();
             cache.retain(|h, _| reachable.contains(h));
         }
 
@@ -429,9 +430,9 @@ impl PatriciaTrie {
     fn get_node(&self, hash: NodeHash) -> Result<TrieNode, Box<dyn Error>> {
         // Check in-memory cache first
         {
-            let cache = self.node_cache.read().unwrap();
+            let cache = self.node_cache.read();
             if let Some(node) = cache.get(&hash) {
-                let mut stats = self.stats.write().unwrap();
+                let mut stats = self.stats.write();
                 stats.cache_hits += 1;
                 return Ok(node.clone());
             }
@@ -439,7 +440,7 @@ impl PatriciaTrie {
 
         // Cache miss - load from disk
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write();
             stats.cache_misses += 1;
         }
 
@@ -448,10 +449,10 @@ impl PatriciaTrie {
 
             // Cache for future use
             {
-                let mut cache = self.node_cache.write().unwrap();
+                let mut cache = self.node_cache.write();
                 cache.insert(hash, node.clone());
 
-                let mut stats = self.stats.write().unwrap();
+                let mut stats = self.stats.write();
                 stats.cached_nodes = cache.len();
                 stats.persisted_nodes += 1;
             }
@@ -470,7 +471,7 @@ impl PatriciaTrie {
 
         // Update cache
         {
-            let mut cache = self.node_cache.write().unwrap();
+            let mut cache = self.node_cache.write();
             cache.insert(hash, node.clone());
         }
 

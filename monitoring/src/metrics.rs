@@ -178,9 +178,3 @@ impl BlockchainMetrics {
         &self.registry
     }
 }
-
-impl Default for BlockchainMetrics {
-    fn default() -> Self {
-        Self::new().expect("Failed to create metrics")
-    }
-}

@@ -50,7 +50,7 @@ impl Faucet {
     pub fn request_tokens(&mut self, address: Address) -> Result<u128, String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         // Check cooldown
@@ -84,7 +84,7 @@ impl Faucet {
         self.last_request.get(address).map(|&last_time| {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
             let elapsed = now - last_time;
             self.config.cooldown_seconds.saturating_sub(elapsed)

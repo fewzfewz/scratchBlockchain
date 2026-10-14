@@ -63,7 +63,7 @@ impl Metrics {
         self.total_blocks.fetch_add(1, Ordering::Relaxed);
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
         self.last_block_time.store(now, Ordering::Relaxed);
     }
@@ -117,7 +117,7 @@ impl Metrics {
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         let elapsed = now.saturating_sub(last_block).max(1);

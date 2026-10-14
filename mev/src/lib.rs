@@ -491,11 +491,8 @@ impl MEVAuction {
             return Err("Invalid bid signature".into());
         }
 
+        debug!("Bid submitted: {} tokens", bid.bid_amount);
         self.current_bids.push(bid);
-        debug!(
-            "Bid submitted: {} tokens",
-            self.current_bids.last().unwrap().bid_amount
-        );
 
         Ok(())
     }
@@ -792,7 +789,10 @@ impl ThresholdEncryption {
             None => return Err("Transaction not found".into()),
         };
 
-        let shares = self.decryption_shares.get(&nonce).unwrap();
+        let shares = self
+            .decryption_shares
+            .get(&nonce)
+            .ok_or("No decryption shares for transaction")?;
 
         // Reconstruct the master secret using Lagrange interpolation
         let master_secret = self.reconstruct_secret(shares, encrypted.threshold);

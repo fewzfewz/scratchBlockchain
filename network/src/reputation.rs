@@ -139,7 +139,7 @@ impl PeerReputation {
         for (peer, expiration) in &self.banned_peers {
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs()
                 + expiration.duration_since(Instant::now()).as_secs();
             banned_until.insert(peer.to_string(), timestamp);
@@ -157,7 +157,7 @@ impl PeerReputation {
 
         let now_secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         for (peer_str, score_value) in data.scores {

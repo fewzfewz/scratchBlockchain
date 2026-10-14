@@ -266,14 +266,16 @@ impl NativeExecutor {
 
         // 6. Execute Transfer
         if let Some(to) = tx.to {
-            state.entry(to).or_default();
-
-            let sender = state.get_mut(&tx.sender).unwrap();
+            let sender = state.entry(tx.sender).or_default();
             sender.balance = sender_balance - tx.value as u128;
             sender.nonce = sender_nonce + 1;
 
-            let recipient = state.get_mut(&to).unwrap();
-            recipient.balance += tx.value as u128;
+            // Entry API: a self-transfer reads the debited balance.
+            let recipient = state.entry(to).or_default();
+            recipient.balance = recipient
+                .balance
+                .checked_add(tx.value as u128)
+                .ok_or_else(|| anyhow!("Recipient balance overflow"))?;
         } else {
             return Err(anyhow!("Native executor only supports transfers"));
         }
@@ -282,7 +284,9 @@ impl NativeExecutor {
         let gas_used = gas_meter.used();
         let gas_fee = gas_used as u128 * tx.max_fee_per_gas as u128;
 
-        let sender = state.get_mut(&tx.sender).unwrap();
+        let sender = state
+            .get_mut(&tx.sender)
+            .ok_or_else(|| anyhow!("Sender account not found"))?;
         if sender.balance < gas_fee {
             return Err(anyhow!("Insufficient balance for gas fee"));
         }

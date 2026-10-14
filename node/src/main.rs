@@ -544,7 +544,7 @@ impl Node {
         // Start listening
         let p2p_addr: libp2p::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", config.network.p2p_port)
             .parse()
-            .expect("Invalid P2P address");
+            .map_err(|e| format!("Invalid P2P address: {}", e))?;
         network_cmd_sender
             .send(NetworkCommand::StartListening(p2p_addr))
             .await?;
@@ -1682,12 +1682,10 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
 
     let drip_amount = env::var("DRIP_AMOUNT")
         .unwrap_or_else(|_| "1000000000000000000000".to_string())
-        .parse::<u128>()
-        .unwrap();
+        .parse::<u128>()?;
     let cooldown = env::var("COOLDOWN_SECONDS")
         .unwrap_or_else(|_| "86400".to_string())
-        .parse::<u64>()
-        .unwrap();
+        .parse::<u64>()?;
 
     let config = node::faucet::FaucetConfig {
         drip_amount,

@@ -17,9 +17,10 @@ pub mod mev_protection;
 
 use anyhow::{anyhow, Result};
 use common::types::Transaction;
+use parking_lot::Mutex;
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap, HashSet};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::{debug, info, warn};
 
 /// Mempool configuration
@@ -158,7 +159,7 @@ impl Mempool {
         }
 
         // Check 4: Not already in mempool
-        let seen_txs = self.seen_txs.lock().unwrap();
+        let seen_txs = self.seen_txs.lock();
         if seen_txs.contains(&tx.signature) {
             return Err(anyhow!("Transaction already in mempool"));
         }
@@ -191,7 +192,7 @@ impl Mempool {
         self.validate_transaction(&tx)?;
 
         // Step 2: Check sender limits & track min nonce
-        let mut sender_state = self.sender_state.lock().unwrap();
+        let mut sender_state = self.sender_state.lock();
         let sender_entry = sender_state.entry(tx.sender).or_insert((0, u64::MAX));
         let count = &mut sender_entry.0;
         let next_nonce = sender_entry.1;
@@ -218,14 +219,14 @@ impl Mempool {
         // Step 4: Get timestamp for ordering
         drop(sender_state);
 
-        let mut timestamp_counter = self.timestamp_counter.lock().unwrap();
+        let mut timestamp_counter = self.timestamp_counter.lock();
         let timestamp = *timestamp_counter;
         *timestamp_counter += 1;
 
         // Step 5: Add to priority queue with eviction if needed
         drop(timestamp_counter);
-        let mut transactions = self.transactions.lock().unwrap();
-        let mut seen_txs = self.seen_txs.lock().unwrap();
+        let mut transactions = self.transactions.lock();
+        let mut seen_txs = self.seen_txs.lock();
 
         // Check capacity - evict lowest fee transaction if full
         if transactions.len() >= self.config.max_capacity {
@@ -248,7 +249,7 @@ impl Mempool {
                 }
 
                 // Update sender count outside the hot loop
-                let mut sender_state = self.sender_state.lock().unwrap();
+                let mut sender_state = self.sender_state.lock();
                 if let Some((count, _)) = sender_state.get_mut(&evicted.tx.sender) {
                     *count = count.saturating_sub(1);
                 }
@@ -273,7 +274,7 @@ impl Mempool {
         seen_txs.insert(tx.signature.clone());
 
         // Update sender count
-        let mut sender_state = self.sender_state.lock().unwrap();
+        let mut sender_state = self.sender_state.lock();
         if let Some((ref mut count, _)) = sender_state.get_mut(&tx.sender) {
             *count += 1;
         }
@@ -299,8 +300,8 @@ impl Mempool {
     /// (`remove_transactions`), so a proposal that fails to finalize loses
     /// nothing.
     pub fn get_transactions(&self, limit: usize) -> Vec<Transaction> {
-        let transactions = self.transactions.lock().unwrap();
-        let sender_state = self.sender_state.lock().unwrap();
+        let transactions = self.transactions.lock();
+        let sender_state = self.sender_state.lock();
 
         let mut queues: HashMap<[u8; 20], Vec<&PrioritizedTransaction>> = HashMap::new();
         for ptx in transactions.iter() {
@@ -349,9 +350,9 @@ impl Mempool {
     /// advance each sender's expected nonce past them. Pooled transactions
     /// whose nonce is now stale are dropped too.
     pub fn remove_transactions(&self, txs: &[Transaction]) {
-        let mut transactions = self.transactions.lock().unwrap();
-        let mut seen_txs = self.seen_txs.lock().unwrap();
-        let mut sender_state = self.sender_state.lock().unwrap();
+        let mut transactions = self.transactions.lock();
+        let mut seen_txs = self.seen_txs.lock();
+        let mut sender_state = self.sender_state.lock();
 
         let mut next_nonce: HashMap<[u8; 20], u64> = HashMap::new();
         for tx in txs {
@@ -407,21 +408,21 @@ impl Mempool {
 
     /// Get current size of mempool
     pub fn size(&self) -> usize {
-        let transactions = self.transactions.lock().unwrap();
+        let transactions = self.transactions.lock();
         transactions.len()
     }
 
     /// Get transaction count per sender (for debugging)
     pub fn get_sender_count(&self, sender: &[u8; 20]) -> Option<usize> {
-        let sender_state = self.sender_state.lock().unwrap();
+        let sender_state = self.sender_state.lock();
         sender_state.get(sender).map(|(count, _)| *count)
     }
 
     /// Clear the entire mempool (useful for testing or chain reorgs)
     pub fn clear(&self) {
-        let mut transactions = self.transactions.lock().unwrap();
-        let mut seen_txs = self.seen_txs.lock().unwrap();
-        let mut sender_state = self.sender_state.lock().unwrap();
+        let mut transactions = self.transactions.lock();
+        let mut seen_txs = self.seen_txs.lock();
+        let mut sender_state = self.sender_state.lock();
 
         transactions.clear();
         seen_txs.clear();

@@ -34,6 +34,7 @@ pub mod rate_limiter;
 pub mod reputation;
 pub mod sync;
 mod transport;
+pub mod validate;
 
 use behaviour::NodeBehaviour;
 use common::consensus_types::ConsensusMessage;
@@ -284,6 +285,10 @@ impl NetworkService {
         let gossipsub_config = gossipsub::ConfigBuilder::default()
             .heartbeat_interval(Duration::from_secs(1)) // Check peers every second
             .validation_mode(ValidationMode::Strict) // Validate all messages
+            // Hold every message until the application has checked it: only
+            // accepted messages are forwarded, so a forged vote or tx is not
+            // relayed across the network before anyone looks at it.
+            .validate_messages()
             .max_transmit_size(64 * 1024) // 64KB max message size
             .build()
             .map_err(|e| format!("Failed to build gossipsub config: {}", e))?;
@@ -501,7 +506,15 @@ impl NetworkService {
                 },
             )) => {
                 debug!("📨 Received message from {}: {}", source, message_id);
-                self.handle_gossipsub_message(message, source).await;
+                let acceptance = self.handle_gossipsub_message(message, source).await;
+                if let Err(e) = self
+                    .swarm
+                    .behaviour_mut()
+                    .gossipsub
+                    .report_message_validation_result(&message_id, &source, acceptance)
+                {
+                    debug!("Could not report validation result: {:?}", e);
+                }
             }
 
             // ================================================================
@@ -623,21 +636,30 @@ impl NetworkService {
         }
     }
 
-    /// Handle incoming gossip messages (transactions, blocks, consensus)
-    async fn handle_gossipsub_message(&mut self, message: gossipsub::Message, source: PeerId) {
+    /// Validate and dispatch an incoming gossip message.
+    ///
+    /// Returns whether gossipsub should forward it: `Reject` for messages that
+    /// are malformed or carry an invalid signature (the sender is penalized),
+    /// `Ignore` for messages we drop without blaming the sender (rate limits),
+    /// `Accept` otherwise. Checks here are stateless; the node applies the
+    /// stateful ones (nonces, validator set, rounds) itself.
+    async fn handle_gossipsub_message(
+        &mut self,
+        message: gossipsub::Message,
+        source: PeerId,
+    ) -> gossipsub::MessageAcceptance {
+        use gossipsub::MessageAcceptance::{Accept, Ignore, Reject};
         let topic = message.topic.as_str();
 
-        // Check if peer is banned
         if self.reputation.is_banned(&source) {
             warn!("🚫 Ignoring message from banned peer: {}", source);
-            return;
+            return Reject;
         }
 
         self.bytes_rx += message.data.len() as u64;
 
         match topic {
             TRANSACTION_TOPIC => {
-                // Rate limit check
                 {
                     let mut limiter = self.rate_limiter.lock().await;
                     if let Err(e) = limiter.check_and_consume(&source, MessageType::Transaction) {
@@ -646,44 +668,54 @@ impl NetworkService {
                             source, e
                         );
                         self.reputation.report_bad_behavior(source, 5);
-                        return;
+                        return Ignore;
                     }
                 }
 
-                match serde_json::from_slice::<TransactionMessage>(&message.data) {
-                    Ok(tx_msg) => {
-                        debug!("💰 Received transaction from {}", source);
-                        self.reputation.report_good_behavior(source);
-
-                        self.emit(NetworkEvent::TransactionReceived(tx_msg.transaction));
-                    }
+                let tx = match serde_json::from_slice::<TransactionMessage>(&message.data) {
+                    Ok(tx_msg) => tx_msg.transaction,
                     Err(e) => {
                         warn!("Failed to deserialize transaction: {}", e);
                         self.reputation.report_bad_behavior(source, 10);
+                        return Reject;
                     }
+                };
+                if let Err(e) = validate::transaction(&tx) {
+                    warn!("Rejecting gossiped transaction from {}: {}", source, e);
+                    self.reputation.report_bad_behavior(source, 20);
+                    return Reject;
                 }
+                debug!("💰 Received transaction from {}", source);
+                self.reputation.report_good_behavior(source);
+                self.emit(NetworkEvent::TransactionReceived(tx));
+                Accept
             }
 
             BLOCK_TOPIC => match serde_json::from_slice::<BlockMessage>(&message.data) {
                 Ok(block_msg) => {
+                    if let Err(e) = validate::block(&block_msg.block) {
+                        warn!("Rejecting gossiped block from {}: {}", source, e);
+                        self.reputation.report_bad_behavior(source, 20);
+                        return Reject;
+                    }
                     info!(
                         "📦 Received block from {} at height {}",
                         source, block_msg.block.header.slot
                     );
-
                     self.emit(NetworkEvent::BlockReceived {
                         block: block_msg.block,
                         source,
                     });
+                    Accept
                 }
                 Err(e) => {
                     warn!("Failed to deserialize block: {}", e);
                     self.reputation.report_bad_behavior(source, 10);
+                    Reject
                 }
             },
 
             CONSENSUS_TOPIC => {
-                // Rate limit check
                 {
                     let mut limiter = self.rate_limiter.lock().await;
                     if let Err(e) =
@@ -693,25 +725,32 @@ impl NetworkService {
                             "⏱️ Rate limit exceeded for consensus message from {}: {}",
                             source, e
                         );
-                        return;
+                        return Ignore;
                     }
                 }
 
                 match serde_json::from_slice::<ConsensusMessage>(&message.data) {
                     Ok(msg) => {
+                        if let Err(e) = validate::consensus_message(&msg) {
+                            warn!("Rejecting consensus message from {}: {}", source, e);
+                            self.reputation.report_bad_behavior(source, 20);
+                            return Reject;
+                        }
                         debug!("🗳️ Received consensus message from {}", source);
-
                         self.emit(NetworkEvent::ConsensusMessageReceived(msg));
+                        Accept
                     }
                     Err(e) => {
                         warn!("Failed to deserialize consensus message: {}", e);
                         self.reputation.report_bad_behavior(source, 10);
+                        Reject
                     }
                 }
             }
 
             _ => {
                 debug!("Unknown topic: {}", topic);
+                Reject
             }
         }
     }

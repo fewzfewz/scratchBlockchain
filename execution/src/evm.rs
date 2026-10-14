@@ -1,4 +1,5 @@
 use anyhow::Result;
+use parking_lot::RwLock;
 use revm::{
     db::{CacheDB, DatabaseRef},
     primitives::{
@@ -9,7 +10,7 @@ use revm::{
 };
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 // =============================================================================
 // Persistent storage backend
@@ -58,47 +59,43 @@ pub struct InMemoryStore {
 
 impl EvmStore for InMemoryStore {
     fn get_account(&self, address: &Address) -> Option<StoredAccount> {
-        self.accounts.read().unwrap().get(address).cloned()
+        self.accounts.read().get(address).cloned()
     }
     fn put_account(&self, address: Address, account: StoredAccount) {
-        self.accounts.write().unwrap().insert(address, account);
+        self.accounts.write().insert(address, account);
     }
     fn get_storage(&self, address: &Address, slot: &U256) -> Option<U256> {
-        self.storage
-            .read()
-            .unwrap()
-            .get(&(*address, *slot))
-            .copied()
+        self.storage.read().get(&(*address, *slot)).copied()
     }
     fn put_storage(&self, address: Address, slot: U256, value: U256) {
-        self.storage.write().unwrap().insert((address, slot), value);
+        self.storage.write().insert((address, slot), value);
     }
     fn get_code(&self, code_hash: &B256) -> Option<Bytecode> {
-        self.code.read().unwrap().get(code_hash).cloned()
+        self.code.read().get(code_hash).cloned()
     }
     fn put_code(&self, code_hash: B256, bytecode: Bytecode) {
-        self.code.write().unwrap().insert(code_hash, bytecode);
+        self.code.write().insert(code_hash, bytecode);
     }
     fn delete_account(&self, address: &Address) {
-        self.accounts.write().unwrap().remove(address);
+        self.accounts.write().remove(address);
     }
 
     fn accounts_for_root(&self) -> Vec<(Vec<u8>, Vec<u8>)> {
         let mut pairs = Vec::new();
-        for (addr, acc) in self.accounts.read().unwrap().iter() {
+        for (addr, acc) in self.accounts.read().iter() {
             let mut k = b"acc:".to_vec();
             k.extend_from_slice(addr.as_slice());
             let mut v = acc.balance.as_le_slice().to_vec();
             v.extend_from_slice(&acc.nonce.to_le_bytes());
             pairs.push((k, v));
         }
-        for ((addr, slot), val) in self.storage.read().unwrap().iter() {
+        for ((addr, slot), val) in self.storage.read().iter() {
             let mut k = b"sto:".to_vec();
             k.extend_from_slice(addr.as_slice());
             k.extend_from_slice(slot.as_le_slice());
             pairs.push((k, val.as_le_slice().to_vec()));
         }
-        for (hash, code) in self.code.read().unwrap().iter() {
+        for (hash, code) in self.code.read().iter() {
             let mut k = b"cod:".to_vec();
             k.extend_from_slice(hash.as_slice());
             pairs.push((k, code.bytecode.to_vec()));

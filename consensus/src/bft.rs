@@ -1236,4 +1236,79 @@ mod tests {
         engine.start_round(1);
         assert!(!engine.collect_past_round_votes().is_empty());
     }
+
+    /// Fuzz-style: a stream of random votes and proposals — mostly validly
+    /// signed by real validators, with arbitrary heights, rounds, steps and
+    /// hashes, plus garbage signatures and unknown voters — must never panic
+    /// the engine, and it must never sign twice for the same slot.
+    #[test]
+    fn test_engine_survives_random_messages() {
+        struct Rng(u64);
+        impl Rng {
+            fn next(&mut self) -> u64 {
+                self.0 ^= self.0 << 13;
+                self.0 ^= self.0 >> 7;
+                self.0 ^= self.0 << 17;
+                self.0
+            }
+            fn below(&mut self, n: u64) -> u64 {
+                self.next() % n.max(1)
+            }
+        }
+        let (vals, infos) = validator_set(4, 100);
+        let outsider = Validator::new();
+        let mut engine = engine_for(&vals, &infos, 0);
+        engine.start_round(0);
+        let mut rng = Rng(0xDEAD_BEEF_CAFE_F00D);
+        let mut signed: HashSet<(u64, u64, Step)> = HashSet::new();
+
+        for _ in 0..5_000 {
+            let who = rng.below(5) as usize;
+            let signer = if who == 4 { &outsider } else { &vals[who] };
+            let height = match rng.below(4) {
+                0 => rng.next(),
+                _ => engine.height.saturating_add(rng.below(2)),
+            };
+            let round = match rng.below(4) {
+                0 => rng.next(),
+                _ => engine.round + rng.below(3),
+            };
+            let hash = match rng.below(3) {
+                0 => None,
+                _ => Some(make_block(rng.below(3)).hash()),
+            };
+            let step = [Step::Propose, Step::Prevote, Step::Precommit, Step::Commit]
+                [rng.below(4) as usize];
+            let events = if rng.below(4) == 0 {
+                let mut p = signer.proposal(height, round, make_block(height.wrapping_sub(1)));
+                if rng.below(3) == 0 {
+                    p.signature = vec![rng.next() as u8; rng.below(80) as usize];
+                }
+                engine.handle_proposal(p)
+            } else {
+                let mut v = signer.vote(height, round, step, hash);
+                if rng.below(3) == 0 {
+                    v.signature = vec![rng.next() as u8; rng.below(80) as usize];
+                }
+                engine.handle_vote(v)
+            };
+            let mut events = events;
+            if rng.below(10) == 0 {
+                events.extend(match rng.below(3) {
+                    0 => engine.handle_timeout_propose(),
+                    1 => engine.handle_timeout_prevote(),
+                    _ => engine.handle_timeout_precommit(),
+                });
+            }
+            for e in &events {
+                if let BftEvent::BroadcastVote(v) = e {
+                    assert!(
+                        signed.insert((v.height, v.round, v.step)),
+                        "signed twice at {:?}",
+                        (v.height, v.round, v.step)
+                    );
+                }
+            }
+        }
+    }
 }

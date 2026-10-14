@@ -1,3 +1,6 @@
+//! Helpers for the multi-node integration tests (not used by the node).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use common::types::{Block, Transaction};
 use consensus::FinalityGadget;
 use libp2p::{Multiaddr, PeerId};

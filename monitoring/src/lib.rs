@@ -37,7 +37,13 @@ async fn metrics_handler(State(server): State<Arc<MetricsServer>>) -> impl IntoR
     let metric_families = metrics.registry().gather();
 
     let mut buffer = vec![];
-    encoder.encode(&metric_families, &mut buffer).unwrap();
+    if let Err(e) = encoder.encode(&metric_families, &mut buffer) {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            [("content-type", "text/plain")],
+            format!("metrics encoding failed: {}", e).into_bytes(),
+        );
+    }
 
     (
         StatusCode::OK,

@@ -19,3 +19,10 @@ members = [
     "monitoring",
 ]
 resolver = "2"
+
+# Production code must not panic on unexpected input: no unwrap/expect
+# outside tests (.clippy.toml allows them in tests). Opted into by every
+# crate that ships in the node; fuzz targets, benches and tools are exempt.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

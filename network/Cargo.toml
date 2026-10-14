@@ -17,4 +17,8 @@ unsigned-varint = "0.8"
 sha2 = "0.10"
 
 [dev-dependencies]
+ed25519-dalek = "2"
 tempfile = "3.8"
+
+[lints]
+workspace = true

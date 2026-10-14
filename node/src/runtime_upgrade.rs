@@ -137,7 +137,9 @@ impl RuntimeUpgradeManager {
         self.upgrade_history.pop();
 
         // Revert to previous
-        self.current_version = self.upgrade_history.last().unwrap().clone();
+        if let Some(previous) = self.upgrade_history.last() {
+            self.current_version = previous.clone();
+        }
 
         Ok(self.current_version.clone())
     }

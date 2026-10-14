@@ -12,3 +12,6 @@ rand = "0.8"
 reed-solomon-erasure = "6.0"
 # Note: For production, would use rust-kzg or c-kzg bindings
 # For this MVP, we'll implement a simplified version
+
+[lints]
+workspace = true

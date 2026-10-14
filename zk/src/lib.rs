@@ -212,7 +212,7 @@ impl ZkProver {
         hasher.update(tx);
         hasher.update(block);
         let hash = hasher.finalize();
-        u64::from_le_bytes(hash[..8].try_into().unwrap())
+        u64::from_le_bytes(<[u8; 8]>::try_from(&hash[..8]).unwrap_or_default())
     }
 
     pub fn clear_cache(&mut self) {

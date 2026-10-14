@@ -62,6 +62,10 @@ Fixed in Phase 2: quorum is strictly `> 2/3` of stake; votes are verified before
 
 Fixed in Phase 3: the header `state_root` commits to all state after the parent block — an LtHash over the flat state (accounts, EVM, WASM) combined with the governance/validator trie root. Validators reject proposals whose root (or parent, slot, extrinsics root, base fee, or any transaction signature) doesn't match, and a node that cannot apply a finalized block stops instead of diverging. Each block's whole transition (execution, rewards, governance, upgrades, root) commits as one atomic batch. Genesis balances and rewards now live where balances are read. Faucet, bridge mint and WASM deploy are transactions from a genesis-funded dev account; validator registration and delegation are signed staking transactions that bond tokens. Nondeterministic `HashMap` serialization in governance and runtime-upgrade state was replaced with `BTreeMap`. The mempool no longer loses transactions selected for a block.
 
+Done in Phase 4 (robustness): production crates may not `unwrap`/`expect` (clippy `unwrap_used`/`expect_used` deny via workspace lints; allowed in tests), with the remaining ~50 sites fixed (DB iterator and decode errors no longer panic) and shared state on `parking_lot` locks (no lock poisoning). Gossip messages are validated before they are forwarded (gossipsub `validate_messages`): transactions, votes, proposals and blocks with bad signatures or certificates are rejected and the sender penalized. Fuzz-style tests feed random and mutated gossip to the decoders/validators and random messages to the BFT engine. `rpc.rs` is split into modules by domain.
+
+Not done in Phase 4: per-crate typed errors (`thiserror`) instead of `Box<dyn Error>`, and moving `Node` to an actor model so RPC reads a snapshot instead of sharing a dozen `Arc<Mutex<_>>` with consensus.
+
 ## Mainnet blockers (operational)
 
 - Public testnet 30+ day soak

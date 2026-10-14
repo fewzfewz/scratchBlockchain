@@ -13,3 +13,6 @@ tracing = "0.1"
 [dev-dependencies]
 serde_json = "1.0"
 rand = "0.8"
+
+[lints]
+workspace = true

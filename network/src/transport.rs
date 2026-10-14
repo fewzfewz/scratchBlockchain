@@ -14,7 +14,8 @@ pub fn build_transport(
     Ok(dns_transport
         .upgrade(Version::V1)
         .authenticate(
-            noise::Config::new(keypair).expect("signing libp2p-noise static DH keypair failed"),
+            noise::Config::new(keypair)
+                .map_err(|e| std::io::Error::other(format!("noise keypair: {}", e)))?,
         )
         .multiplex(yamux::Config::default())
         .timeout(Duration::from_secs(20))
