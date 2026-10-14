@@ -84,7 +84,15 @@ export async function launch(outDir, port = 9334) {
     evaluate,
     async goto(url, wait = 3000) {
       await send('Page.navigate', { url }, sessionId)
-      await sleep(wait)
+      await sleep(Math.min(wait, 1500))
+      // Wait until the app has rendered the page (the dev server can take a
+      // while to transform freshly edited modules on first load).
+      for (let i = 0; i < 40; i++) {
+        const ready = await evaluate(`(document.querySelector('main')?.innerText || '').trim().length > 40`).catch(() => false)
+        if (ready) break
+        await sleep(500)
+      }
+      await sleep(Math.max(0, wait - 1500))
       await evaluate(HELPERS)
     },
     async reloadHelpers() { await evaluate(HELPERS) },

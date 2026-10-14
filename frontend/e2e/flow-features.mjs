@@ -47,7 +47,7 @@ const steps = [
   }],
   ['deploy: ERC20', async () => {
     await page.goto(`${UI}/deploy`, 4000)
-    await page.evaluate(`(() => { const s = [...document.querySelectorAll('select')].find(e => [...e.options].some(o => o.value === 'ERC20')); s && window.__set(s, 'ERC20') })()`)
+    await page.click('Token (ERC20)')
     await page.click('Deploy', 'button[type=submit]')
     const m = await expectStatus('Contract address[\\s\\S]{0,80}?(0x[0-9a-f]{40})', 'Error:|failed|reverted', 90000)
     erc20 = (await status()).match(/0x[0-9a-fA-F]{40}/g)?.find((a) => a.toLowerCase() !== addr.toLowerCase())
@@ -55,7 +55,7 @@ const steps = [
   }],
   ['deploy: ERC721', async () => {
     await page.goto(`${UI}/deploy`, 4000)
-    await page.evaluate(`(() => { const s = [...document.querySelectorAll('select')].find(e => [...e.options].some(o => o.value === 'ERC721')); s && window.__set(s, 'ERC721') })()`)
+    await page.click('NFT collection (ERC721)')
     await sleep(500)
     await mark()
     await mark()
@@ -125,7 +125,6 @@ const steps = [
   }],
   ['validators: onboard checks + register', async () => {
     await page.goto(`${UI}/validators/onboard`, 4000)
-    await page.fill('Your wallet address', addr)
     const btns = await page.evaluate(`[...document.querySelectorAll('button')].filter(window.__vis).map(b => b.innerText.trim())`)
     const check = btns.find((b) => /check/i.test(b))
     if (check) await page.click(check)

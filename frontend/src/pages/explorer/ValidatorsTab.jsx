@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react'
-import { Cpu, ArrowLeft, ShieldCheck, Clock, Coins, Users, Wallet, TrendingUp, Percent } from 'lucide-react'
+import { ArrowLeft, ShieldCheck } from 'lucide-react'
 import { getApiUrl } from '../../lib/chain.js'
+import { Card, KeyValue, Badge, EmptyState, Stat } from '../../components/ui.jsx'
 
-const shorten = (v, s = 10, e = 8) => !v ? '--' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}...${v.slice(-e)}`
-const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
-const fmtStake = (s) => !s || isNaN(Number(s)) ? '--' : `${(Number(s) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 2 })} NBL`
+const shorten = (v, s = 10, e = 8) => (!v ? '—' : v.length <= s + e + 3 ? v : `${v.slice(0, s)}…${v.slice(-e)}`)
+const fmt = (v) => (v == null || isNaN(Number(v)) ? '—' : Number(v).toLocaleString())
+const nbl = (s) => (!s || isNaN(Number(s)) ? 0 : Number(s) / 1e18)
+const fmtNbl = (n) => `${n.toLocaleString(undefined, { maximumFractionDigits: 2 })} NBL`
+const totalStake = (v) => nbl(v.stake) + nbl(v.total_delegated)
 
-const RANK_COLORS = ['from-amber-400 to-yellow-500', 'from-slate-300 to-slate-400', 'from-orange-400 to-red-400']
+function uptime(v) {
+  const scheduled = (v.blocks_produced || 0) + (v.blocks_missed || 0)
+  return scheduled > 0 ? ((v.blocks_produced || 0) / scheduled) * 100 : null
+}
 
 export default function ValidatorsTab() {
   const [validators, setValidators] = useState([])
@@ -16,7 +22,7 @@ export default function ValidatorsTab() {
 
   useEffect(() => {
     let active = true
-    const fetch = async () => {
+    const load = async () => {
       try {
         const res = await window.fetch(`${getApiUrl()}/validators`)
         if (!res.ok) throw new Error('Failed to fetch')
@@ -27,142 +33,89 @@ export default function ValidatorsTab() {
       } catch { if (active) setError('Unable to fetch validator data.') }
       finally { if (active) setLoading(false) }
     }
-    fetch()
-    const interval = setInterval(fetch, 5000)
+    load()
+    const interval = setInterval(load, 5000)
     return () => { active = false; clearInterval(interval) }
   }, [])
 
-  if (loading) {
-    return (
-      <div className="space-y-3">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="h-28 rounded-2xl glass-strong animate-pulse" />
-        ))}
-      </div>
-    )
-  }
-  if (error) {
-    return (
-      <div className="p-8 rounded-2xl glass-strong text-center">
-        <p className="text-sm text-red-400">{error}</p>
-      </div>
-    )
-  }
+  const sorted = [...validators].sort((a, b) => totalStake(b) - totalStake(a))
+  const networkStake = sorted.reduce((sum, v) => sum + totalStake(v), 0)
 
   if (selected) {
     const v = selected
-    const scheduled = (v.blocks_produced || 0) + (v.blocks_missed || 0)
-    const uptime = scheduled > 0
-      ? ((v.blocks_produced || 0) / scheduled * 100).toFixed(2)
-      : null
-    const rows = [
-      { icon: Wallet, label: 'Address', value: v.address || '--', mono: true },
-      { icon: Coins, label: 'Stake', value: fmtStake(v.stake) },
-      { icon: Percent, label: 'Commission', value: `${v.commission_rate}%` },
-      { icon: Cpu, label: 'Blocks Produced', value: fmt(v.blocks_produced) },
-      { icon: Clock, label: 'Blocks Missed', value: fmt(v.blocks_missed) },
-      { icon: Users, label: 'Delegators', value: fmt(v.delegator_count) },
-      { icon: TrendingUp, label: 'Total Delegated', value: fmtStake(v.total_delegated) },
-    ]
+    const up = uptime(v)
     return (
-      <div className="rounded-2xl glass-strong overflow-hidden">
-        <div className="bg-gradient-to-r from-blue-600/10 via-cyan-600/10 to-violet-600/10 border-b border-slate-200/50 dark:border-slate-700/40 px-5 py-4">
-          <button onClick={() => setSelected(null)}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-cyan-400 hover:underline mb-3">
-            <ArrowLeft className="w-3.5 h-3.5" /> All validators
-          </button>
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-white shadow-lg">
-              <Cpu className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white font-mono">{shorten(v.address || v.public_key, 12, 10)}</h3>
-              <span className={`inline-flex items-center gap-1.5 text-xs mt-0.5 ${v.is_active !== false ? 'text-emerald-500' : 'text-red-400'}`}>
-                <ShieldCheck className="w-3.5 h-3.5" />
-                {v.is_active !== false ? 'Active validator' : 'Inactive'}
-              </span>
-            </div>
-          </div>
+      <Card>
+        <button type="button" onClick={() => setSelected(null)}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-blue-300 hover:underline mb-4">
+          <ArrowLeft className="w-3.5 h-3.5" /> All validators
+        </button>
+        <div className="flex flex-wrap items-center gap-3 mb-6">
+          <h2 className="font-mono text-lg font-semibold text-slate-900 dark:text-white">{shorten(v.address, 12, 8)}</h2>
+          <Badge tone={v.is_active === false ? 'neutral' : 'green'}>{v.is_active === false ? 'Inactive' : 'Active'}</Badge>
         </div>
-        <div className="p-5 grid sm:grid-cols-2 gap-2">
-          {rows.map(({ icon: Icon, label, value, mono }) => (
-            <div key={label} className="flex justify-between items-center gap-3 p-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
-              <span className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                <Icon className="w-3.5 h-3.5" /> {label}
-              </span>
-              <strong className={`text-sm text-slate-900 dark:text-white tabular-nums truncate ${mono ? 'font-mono' : ''}`}>{value}</strong>
-            </div>
-          ))}
-          <div className="sm:col-span-2 flex justify-between items-center gap-3 p-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
-            <span className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-              <TrendingUp className="w-3.5 h-3.5" /> Uptime
-            </span>
-            <strong className="text-sm text-slate-900 dark:text-white tabular-nums">
-              {uptime != null ? `${uptime}%` : '--'}
-            </strong>
-          </div>
+        <div className="grid sm:grid-cols-3 gap-3 mb-6">
+          <Stat label="Voting power" value={networkStake ? `${((totalStake(v) / networkStake) * 100).toFixed(1)}%` : '—'} sub={fmtNbl(totalStake(v))} />
+          <Stat label="Uptime" value={up != null ? `${up.toFixed(1)}%` : '—'} sub={`${fmt(v.blocks_missed)} missed`} />
+          <Stat label="Blocks produced" value={fmt(v.blocks_produced)} />
         </div>
-      </div>
+        <KeyValue rows={[
+          ['Address', v.address || '—', true],
+          ['Public key', shorten(v.public_key, 14, 10), true],
+          ['Own stake', fmtNbl(nbl(v.stake))],
+          ['Delegated', fmtNbl(nbl(v.total_delegated))],
+          ['Delegators', fmt(v.delegator_count)],
+          ['Commission', `${v.commission_rate}%`],
+        ]} />
+      </Card>
     )
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between px-1">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">Active Validators</h3>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">BFT set · {validators.length} validators · >2/3 of stake to finalize</p>
-        </div>
-        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-500 text-xs">
-          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse-dot" />
-          {validators.length} online
-        </span>
-      </div>
-
-      {validators.length === 0 ? (
-        <div className="p-8 rounded-2xl glass-strong text-center">
-          <Cpu className="w-8 h-8 text-slate-300 dark:text-slate-600 mx-auto mb-2" />
-          <p className="text-sm text-slate-400 dark:text-slate-500">No validators found.</p>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">The validator set is registered at genesis.</p>
-        </div>
+    <Card
+      title="Validators"
+      icon={ShieldCheck}
+      description={`${sorted.length} validators · a block needs signatures from more than 2/3 of the stake · proposers are picked in proportion to stake`}
+      padded={false}
+    >
+      {loading ? (
+        <div className="p-5 space-y-2">{[0, 1, 2, 3].map((i) => <div key={i} className="h-12 rounded-xl bg-slate-100 dark:bg-slate-800/60 animate-pulse" />)}</div>
+      ) : error ? (
+        <EmptyState title="Unavailable">{error}</EmptyState>
+      ) : sorted.length === 0 ? (
+        <EmptyState title="No validators" />
       ) : (
-        validators.map((v, i) => {
-          const scheduled = (v.blocks_produced || 0) + (v.blocks_missed || 0)
-          const uptime = scheduled > 0
-            ? Math.round(((v.blocks_produced || 0) / scheduled) * 100)
-            : null
-          return (
-            <button key={v.address || i} onClick={() => setSelected(v)}
-              className="w-full text-left p-4 rounded-2xl glass hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
-              <div className="flex items-center gap-3">
-                <div className={`w-8 h-8 shrink-0 rounded-lg bg-gradient-to-br ${RANK_COLORS[i % RANK_COLORS.length]} flex items-center justify-center text-white text-xs font-bold shadow-md`}>
-                  {i + 1}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="font-mono text-sm font-semibold text-slate-900 dark:text-white truncate">{shorten(v.address || v.public_key, 12, 10)}</span>
-                    {v.is_active !== false && (
-                      <span className="px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-500 text-[10px] font-medium">ACTIVE</span>
-                    )}
-                  </div>
-                  <div className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">{fmtStake(v.stake)} · {v.commission_rate}% commission</div>
-                </div>
-                <div className="text-right shrink-0 hidden sm:block">
-                  <div className="text-sm font-bold text-slate-900 dark:text-white tabular-nums">{uptime != null ? `${uptime}%` : '--'}</div>
-                  <div className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500">Uptime</div>
-                </div>
-                {uptime != null && (
-                  <div className="w-20 hidden md:block">
-                    <div className="h-1.5 rounded-full bg-slate-200 dark:bg-slate-700/50 overflow-hidden">
-                      <div className="h-full rounded-full bg-gradient-to-r from-emerald-500 to-teal-500" style={{ width: `${uptime}%` }} />
-                    </div>
-                  </div>
-                )}
-              </div>
-            </button>
-          )
-        })
+        <div>
+          <div className="hidden md:grid grid-cols-[40px_1.3fr_1.4fr_90px_90px] gap-4 px-6 py-2.5 text-[11px] uppercase tracking-wider text-slate-500 border-y border-slate-100 dark:border-slate-800">
+            <span>#</span><span>Validator</span><span>Stake</span><span className="text-right">Uptime</span><span className="text-right">Produced</span>
+          </div>
+          {sorted.map((v, i) => {
+            const share = networkStake ? (totalStake(v) / networkStake) * 100 : 0
+            const up = uptime(v)
+            return (
+              <button key={v.address || i} type="button" onClick={() => setSelected(v)}
+                className="w-full grid grid-cols-[40px_1fr_auto] md:grid-cols-[40px_1.3fr_1.4fr_90px_90px] gap-4 items-center px-6 py-3 text-left text-sm border-b last:border-0 border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                <span className="text-slate-400 tabular-nums">{i + 1}</span>
+                <span className="min-w-0">
+                  <span className="block font-mono text-xs text-slate-900 dark:text-white truncate">{shorten(v.address, 10, 6)}</span>
+                  <span className="block text-xs text-slate-500">{v.commission_rate}% commission</span>
+                </span>
+                <span className="min-w-0">
+                  <span className="flex items-center justify-between gap-2 text-xs">
+                    <span className="tabular-nums text-slate-900 dark:text-white">{fmtNbl(totalStake(v))}</span>
+                    <span className="tabular-nums text-slate-500 hidden md:inline">{share.toFixed(1)}%</span>
+                  </span>
+                  <span className="hidden md:block mt-1.5 h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                    <span className="block h-full rounded-full bg-gradient-to-r from-blue-600 to-cyan-500" style={{ width: `${share}%` }} />
+                  </span>
+                </span>
+                <span className="hidden md:block text-right tabular-nums text-slate-600 dark:text-slate-300">{up != null ? `${up.toFixed(1)}%` : '—'}</span>
+                <span className="hidden md:block text-right tabular-nums text-slate-500">{fmt(v.blocks_produced)}</span>
+              </button>
+            )
+          })}
+        </div>
       )}
-    </div>
+    </Card>
   )
 }

@@ -6,6 +6,7 @@ import {
   ArrowRight, Rocket, Compass,
 } from 'lucide-react'
 import { getApiUrl } from '../lib/chain.js'
+import { PageHeader, LiveBadge } from '../components/ui.jsx'
 
 
 const SECTIONS = [
@@ -76,7 +77,7 @@ function DocsSkeleton() {
 function StartHere({ onSelect }) {
   const links = [
     { id: 'install', title: 'Install Nebula', desc: 'Build from source or use Docker Compose', icon: Download, chip: 'from-blue-600 to-cyan-600' },
-    { id: 'quickstart', title: 'Quick Start', desc: 'Spin up a 3-node testnet in 60 seconds', icon: Zap, chip: 'from-amber-500 to-orange-600' },
+    { id: 'quickstart', title: 'Quick Start', desc: 'Spin up a 4-validator devnet with Docker', icon: Zap, chip: 'from-amber-500 to-orange-600' },
     { id: 'rpc', title: 'RPC API', desc: 'All 17 endpoints with example responses', icon: Terminal, chip: 'from-emerald-600 to-teal-600' },
     { id: 'local-dev', title: 'Local Dev', desc: 'Port map, test accounts, and workflows', icon: Server, chip: 'from-violet-600 to-purple-600' },
   ]
@@ -184,49 +185,11 @@ export default function DocsPage() {
         />
       </div>
 
-      {/* Aurora blobs + grid backdrop */}
-      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
-      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(139,92,246,0.4), transparent 70%)' }} />
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
-
-      <div className="relative z-10 max-w-6xl mx-auto px-4 py-8 md:py-10 animate-fade-in">
+      <div className="relative z-10 py-12 max-w-6xl mx-auto px-4 animate-fade-in">
         {/* ── Header ─────────────────────────────────────────────── */}
-        <header className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
-            <span className={`w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'}`} />
-            {backendOnline ? 'Local testnet live' : 'Node offline'}
-            <span className="text-slate-400 dark:text-slate-500">· Docs v1.0</span>
-          </div>
-
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
-              <BookOpen className="w-6 h-6" />
-            </div>
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Nebula
-              <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Docs</span>
-            </h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
-            Everything you need to build on Nebula — from zero to a live local testnet in minutes.
-          </p>
-
-          {network && (
-            <div className="flex items-center justify-center flex-wrap gap-2 mt-5 text-xs">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Activity className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" /> Tip #{fmt(network.height)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Gauge className="w-3.5 h-3.5 text-emerald-500" /> Base fee {fmt(network.baseFee)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <ShieldCheck className="w-3.5 h-3.5 text-violet-500" /> Finalized #{fmt(network.finalized)}
-              </span>
-            </div>
-          )}
-        </header>
+        <PageHeader icon={BookOpen} eyebrow="Docs" title="Documentation"
+          description="From zero to a running local network, and how each layer of the chain works."
+          actions={<LiveBadge online={backendOnline} label={network ? `#${Number(network.height).toLocaleString()}` : 'Online'} />} />
 
         {!backendOnline && (
           <div className="mb-8 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
@@ -316,13 +279,13 @@ export default function DocsPage() {
           <div key={activeSection} className="animate-slide-up">
           {activeSection === 'intro' && (
             <section>
-              <h1 className="text-3xl sm:text-4xl font-bold text-slate-900 dark:text-white mb-4 break-words bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent">Introduction to Nebula</h1>
+              <h2 className="text-2xl sm:text-3xl font-semibold text-slate-900 dark:text-white mb-4 break-words">Introduction to Nebula</h2>
               <p className="text-lg text-blue-600 dark:text-blue-300 mb-4">A high-performance, modular blockchain built in Rust.</p>
               <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed">Nebula is designed for scalability and flexibility, with EVM and WASM execution, BFT consensus where a block is final as soon as validators holding more than 2/3 of the stake commit it, and a relayer-secured Ethereum bridge.</p>
               <div className="grid md:grid-cols-3 gap-4">
                 {[
-                  { icon: Zap, title: 'High Performance', desc: 'Parallel transaction execution and high-throughput mempool.' },
-                  { icon: Shield, title: 'Secure', desc: 'Ed25519 signatures and GRANDPA-style finality gadget.' },
+                  { icon: Zap, title: 'High Performance', desc: 'Sub-second finality and about 9k transfers per second of execution per core.' },
+                  { icon: Shield, title: 'Secure', desc: 'Ed25519 signatures, BFT finality and a verified state root in every block.' },
                   { icon: Layers, title: 'Modular', desc: 'Pluggable consensus, execution, and data availability layers.' },
                 ].map(({ icon: Icon, title, desc }) => (
                   <div key={title} className="p-5 rounded-xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
@@ -370,7 +333,7 @@ docker compose up -d`} />
           {activeSection === 'quickstart' && (
             <section className="animate-slide-up">
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-4">Quick Start</h2>
-              <p className="text-slate-600 dark:text-slate-400 mb-4">Deploy a local 3-node testnet in under 60 seconds.</p>
+              <p className="text-slate-600 dark:text-slate-400 mb-4">Run a local 4-validator devnet with Docker Compose.</p>
 
               <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">1. Single-node devnet</h3>
               <CodeBlock lang="bash" code={`./scripts/deploy.sh
@@ -406,7 +369,7 @@ done`} />
               <div className="space-y-6">
                 <div className="p-5 rounded-xl glass-strong">
                   <h3 className="text-lg font-semibold text-slate-800 dark:text-white mb-2">Consensus Layer</h3>
-                  <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Validator-based BFT consensus with Ed25519 signatures and GRANDPA-style finality gadget. Blocks are finalized in batches for instant irreversibility. Validator set is managed through on-chain governance.</p>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 leading-relaxed">Validator-based BFT consensus: a block is final once validators holding more than 2/3 of the stake sign it. Each block is final on its own (no reorgs), and validators join by bonding stake in a signed staking transaction.</p>
                   <div className="mt-3 grid grid-cols-3 gap-3 text-xs">
                     {[
                       ['Finality', '~2s (batch)'],

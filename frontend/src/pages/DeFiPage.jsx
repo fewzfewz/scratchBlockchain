@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Layers, ArrowLeftRight, Droplets, TrendingUp, RefreshCw, AlertCircle, CheckCircle } from 'lucide-react'
-import PageShell from '../components/PageShell.jsx'
+import { Layers, ArrowDown, Plus, Repeat } from 'lucide-react'
+import { Page, PageHeader, Card, Field, Button, Notice, Stat, Tabs, buttonClass, inputClass } from '../components/ui.jsx'
 import {
   DEFI_POOL, fetchBalance, fetchGasPrice, signAndSubmit,
   scanDeployedContracts, walletAddress, weiToNbl,
@@ -136,97 +136,65 @@ export default function DeFiPage() {
   )
 
   return (
-    <PageShell>
-      <div className="max-w-3xl mx-auto px-4 py-10 animate-fade-in">
-        <header className="text-center mb-8">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg">
-              <Layers className="w-6 h-6" />
-            </div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">DeFi Hub</h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400">Live pool balances and on-chain swaps via signed transactions.</p>
-        </header>
+    <Page width="max-w-5xl">
+      <PageHeader icon={Layers} eyebrow="DeFi" title="Swap and provide liquidity"
+        description="A constant-product pool on your node. The pool is a plain account, so a swap here is a signed transfer into it, priced with the AMM formula."
+        actions={<Link to="/deploy" className={buttonClass('secondary', 'sm')}>Deploy a token</Link>} />
 
-        <div className="grid sm:grid-cols-3 gap-3 mb-6">
-          <div className="glass-strong rounded-2xl p-4 text-center">
-            <Droplets className="w-5 h-5 mx-auto mb-2 text-cyan-500" />
-            <p className="text-xs text-slate-500">Pool (on-chain)</p>
-            <p className="text-lg font-bold font-mono">{poolLiquidity} NBL</p>
-          </div>
-          <div className="glass-strong rounded-2xl p-4 text-center">
-            <TrendingUp className="w-5 h-5 mx-auto mb-2 text-emerald-500" />
-            <p className="text-xs text-slate-500">Your balance</p>
-            <p className="text-lg font-bold font-mono">{userBalance} NBL</p>
-          </div>
-          <div className="glass-strong rounded-2xl p-4 text-center">
-            <ArrowLeftRight className="w-5 h-5 mx-auto mb-2 text-violet-500" />
-            <p className="text-xs text-slate-500">Base fee</p>
-            <p className="text-lg font-bold font-mono text-xs">{baseFee}</p>
-          </div>
-        </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-8">
+        <Stat label="Pool liquidity" value={`${poolLiquidity} NBL`} />
+        <Stat label="Your balance" value={`${userBalance} NBL`} />
+        <Stat label="Base fee" value={baseFee} sub="wei per gas" />
+      </div>
 
-        <div className="glass-strong rounded-2xl p-6 mb-6 space-y-4">
-          <div className="flex gap-2">
-            <button type="button" onClick={() => setSwapMode('native')}
-              className={`flex-1 py-2 rounded-xl text-sm font-semibold ${swapMode === 'native' ? 'bg-cyan-600 text-white' : 'text-slate-500'}`}>
-              NBL transfer
-            </button>
-            <button type="button" onClick={() => setSwapMode('erc20')}
-              className={`flex-1 py-2 rounded-xl text-sm font-semibold ${swapMode === 'erc20' ? 'bg-cyan-600 text-white' : 'text-slate-500'}`}>
-              ERC20 transfer
-            </button>
-          </div>
+      <div className="grid lg:grid-cols-[1.2fr_1fr] gap-6 items-start">
+        <Card title="Swap" icon={Repeat}>
+          <Tabs value={swapMode} onChange={setSwapMode} className="mb-5" tabs={[
+            { id: 'native', label: 'NBL transfer' },
+            { id: 'erc20', label: 'ERC20 transfer' },
+          ]} />
 
           {swapMode === 'erc20' && (
-            <div>
-              <label className="text-xs text-slate-500">Token contract</label>
-              <select value={tokenOut} onChange={(e) => setTokenOut(e.target.value)}
-                className="w-full mt-1 px-4 py-3 rounded-xl bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600 font-mono text-sm">
-                {contracts.map((c) => (
-                  <option key={c.address} value={c.address}>{c.name || c.address}</option>
-                ))}
+            <Field label="Token" hint={tokenBal != null ? `Your balance: ${tokenBal.toString()}` : undefined} className="mb-4">
+              <select value={tokenOut} onChange={(e) => setTokenOut(e.target.value)} className={`${inputClass} font-mono text-xs`}>
+                {contracts.length === 0 && <option value="">— deploy an ERC20 first —</option>}
+                {contracts.map((c) => <option key={c.address} value={c.address}>{c.name || c.address}</option>)}
               </select>
-              {tokenBal != null && <p className="text-xs text-slate-400 mt-1">Your token balance: {tokenBal.toString()}</p>}
+            </Field>
+          )}
+
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4">
+            <div className="text-xs text-slate-500 mb-1">You pay</div>
+            <div className="flex items-center gap-3">
+              <input type="number" step="0.0001" value={amountIn} onChange={(e) => setAmountIn(e.target.value)} placeholder="Amount" aria-label="Amount"
+                className="flex-1 min-w-0 bg-transparent font-display text-2xl font-semibold text-slate-900 dark:text-white focus:outline-none" />
+              <span className="h-8 px-3 inline-flex items-center rounded-lg bg-slate-100 dark:bg-slate-800 text-sm font-semibold">{swapMode === 'erc20' ? 'TOKEN' : 'NBL'}</span>
             </div>
-          )}
-
-          <input type="number" step="0.0001" value={amountIn} onChange={(e) => setAmountIn(e.target.value)}
-            placeholder="Amount"
-            className="w-full px-4 py-3 rounded-xl font-mono bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-          <input value={recipient} onChange={(e) => setRecipient(e.target.value)}
-            placeholder="Recipient (optional — defaults to pool)"
-            className="w-full px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-
-          <div className="px-4 py-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30 text-sm">
-            <span className="text-slate-500">AMM estimate (0.3% fee): </span>
-            <span className="font-mono font-semibold text-emerald-500">{weiToNbl(estimatedOut)} NBL</span>
-            <span className="text-xs text-slate-400 block mt-1">Constant-product quote using wallet ↔ pool reserves</span>
+          </div>
+          <div className="flex justify-center -my-3 relative z-10">
+            <span className="w-8 h-8 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 flex items-center justify-center"><ArrowDown className="w-4 h-4 text-slate-400" /></span>
+          </div>
+          <div className="rounded-xl border border-slate-200 dark:border-slate-800 p-4 bg-slate-50 dark:bg-slate-950/40">
+            <div className="text-xs text-slate-500 mb-1">Estimated receive (0.3% fee)</div>
+            <div className="font-display text-2xl font-semibold tabular-nums text-slate-900 dark:text-white">{weiToNbl(estimatedOut)} <span className="text-sm text-slate-500">NBL</span></div>
           </div>
 
-          <div className="flex gap-3">
-            <button type="button" disabled={submitting} onClick={executeSwap}
-              className="flex-1 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white font-semibold disabled:opacity-50">
-              {submitting ? <RefreshCw className="w-4 h-4 animate-spin mx-auto" /> : 'Execute swap'}
-            </button>
-            <button type="button" disabled={submitting} onClick={addLiquidity}
-              className="flex-1 py-3 rounded-xl border border-cyan-500/50 text-cyan-600 font-semibold disabled:opacity-50">
-              Add liquidity
-            </button>
+          <Field label="Recipient (optional)" hint="Defaults to the pool." className="mt-4">
+            <input value={recipient} onChange={(e) => setRecipient(e.target.value)} placeholder="Recipient (optional — defaults to pool)" className={`${inputClass} font-mono`} />
+          </Field>
+
+          <Button onClick={executeSwap} loading={submitting} icon={Repeat} className="w-full mt-5">Execute swap</Button>
+          <Notice type={statusType === 'err' ? 'err' : 'ok'} className="mt-4">{status}</Notice>
+        </Card>
+
+        <Card title="Provide liquidity" icon={Plus} description="Deposit NBL into the pool. Uses the amount entered in the swap box.">
+          <div className="rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-800 p-4 text-sm">
+            <div className="flex justify-between"><span className="text-slate-500">Deposit</span><span className="tabular-nums font-semibold">{amountIn || 0} NBL</span></div>
+            <div className="flex justify-between mt-2"><span className="text-slate-500">Pool after</span><span className="tabular-nums">{(parseFloat(poolLiquidity) + (parseFloat(amountIn) || 0)).toFixed(4)} NBL</span></div>
           </div>
-
-          {status && (
-            <p className={`text-sm flex items-center gap-2 ${statusType === 'err' ? 'text-red-500' : 'text-emerald-600'}`}>
-              {statusType === 'err' ? <AlertCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
-              {status}
-            </p>
-          )}
-        </div>
-
-        <p className="text-center text-xs text-slate-400">
-          Deploy tokens at <Link to="/deploy" className="text-cyan-500 underline">/deploy</Link> · Pool address is deterministic on-chain
-        </p>
+          <Button variant="secondary" onClick={addLiquidity} loading={submitting} icon={Plus} className="w-full mt-4">Add liquidity</Button>
+        </Card>
       </div>
-    </PageShell>
+    </Page>
   )
 }

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
-import { Rocket, Wallet, Copy, RefreshCw, FileCode, Fuel, CheckCircle, AlertCircle, BookOpen } from 'lucide-react'
+import { Rocket, Wallet, Copy, RefreshCw, FileCode, Coins, Image, Code2, ArrowRight, BookOpen, ChevronDown } from 'lucide-react'
+import { Page, PageHeader, Card, Field, Button, Notice, KeyValue, inputClass, textareaClass, buttonClass } from '../components/ui.jsx'
 import {
   saveContract,
   buildSignedDeployTx,
@@ -26,8 +27,6 @@ const CONTRACT_PRESETS = Object.fromEntries(
   Object.entries(demoContracts).map(([k, v]) => [k, { label: v.label, bytecode: v.bytecode.replace(/^0x/, '') }]),
 )
 
-const inputCls =
-  'w-full px-3 py-2.5 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/40 font-mono'
 
 export default function ContractDeployPage() {
   const [apiUrl] = useState(getApiUrl)
@@ -42,6 +41,7 @@ export default function ContractDeployPage() {
   const [deployResult, setDeployResult] = useState(null)
   const [loading, setLoading] = useState(false)
   const [pendingHash, setPendingHash] = useState(null)
+  const [showBytecode, setShowBytecode] = useState(false)
 
   useEffect(() => {
     const priv = localStorage.getItem('nebula_wallet_priv')
@@ -201,167 +201,107 @@ export default function ContractDeployPage() {
     deployResult?.receipt?.created_address ||
     null
 
+  const TEMPLATES = [
+    { id: 'ERC20', icon: Coins, title: 'Token (ERC20)', desc: '1,000,000 NDT minted to you; transfer and mint.' },
+    { id: 'ERC721', icon: Image, title: 'NFT collection (ERC721)', desc: 'Mint numbered tokens to any address.' },
+    { id: 'Custom', icon: Code2, title: 'Custom bytecode', desc: 'Paste the init code of your own contract.' },
+  ]
+  const pickTemplate = (id) => {
+    setPreset(id)
+    if (id === 'Custom') { setBytecode(''); setShowBytecode(true) }
+  }
+
   return (
-    <div className="relative min-h-[70vh] overflow-hidden animate-fade-in">
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
-      <div className="relative z-10 max-w-3xl mx-auto px-4 py-10">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full glass text-xs text-blue-600 dark:text-cyan-400 mb-4">
-            <Rocket className="w-3.5 h-3.5" />
-            EVM contract deployment
-          </div>
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Deploy Contract</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Submit a contract-creation transaction via the node RPC
-          </p>
-          <a
-            href="/docs/CONTRACT_DEPLOY.md"
-            target="_blank"
-            rel="noreferrer"
-            className="inline-flex items-center gap-1.5 mt-3 text-xs text-violet-500 hover:underline"
-          >
-            <BookOpen className="w-3.5 h-3.5" />
-            How contract deploy works (docs)
-          </a>
-        </div>
+    <Page width="max-w-5xl">
+      <PageHeader icon={Rocket} eyebrow="Deploy" title="Deploy a contract"
+        description="Send a contract-creation transaction to the EVM. Gas is estimated by simulating it on your node."
+        actions={<Link to="/docs" className={buttonClass('secondary', 'sm')}><BookOpen className="w-4 h-4" /> How it works</Link>} />
 
-        {!keyPair ? (
-          <div className="p-6 rounded-2xl glass-strong text-center">
-            <Wallet className="w-10 h-10 mx-auto text-slate-400 mb-3" />
-            <p className="text-sm text-slate-600 dark:text-slate-300 mb-4">
-              You need a funded wallet before deploying contracts.
-            </p>
-            <Link
-              to="/wallet"
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-sm font-medium"
-            >
-              <Wallet className="w-4 h-4" />
-              Open Wallet
-            </Link>
+      {!keyPair ? (
+        <Card className="max-w-xl">
+          <div className="text-center py-6">
+            <Wallet className="w-8 h-8 mx-auto text-slate-400" />
+            <h2 className="mt-3 font-semibold text-slate-900 dark:text-white">You need a funded wallet</h2>
+            <p className="mt-1 text-sm text-slate-500">Deploying costs gas. Create a wallet and get test NBL first.</p>
+            <Link to="/wallet" className={buttonClass('primary', 'md', 'mt-5')}><Wallet className="w-4 h-4" /> Open wallet</Link>
           </div>
-        ) : (
-          <form onSubmit={deploy} className="p-6 rounded-2xl glass-strong space-y-5">
-            <div>
-              <label className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">Deployer</label>
-              <div className="mt-1 flex items-center gap-2">
-                <code className="flex-1 text-xs font-mono text-slate-700 dark:text-slate-200 truncate">{address}</code>
-                <button
-                  type="button"
-                  onClick={() => navigator.clipboard.writeText(address)}
-                  className="p-2 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700/50"
-                >
-                  <Copy className="w-4 h-4 text-slate-400" />
-                </button>
-              </div>
-            </div>
-
-            <div>
-              <label className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">Template</label>
-              <select
-                value={preset}
-                onChange={(e) => setPreset(e.target.value)}
-                className={`mt-1 ${inputCls} font-sans`}
-              >
-                {Object.entries(CONTRACT_PRESETS).map(([key, { label }]) => (
-                  <option key={key} value={key}>
-                    {label}
-                  </option>
+        </Card>
+      ) : (
+        <form onSubmit={deploy} className="grid lg:grid-cols-[1.5fr_1fr] gap-6">
+          <div className="space-y-6">
+            <Card title="1. Choose a template">
+              <div role="radiogroup" className="grid sm:grid-cols-3 gap-3">
+                {TEMPLATES.map(({ id, icon: Icon, title, desc }) => (
+                  <button key={id} type="button" role="radio" aria-checked={preset === id} onClick={() => pickTemplate(id)}
+                    className={`text-left p-4 rounded-xl border transition ${preset === id ? 'border-blue-500 bg-blue-500/5 ring-2 ring-blue-500/20' : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'}`}>
+                    <Icon className={`w-5 h-5 ${preset === id ? 'text-blue-600 dark:text-blue-300' : 'text-slate-400'}`} />
+                    <div className="mt-2 text-sm font-semibold text-slate-900 dark:text-white">{title}</div>
+                    <div className="mt-1 text-xs text-slate-500">{desc}</div>
+                  </button>
                 ))}
-                <option value="Custom">Custom bytecode</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                <FileCode className="w-3.5 h-3.5" />
-                Init bytecode (hex)
-              </label>
-              <textarea
-                value={bytecode}
-                onChange={(e) => {
-                  setPreset('Custom')
-                  setBytecode(e.target.value.replace(/^0x/, ''))
-                }}
-                rows={4}
-                className={`mt-1 ${inputCls} resize-y`}
-                placeholder="6080604052..."
-              />
-            </div>
-
-            <div className="flex gap-3 items-end">
-              <div className="flex-1">
-                <label className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-1">
-                  <Fuel className="w-3.5 h-3.5" />
-                  Gas limit
-                </label>
-                <input
-                  type="number"
-                  value={gasLimit}
-                  onChange={(e) => setGasLimit(Number(e.target.value))}
-                  className={`mt-1 ${inputCls} font-sans`}
-                />
               </div>
-              <button
-                type="button"
-                onClick={estimateGas}
-                className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-600 text-sm text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/50"
-              >
-                <RefreshCw className="w-4 h-4 inline mr-1" />
-                Estimate
+              <button type="button" onClick={() => setShowBytecode((v) => !v)} aria-expanded={showBytecode}
+                className="mt-4 inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 dark:hover:text-white">
+                <FileCode className="w-3.5 h-3.5" /> {showBytecode ? 'Hide' : 'Show'} init bytecode
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform ${showBytecode ? 'rotate-180' : ''}`} />
               </button>
-            </div>
-            {estimatedGas != null && (
-              <p className="text-xs text-emerald-600 dark:text-emerald-400">Estimated: {estimatedGas.toLocaleString()} gas</p>
-            )}
+              {showBytecode && (
+                <textarea value={bytecode} rows={5} aria-label="Init bytecode (hex)" placeholder="6080604052..."
+                  onChange={(e) => { setPreset('Custom'); setBytecode(e.target.value.replace(/^0x/, '')) }}
+                  className={`${textareaClass} mt-3 font-mono text-xs resize-y`} />
+              )}
+            </Card>
 
-            <p className="text-xs text-slate-500 dark:text-slate-400">
-              Clicking Deploy twice with the same nonce re-submits the identical transaction — the node rejects duplicates while the first is still pending. Wait for confirmation before deploying again.
-            </p>
-
-            <button
-              type="submit"
-              disabled={loading || !!pendingHash}
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:opacity-90 text-white font-medium transition-all disabled:opacity-50"
-            >
-              {loading || pendingHash ? 'Deploy in progress...' : 'Deploy Contract'}
-            </button>
-
-            {status && (
-              <div
-                className={`flex items-start gap-2 p-3 rounded-xl text-sm ${
-                  statusType === 'error'
-                    ? 'bg-red-500/10 text-red-600 dark:text-red-400'
-                    : statusType === 'success'
-                      ? 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-                      : 'bg-blue-500/10 text-blue-600 dark:text-blue-400'
-                }`}
-              >
-                {statusType === 'success' ? (
-                  <CheckCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                ) : statusType === 'error' ? (
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                ) : null}
-                <span>{status}</span>
+            <Card title="2. Gas">
+              <div className="flex gap-2 items-end">
+                <Field label="Gas limit" hint={estimatedGas != null ? `Simulated: ${estimatedGas.toLocaleString()} gas (with headroom)` : 'Estimated automatically when you deploy.'} className="flex-1">
+                  <input type="number" value={gasLimit} onChange={(e) => setGasLimit(Number(e.target.value))} className={inputClass} />
+                </Field>
+                <Button variant="secondary" icon={RefreshCw} onClick={estimateGas} className="mb-[22px]">Estimate</Button>
               </div>
-            )}
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card title="3. Deploy">
+              <KeyValue rows={[
+                ['From', `${address.slice(0, 10)}…${address.slice(-6)}`, true],
+                ['Template', TEMPLATES.find((t) => t.id === preset)?.title || preset],
+                ['Code size', `${Math.floor((bytecode || '').length / 2).toLocaleString()} bytes`],
+              ]} />
+              <Button type="submit" icon={Rocket} loading={loading || !!pendingHash} className="w-full mt-5">
+                {loading || pendingHash ? 'Deploying…' : 'Deploy contract'}
+              </Button>
+              <Notice type={statusType === 'error' ? 'err' : statusType === 'success' ? 'ok' : 'info'} className="mt-4">{status}</Notice>
+            </Card>
 
             {deployResult && (
-              <div className="p-4 rounded-xl bg-slate-100/60 dark:bg-slate-700/40 space-y-2">
-                <p className="text-xs text-slate-500">Transaction</p>
-                <code className="text-xs font-mono break-all">{deployResult.hash}</code>
-                {contractAddress && (
-                  <>
-                    <p className="text-xs text-slate-500 mt-2">Contract address</p>
-                    <code className="text-xs font-mono break-all text-emerald-600 dark:text-emerald-400">
-                      {contractAddress}
-                    </code>
-                  </>
-                )}
-              </div>
+              <Card title={contractAddress ? 'Deployed' : 'Transaction'}>
+                <div className="space-y-3 text-sm">
+                  <div>
+                    <div className="text-xs text-slate-500">Transaction</div>
+                    <code className="block font-mono text-xs break-all text-slate-700 dark:text-slate-300">{deployResult.hash}</code>
+                  </div>
+                  {contractAddress && (
+                    <div>
+                      <div className="text-xs text-slate-500">Contract address</div>
+                      <div className="flex items-center gap-2">
+                        <code className="font-mono text-xs break-all text-emerald-600 dark:text-emerald-400">{contractAddress}</code>
+                        <button type="button" onClick={() => navigator.clipboard.writeText(contractAddress)} aria-label="Copy contract address" className="text-slate-400 hover:text-slate-900 dark:hover:text-white"><Copy className="w-3.5 h-3.5" /></button>
+                      </div>
+                    </div>
+                  )}
+                  {contractAddress && (
+                    <Link to={preset === 'ERC721' ? '/nft' : '/contracts'} className="inline-flex items-center gap-1.5 font-medium text-blue-600 dark:text-blue-300 hover:underline">
+                      {preset === 'ERC721' ? 'Mint an NFT' : 'Interact with it'} <ArrowRight className="w-3.5 h-3.5" />
+                    </Link>
+                  )}
+                </div>
+              </Card>
             )}
-          </form>
-        )}
-      </div>
-    </div>
+          </div>
+        </form>
+      )}
+    </Page>
   )
 }

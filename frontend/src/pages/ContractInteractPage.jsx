@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
-import { FileCode, Fuel, Send, AlertCircle, CheckCircle, RefreshCw } from 'lucide-react'
-import PageShell from '../components/PageShell.jsx'
+import { FileCode, Fuel, Send, Eye } from 'lucide-react'
+import { Page, PageHeader, Card, Field, Button, Notice, buttonClass, inputClass, textareaClass } from '../components/ui.jsx'
 import {
   callContract, encodeBalanceOf, estimateGas, loadWalletKeyPair,
   scanDeployedContracts, signAndSubmit, waitForReceipt, walletAddress,
-  decodeUint256, weiToNbl, shorten, SELECTORS,
+  decodeUint256, weiToNbl, shorten, SELECTORS, encodeTransfer, encodeMint, encodeOwnerOf, nblToWei,
 } from '../lib/chain.js'
 
 export default function ContractInteractPage() {
@@ -24,10 +24,26 @@ export default function ContractInteractPage() {
     scanDeployedContracts().then(setContracts)
   }, [])
 
-  const presets = [
-    { label: 'balanceOf', data: () => encodeBalanceOf(from) },
-    { label: 'totalSupply', data: () => SELECTORS.totalSupply },
-  ]
+  // Common ERC20 / ERC721 calls: pick one, fill its arguments, and the
+  // calldata is encoded for you.
+  const [fn, setFn] = useState('balanceOf')
+  const [argA, setArgA] = useState('')
+  const [argB, setArgB] = useState('')
+  const FUNCTIONS = {
+    balanceOf: { args: [['Holder', 'address']], encode: () => encodeBalanceOf(argA || from), read: true },
+    totalSupply: { args: [], encode: () => SELECTORS.totalSupply, read: true },
+    transfer: { args: [['To', 'address'], ['Amount (tokens)', 'number']], encode: () => encodeTransfer(argA, nblToWei(argB || '0')) },
+    mint: { args: [['To', 'address'], ['Token id / amount', 'number']], encode: () => encodeMint(argA || from, argB || '1') },
+    ownerOf: { args: [['Token id', 'number']], encode: () => encodeOwnerOf(argA || '1'), read: true },
+  }
+  const presets = Object.keys(FUNCTIONS).map((label) => ({ label, data: FUNCTIONS[label].encode }))
+  const chooseFn = (name) => {
+    setFn(name)
+    setArgA(''); setArgB('')
+    setEstimate(null); setReadResult(null)
+    try { setCalldata(FUNCTIONS[name].encode()) } catch { /* filled in later */ }
+  }
+  const applyArgs = () => { try { setCalldata(FUNCTIONS[fn].encode()) } catch (e) { setStatus(e.message); setStatusType('err') } }
 
   const runEstimate = async () => {
     setStatus('')
@@ -95,101 +111,82 @@ export default function ContractInteractPage() {
     }
   }
 
+  const spec = FUNCTIONS[fn]
+
   return (
-    <PageShell>
-      <div className="max-w-2xl mx-auto px-4 py-10 animate-fade-in">
-        <header className="text-center mb-8">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 to-blue-600 flex items-center justify-center text-white shadow-lg">
-              <FileCode className="w-6 h-6" />
-            </div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">Contract Interaction</h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400">Read via <code className="font-mono text-xs">POST /call_contract</code> · write via signed txs.</p>
-        </header>
+    <Page width="max-w-5xl">
+      <PageHeader icon={FileCode} eyebrow="Contracts" title="Interact with a contract"
+        description="Read with a free simulated call, or write with a signed transaction from your wallet."
+        actions={<Link to="/deploy" className={buttonClass('secondary', 'sm')}>Deploy a contract</Link>} />
 
-        {contracts.length > 0 && (
-          <div className="glass rounded-2xl p-4 mb-4">
-            <p className="text-xs text-slate-500 mb-2">Deployed contracts</p>
-            <div className="flex flex-wrap gap-2">
-              {contracts.map((c) => (
-                <button key={c.address} type="button" onClick={() => setContract(c.address)}
-                  className="text-xs px-3 py-1 rounded-lg bg-indigo-500/15 text-indigo-600 font-mono">
-                  {c.name || shorten(c.address)}
-                </button>
-              ))}
-            </div>
+      <div className="grid lg:grid-cols-[1fr_1.3fr] gap-6">
+        <Card title="Target">
+          <div className="space-y-4">
+            {contracts.length > 0 && (
+              <div>
+                <div className="text-xs font-medium text-slate-600 dark:text-slate-300 mb-1.5">Your contracts</div>
+                <div className="flex flex-wrap gap-2">
+                  {contracts.map((c) => (
+                    <button key={c.address} type="button" onClick={() => setContract(c.address)}
+                      className={`h-8 px-3 rounded-lg text-xs font-medium border transition ${contract === c.address ? 'border-blue-500/50 bg-blue-500/10 text-blue-700 dark:text-blue-300' : 'border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white'}`}>
+                      {c.name || shorten(c.address)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            <Field label="Contract address">
+              <input value={contract} onChange={(e) => setContract(e.target.value)} placeholder="0x…" className={`${inputClass} font-mono`} />
+            </Field>
+            <Field label="Caller" hint="Your wallet by default.">
+              <input value={from} onChange={(e) => setFrom(e.target.value)} placeholder="0x…" className={`${inputClass} font-mono`} />
+            </Field>
+            <Field label="Value (wei)">
+              <input value={value} onChange={(e) => setValue(e.target.value)} className={`${inputClass} font-mono`} />
+            </Field>
           </div>
-        )}
+        </Card>
 
-        <div className="glass-strong rounded-2xl p-6 space-y-4">
-          <div>
-            <label className="text-xs text-slate-500">Contract address</label>
-            <input value={contract} onChange={(e) => setContract(e.target.value)} placeholder="0x…"
-              className="w-full mt-1 px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">From (caller)</label>
-            <input value={from} onChange={(e) => setFrom(e.target.value)} placeholder="0x…"
-              className="w-full mt-1 px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">Calldata (hex)</label>
-            <textarea value={calldata} onChange={(e) => setCalldata(e.target.value)} rows={3}
-              className="w-full mt-1 px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-            <div className="flex flex-wrap gap-2 mt-2">
-              {presets.map((p) => (
-                <button key={p.label} type="button" onClick={() => setCalldata(p.data())}
-                  className="text-xs px-3 py-1 rounded-lg bg-slate-200/80 dark:bg-slate-700/60">
-                  {p.label}
-                </button>
-              ))}
+        <Card title="Call">
+          <div className="space-y-4">
+            <div>
+              <div className="text-xs font-medium text-slate-600 dark:text-slate-300 mb-1.5">Function</div>
+              <div className="flex flex-wrap gap-2">
+                {presets.map((p) => (
+                  <button key={p.label} type="button" onClick={() => chooseFn(p.label)}
+                    className={`h-8 px-3 rounded-lg font-mono text-xs border transition ${fn === p.label ? 'border-blue-500/50 bg-blue-500/10 text-blue-700 dark:text-blue-300' : 'border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white'}`}>
+                    {p.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">Value (wei)</label>
-            <input value={value} onChange={(e) => setValue(e.target.value)}
-              className="w-full mt-1 px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-          </div>
-
-          <div className="grid sm:grid-cols-3 gap-2">
-            <button type="button" onClick={runRead}
-              className="py-3 rounded-xl border border-indigo-500/50 text-indigo-600 font-semibold text-sm">
-              Read (call)
-            </button>
-            <button type="button" onClick={runEstimate}
-              className="py-3 rounded-xl border border-indigo-500/50 text-indigo-600 font-semibold text-sm flex items-center justify-center gap-1">
-              <Fuel className="w-4 h-4" /> Estimate
-            </button>
-            <button type="button" disabled={submitting} onClick={sendWrite}
-              className="py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-blue-600 text-white font-semibold text-sm flex items-center justify-center gap-1 disabled:opacity-50">
-              {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-              Write
-            </button>
-          </div>
-
-          {readResult && (
-            <div className="text-xs font-mono bg-slate-100 dark:bg-slate-900/50 rounded-xl p-3 break-all">
-              {readResult}
+            {spec?.args.length > 0 && (
+              <div className="grid sm:grid-cols-2 gap-3 items-end">
+                {spec.args.map(([label, kind], i) => (
+                  <Field key={label} label={label}>
+                    <input value={i === 0 ? argA : argB} onChange={(e) => (i === 0 ? setArgA : setArgB)(e.target.value)}
+                      placeholder={kind === 'address' ? '0x…' : '0'} className={`${inputClass} ${kind === 'address' ? 'font-mono' : ''}`} />
+                  </Field>
+                ))}
+                <Button variant="secondary" onClick={applyArgs} className="sm:col-span-2">Encode arguments</Button>
+              </div>
+            )}
+            <Field label="Calldata (hex)">
+              <textarea value={calldata} onChange={(e) => setCalldata(e.target.value)} rows={3} className={`${textareaClass} font-mono text-xs`} />
+            </Field>
+            <div className="grid sm:grid-cols-3 gap-2">
+              <Button variant="secondary" icon={Eye} onClick={runRead}>Read (call)</Button>
+              <Button variant="secondary" icon={Fuel} onClick={runEstimate}>Estimate</Button>
+              <Button icon={Send} loading={submitting} onClick={sendWrite}>Write</Button>
             </div>
-          )}
-          {estimate && (
-            <div className="text-xs font-mono bg-slate-100 dark:bg-slate-900/50 rounded-xl p-3">
-              gas: {estimate.estimated_gas} · cost ≈ {estimate.total_cost_estimate} wei
-            </div>
-          )}
-          {status && (
-            <p className={`text-sm flex items-center gap-2 ${statusType === 'err' ? 'text-red-500' : 'text-emerald-600'}`}>
-              {statusType === 'err' ? <AlertCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
-              {status}
-            </p>
-          )}
-        </div>
-
-        <p className="text-center text-xs text-slate-400 mt-6">
-          Deploy at <Link to="/deploy" className="text-indigo-500 underline">/deploy</Link>
-        </p>
+            {readResult && <pre className="text-xs font-mono bg-slate-50 dark:bg-slate-950/50 border border-slate-100 dark:border-slate-800 rounded-xl p-3 whitespace-pre-wrap break-all">{readResult}</pre>}
+            {estimate && !estimate.error && (
+              <p className="text-xs text-slate-500">Gas {Number(estimate.estimated_gas).toLocaleString()} · cost ≈ {weiToNbl(String(estimate.total_cost_estimate))} NBL</p>
+            )}
+            <Notice type={statusType === 'err' ? 'err' : 'ok'}>{status}</Notice>
+          </div>
+        </Card>
       </div>
-    </PageShell>
+    </Page>
   )
 }
