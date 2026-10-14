@@ -159,9 +159,11 @@ mod tests {
                 signature: vec![],
                 gas_used: 0,
                 base_fee: 0,
+                last_commit_hash: [0; 32],
             },
             extrinsics: vec![],
             commit: None,
+            last_commit: None,
         }
     }
 

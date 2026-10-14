@@ -25,6 +25,10 @@ pub(super) async fn handle_bridge_status(
             .unwrap_or(0)
     };
     let processed_mints = bridge_minted.lock().await.len();
+    // Mints need the genesis relayer set; validators are not relayers.
+    let relayers_ready = crate::bridge_mint::load_config(&state_trie)
+        .await
+        .is_some_and(|c| c.threshold > 0 && !c.relayers.is_empty());
     let queue = bridge_unlock_queue.lock().await;
     let processed_unlocks = queue.processed_count();
     let pending_unlocks = queue.pending().len();
@@ -34,7 +38,7 @@ pub(super) async fn handle_bridge_status(
         vault_address: deterministic_address("nebula-bridge-vault-v1"),
         defi_pool_address: deterministic_address("nebula-defi-pool-v1"),
         validators_count,
-        relayers_ready: validators_count > 0,
+        relayers_ready,
         eth_rpc_configured,
         processed_mints,
         processed_unlocks,
@@ -76,11 +80,77 @@ pub(super) async fn handle_bridge_unlock_ack(
     }
 }
 
+/// keccak256("TokensLocked(uint64,address,address,uint256,bytes32)")
+const TOKENS_LOCKED_TOPIC: &str =
+    "0x1b3a88149ad03e75e48758d7d1b76a639a6883d27b6949badde69a6033bd90de";
+
+/// A native-ETH lock read from a `TokensLocked` event of the bridge contract.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct EthLock {
+    pub amount: u128,
+    pub recipient: [u8; 20],
+}
+
+/// Find the native-ETH `TokensLocked` event emitted by `bridge` in a receipt.
+/// The amount and recipient a relayer attests to come from here, never from
+/// the mint request.
+pub(super) fn parse_eth_lock(receipt: &serde_json::Value, bridge: &str) -> Result<EthLock, String> {
+    if receipt.get("status").and_then(|s| s.as_str()) != Some("0x1") {
+        return Err("ETH transaction failed".into());
+    }
+    let bridge = bridge.trim().to_lowercase();
+    let logs = receipt
+        .get("logs")
+        .and_then(|l| l.as_array())
+        .ok_or("ETH receipt has no logs")?;
+    for log in logs {
+        let from_bridge = log
+            .get("address")
+            .and_then(|a| a.as_str())
+            .is_some_and(|a| a.to_lowercase() == bridge);
+        let topics: Vec<&str> = log
+            .get("topics")
+            .and_then(|t| t.as_array())
+            .map(|t| t.iter().filter_map(|x| x.as_str()).collect())
+            .unwrap_or_default();
+        if !from_bridge || topics.len() != 4 || topics[0].to_lowercase() != TOKENS_LOCKED_TOPIC {
+            continue;
+        }
+        // topics: [sig, messageId, user, token]; token must be address(0).
+        let token = hex::decode(topics[3].trim_start_matches("0x")).unwrap_or_default();
+        if token.len() != 32 || token.iter().any(|b| *b != 0) {
+            return Err("only native ETH locks can be bridged".into());
+        }
+        // data: amount (uint256) ‖ recipient (bytes32, address left-padded)
+        let data = log
+            .get("data")
+            .and_then(|d| d.as_str())
+            .and_then(|d| hex::decode(d.trim_start_matches("0x")).ok())
+            .filter(|d| d.len() == 64)
+            .ok_or("malformed TokensLocked data")?;
+        if data[..16].iter().any(|b| *b != 0) {
+            return Err("locked amount exceeds u128".into());
+        }
+        let mut amount = [0u8; 16];
+        amount.copy_from_slice(&data[16..32]);
+        if data[32..44].iter().any(|b| *b != 0) {
+            return Err("lock recipient is not a 20-byte address".into());
+        }
+        let mut recipient = [0u8; 20];
+        recipient.copy_from_slice(&data[44..64]);
+        return Ok(EthLock {
+            amount: u128::from_be_bytes(amount),
+            recipient,
+        });
+    }
+    Err("no TokensLocked event from the bridge contract in this transaction".into())
+}
+
 pub(super) async fn verify_eth_lock_tx(
     eth_rpc: &str,
     tx_hash: &str,
-    bridge_address: Option<&str>,
-) -> Result<bool, String> {
+    bridge_address: &str,
+) -> Result<EthLock, String> {
     let body = serde_json::json!({
         "jsonrpc": "2.0",
         "method": "eth_getTransactionReceipt",
@@ -104,38 +174,16 @@ pub(super) async fn verify_eth_lock_tx(
     if receipt.is_null() {
         return Err("ETH transaction not yet mined".into());
     }
-    let status = receipt
-        .get("status")
-        .and_then(|s| s.as_str())
-        .unwrap_or("0x0");
-    if status != "0x1" {
-        return Err("ETH transaction failed".into());
-    }
-    if let Some(bridge) = bridge_address {
-        let to = receipt
-            .get("to")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_lowercase();
-        if !to.is_empty()
-            && to != bridge.trim_start_matches("0x").to_lowercase()
-            && to != bridge.to_lowercase()
-        {
-            // also accept logs from bridge contract
-            let logs = receipt.get("logs").and_then(|l| l.as_array());
-            if logs.map(|l| l.is_empty()).unwrap_or(true) {
-                return Err("Transaction not sent to bridge contract".into());
-            }
-        }
-    }
-    Ok(true)
+    parse_eth_lock(receipt, bridge_address)
 }
 
-/// State key prefix recording ETH lock txs that were already minted, so the
-/// replay check survives restarts.
-/// Under `local:`, so it is node-local bookkeeping outside the state root.
-pub(super) const BRIDGE_MINTED_PREFIX: &[u8] = b"local:bridge:minted:";
-
+/// Dev-mode relayer: verifies the ETH lock against the node's own ETH
+/// endpoint, attests to it with the dev key (the devnet genesis lists it as a
+/// 1-of-1 relayer) and submits a `bridge_mint` transaction. The mint itself
+/// happens in consensus, which checks the attestations against the genesis
+/// relayer set and records the ETH tx hash so it can never be minted twice.
+/// With a multi-relayer set, relayers sign `bridge_mint::attestation_message`
+/// themselves and anyone submits the combined transaction.
 pub(super) async fn handle_bridge_mint(
     req: BridgeMintRequest,
     chain_store: Arc<ChainStore>,
@@ -148,30 +196,21 @@ pub(super) async fn handle_bridge_mint(
         })));
     };
     let recipient = req.recipient.trim().to_lowercase();
-    if hex::decode(recipient.trim_start_matches("0x"))
-        .map(|b| b.len() != 20)
-        .unwrap_or(true)
-    {
-        return Ok(warp::reply::json(&serde_json::json!({
-            "error": "Invalid recipient address",
-        })));
-    }
-
-    let amount: u128 = req
-        .amount
-        .as_ref()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10_000_000_000_000_000_000u128);
-    let Ok(amount_u64) = u64::try_from(amount) else {
-        return Ok(warp::reply::json(&serde_json::json!({
-            "error": "Amount exceeds the per-transaction limit (u64 wei, ~18.4 tokens)",
-        })));
-    };
     let Some(recipient_bytes) = parse_address(&recipient) else {
         return Ok(warp::reply::json(&serde_json::json!({
             "error": "Invalid recipient address",
         })));
     };
+    let amount: u128 = req
+        .amount
+        .as_ref()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000_000_000_000_000_000u128);
+    if amount == 0 {
+        return Ok(warp::reply::json(
+            &serde_json::json!({ "error": "Amount must be positive" }),
+        ));
+    }
 
     // Every mint must be backed by an Ethereum lock tx; there is no free mint.
     let Some(eth_hash) = req.eth_tx_hash.as_deref() else {
@@ -180,68 +219,102 @@ pub(super) async fn handle_bridge_mint(
         })));
     };
     let eth_hash_lower = eth_hash.trim().to_lowercase();
-    let replay_key = [BRIDGE_MINTED_PREFIX, eth_hash_lower.as_bytes()].concat();
+    let Some(eth_hash_bytes) = hex::decode(eth_hash_lower.trim_start_matches("0x"))
+        .ok()
+        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+    else {
+        return Ok(warp::reply::json(
+            &serde_json::json!({ "error": "Invalid eth_tx_hash" }),
+        ));
+    };
+
+    // Hold the lock across verify + submit so two concurrent requests for the
+    // same ETH tx cannot both submit (consensus would reject the second).
+    let mut pending = bridge_minted.lock().await;
+    if crate::bridge_mint::already_minted(&chain_store, &eth_hash_bytes)
+        || pending.contains(&eth_hash_lower)
     {
-        // Hold the lock across verify + record so two concurrent requests for
-        // the same ETH tx cannot both mint.
-        let mut minted = bridge_minted.lock().await;
-        let persisted = matches!(chain_store.get_state(&replay_key), Ok(Some(_)));
-        if persisted || minted.contains(&eth_hash_lower) {
-            return Ok(warp::reply::json(&serde_json::json!({
-                "error": "ETH lock already processed",
-            })));
-        }
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "ETH lock already processed",
+        })));
+    }
 
-        // Only the node's own ETH endpoint is trusted: a caller-supplied URL
-        // could point at a fake node that reports any tx as a successful lock.
-        if req.eth_rpc_url.is_some() {
-            tracing::debug!("Ignoring caller-supplied eth_rpc_url for bridge mint");
-        }
-        let eth_rpc = std::env::var("ETH_RPC_URL").unwrap_or_default();
-        if eth_rpc.is_empty() {
-            return Ok(warp::reply::json(&serde_json::json!({
-                "error": "ETH_RPC_URL not configured on the node",
-            })));
-        }
-        let bridge_address = std::env::var("ETH_BRIDGE_ADDRESS")
-            .ok()
-            .or(req.eth_bridge_address.clone());
+    // Only the node's own ETH endpoint is trusted: a caller-supplied URL
+    // could point at a fake node that reports any tx as a successful lock.
+    if req.eth_rpc_url.is_some() {
+        tracing::debug!("Ignoring caller-supplied eth_rpc_url for bridge mint");
+    }
+    let eth_rpc = std::env::var("ETH_RPC_URL").unwrap_or_default();
+    if eth_rpc.is_empty() {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "ETH_RPC_URL not configured on the node",
+        })));
+    }
+    // The bridge contract address is node configuration too: a caller-chosen
+    // contract could emit a fake TokensLocked event.
+    if req.eth_bridge_address.is_some() {
+        tracing::debug!("Ignoring caller-supplied eth_bridge_address for bridge mint");
+    }
+    let Ok(bridge_address) = std::env::var("ETH_BRIDGE_ADDRESS") else {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "ETH_BRIDGE_ADDRESS not configured on the node",
+        })));
+    };
+    let lock = match verify_eth_lock_tx(&eth_rpc, &eth_hash_lower, &bridge_address).await {
+        Ok(lock) => lock,
+        Err(e) => return Ok(warp::reply::json(&serde_json::json!({ "error": e }))),
+    };
+    if lock.recipient != recipient_bytes || req.amount.is_some() && lock.amount != amount {
+        return Ok(warp::reply::json(&serde_json::json!({
+            "error": "recipient/amount do not match the Ethereum lock",
+            "locked_amount": lock.amount.to_string(),
+            "locked_recipient": format!("0x{}", hex::encode(lock.recipient)),
+        })));
+    }
+    let amount = lock.amount;
 
-        if let Err(e) =
-            verify_eth_lock_tx(&eth_rpc, &eth_hash_lower, bridge_address.as_deref()).await
-        {
-            return Ok(warp::reply::json(&serde_json::json!({ "error": e })));
+    let msg = crate::bridge_mint::attestation_message(
+        signer.chain_id,
+        &eth_hash_bytes,
+        &recipient_bytes,
+        amount,
+    );
+    let attestation = {
+        use ed25519_dalek::Signer;
+        serde_json::json!({
+            "relayer": hex::encode(signer.key.verifying_key().to_bytes()),
+            "signature": hex::encode(signer.key.sign(&msg).to_bytes()),
+        })
+    };
+    let payload = serde_json::json!({
+        "action": "bridge_mint",
+        "eth_tx_hash": format!("0x{}", hex::encode(eth_hash_bytes)),
+        "recipient": format!("0x{}", hex::encode(recipient_bytes)),
+        "amount": amount.to_string(),
+        "attestations": [attestation],
+    });
+    let payload = match serde_json::to_vec(&payload) {
+        Ok(p) => p,
+        Err(e) => {
+            return Ok(warp::reply::json(
+                &serde_json::json!({ "error": e.to_string() }),
+            ));
         }
-
-        if let Err(e) = chain_store.put_state(&replay_key, b"1") {
-            return Ok(warp::reply::json(&serde_json::json!({
-                "error": format!("Failed to record ETH lock: {}", e),
-            })));
+    };
+    match signer.submit(None, 0, payload).await {
+        Ok(hash) => {
+            pending.insert(eth_hash_lower);
+            Ok(warp::reply::json(&serde_json::json!({
+                "status": "submitted",
+                "recipient": format!("0x{}", hex::encode(recipient_bytes)),
+                "amount": amount.to_string(),
+                "hash": hash,
+                "eth_tx_hash": req.eth_tx_hash,
+            })))
         }
-        // Paid from the genesis-funded dev account as an ordinary transfer,
-        // so every node applies it (crediting the balance directly changed
-        // only this node's state).
-        match signer
-            .submit(Some(recipient_bytes), amount_u64, vec![])
-            .await
-        {
-            Ok(hash) => {
-                minted.insert(eth_hash_lower);
-                Ok(warp::reply::json(&serde_json::json!({
-                    "status": "minted",
-                    "recipient": format!("0x{}", hex::encode(recipient_bytes)),
-                    "amount": amount.to_string(),
-                    "hash": hash,
-                    "eth_tx_hash": req.eth_tx_hash,
-                })))
-            }
-            Err(e) => {
-                let _ = chain_store.delete_state(&replay_key);
-                Ok(warp::reply::json(&serde_json::json!({
-                    "error": format!("Mint transfer failed: {}", e),
-                })))
-            }
-        }
+        Err(e) => Ok(warp::reply::json(&serde_json::json!({
+            "error": format!("Mint transaction failed: {}", e),
+        }))),
     }
 }
 
@@ -439,4 +512,47 @@ pub(super) async fn verify_eth_rpc_reachable(eth_rpc: &str) -> Result<bool, Stri
         .await
         .map_err(|e| format!("Invalid ETH RPC response: {e}"))?;
     Ok(!val.get("result").map(|r| r.is_null()).unwrap_or(true))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BRIDGE: &str = "0x5fbdb2315678afecb367f032d93f642f64180aa3";
+
+    fn receipt(address: &str, token: &str, amount_hex: &str, recipient: &str) -> serde_json::Value {
+        serde_json::json!({
+            "status": "0x1",
+            "logs": [{
+                "address": address,
+                "topics": [
+                    TOKENS_LOCKED_TOPIC,
+                    format!("0x{:064x}", 7),
+                    format!("0x{:064x}", 1),
+                    token,
+                ],
+                "data": format!("0x{:0>64}{:0>64}", amount_hex, recipient),
+            }],
+        })
+    }
+
+    #[test]
+    fn eth_lock_comes_from_the_bridge_event() {
+        let zero = format!("0x{}", "0".repeat(64));
+        let recip = "ab".repeat(20);
+        let lock =
+            parse_eth_lock(&receipt(BRIDGE, &zero, "de0b6b3a7640000", &recip), BRIDGE).unwrap();
+        assert_eq!(lock.amount, 1_000_000_000_000_000_000);
+        assert_eq!(lock.recipient, [0xab; 20]);
+
+        // Another contract emitting the same event, an ERC20 lock, or a
+        // failed transaction is not a lock.
+        let other = "0x1111111111111111111111111111111111111111";
+        assert!(parse_eth_lock(&receipt(other, &zero, "1", &recip), BRIDGE).is_err());
+        let usdc = format!("0x{:0>64}", "e7f1725e7734ce288f8367e1bb143e90bb3f0512");
+        assert!(parse_eth_lock(&receipt(BRIDGE, &usdc, "1", &recip), BRIDGE).is_err());
+        let mut failed = receipt(BRIDGE, &zero, "1", &recip);
+        failed["status"] = serde_json::json!("0x0");
+        assert!(parse_eth_lock(&failed, BRIDGE).is_err());
+    }
 }

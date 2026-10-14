@@ -376,7 +376,8 @@ impl BlockExecutor {
             // Governance and staking actions are applied afterwards by
             // governance_store::apply_extrinsics (they need the trie).
             let is_governance = ChainGovernance::is_governance_payload(body)
-                || crate::governance_store::is_staking_payload(body);
+                || crate::governance_store::is_staking_payload(body)
+                || crate::bridge_mint::is_bridge_mint_payload(body);
             let is_wasm = body.starts_with(execution::WASM_TX_PREFIX);
             let is_wasm_deploy = body.starts_with(execution::WASM_DEPLOY_PREFIX);
             if is_governance || is_wasm || is_wasm_deploy {
@@ -662,11 +663,26 @@ impl BlockProducer {
         header.extrinsics_root = extrinsics_root;
         header.state_root = state_root;
 
+        // The parent's commit certificate (CometBFT's LastCommit): pays the
+        // validators that actually finalized it. Genesis has none.
+        let last_commit = if parent.header.slot == 0 {
+            None
+        } else {
+            Some(
+                parent
+                    .commit
+                    .clone()
+                    .ok_or("parent block has no commit certificate")?,
+            )
+        };
+        header.last_commit_hash = last_commit.as_ref().map(|c| c.hash()).unwrap_or([0; 32]);
+
         // Step 7: Sign the header
         let header_hash = header.hash();
         header.signature = self.signing_key.sign(&header_hash);
 
-        let block = Block::new(header, valid_transactions.clone());
+        let mut block = Block::new(header, valid_transactions.clone());
+        block.last_commit = last_commit;
 
         // The caller (node main loop) submits the block to the BFT engine via
         // create_proposal(), which broadcasts the proposal and vote. Returning
@@ -788,6 +804,7 @@ pub fn compute_extrinsics_root(transactions: &[Transaction]) -> [u8; 32] {
 pub fn validate_block(
     block: &Block,
     parent: &Block,
+    parent_validators: &[consensus::ValidatorInfo],
     expected_slot: u64,
     expected_state_root: &[u8; 32],
     chain_id: u64,
@@ -803,6 +820,7 @@ pub fn validate_block(
     if header.parent_hash != parent.hash() {
         return Err("parent hash does not match our tip".into());
     }
+    verify_last_commit(block, parent, parent_validators)?;
     if &header.state_root != expected_state_root {
         return Err(format!(
             "state root {} != ours {}",
@@ -834,6 +852,36 @@ pub fn validate_block(
             .map_err(|e| format!("tx {}: {}", hex::encode(&tx.hash()[..8]), e))?;
     }
     Ok(())
+}
+
+/// Check `block.last_commit` — the precommits that finalized `parent` — and
+/// return the validators that signed it, sorted (the vote-reward recipients).
+///
+/// `parent_validators` must be the set that certified `parent` (BFT height
+/// `parent.slot + 1`). The header must commit to the certificate, and every
+/// block whose parent is not genesis must carry one with a 2/3+ quorum; a
+/// proposer can choose which precommits to include but not forge or omit
+/// enough of them to fall under quorum.
+pub fn verify_last_commit(
+    block: &Block,
+    parent: &Block,
+    parent_validators: &[consensus::ValidatorInfo],
+) -> Result<Vec<Vec<u8>>, String> {
+    if block.header.last_commit_hash != block.expected_last_commit_hash() {
+        return Err("header does not commit to the block's last commit".into());
+    }
+    match (&block.last_commit, parent.header.slot) {
+        (None, 0) => Ok(Vec::new()),
+        (Some(_), 0) => Err("block on genesis must not carry a last commit".into()),
+        (None, _) => Err("block is missing the parent's commit (last_commit)".into()),
+        (Some(cert), slot) => {
+            let mut signers = cert
+                .verify(&parent.hash(), slot.saturating_add(1), parent_validators)
+                .map_err(|e| format!("invalid last commit: {}", e))?;
+            signers.sort();
+            Ok(signers)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -969,6 +1017,7 @@ mod tests {
             header: Header::new([0u8; 32], 1),
             extrinsics: vec![valid.clone(), forged],
             commit: None,
+            last_commit: None,
         };
         let receipts = executor.execute_and_commit(&block).unwrap();
 
@@ -996,6 +1045,7 @@ mod tests {
             header: Header::new([0u8; 32], 1),
             extrinsics: vec![first.clone(), first.clone(), second],
             commit: None,
+            last_commit: None,
         };
         let receipts = executor.execute_and_commit(&block).unwrap();
         assert!(receipts[0].success);
@@ -1006,6 +1056,7 @@ mod tests {
             header: Header::new([0u8; 32], 2),
             extrinsics: vec![first],
             commit: None,
+            last_commit: None,
         };
         let receipts = executor.execute_and_commit(&later).unwrap();
         assert!(!receipts[0].success, "replay in a later block");
@@ -1028,18 +1079,97 @@ mod tests {
         assert_eq!(block.header.state_root, TEST_ROOT);
         assert_eq!(block.extrinsics.len(), 1);
 
-        let ok = validate_block(&block, &parent, 0, &TEST_ROOT, 1, 30_000_000);
+        let ok = validate_block(&block, &parent, &[], 0, &TEST_ROOT, 1, 30_000_000);
         assert!(ok.is_ok(), "{:?}", ok);
 
         // A node whose state differs rejects it.
-        assert!(validate_block(&block, &parent, 0, &[8u8; 32], 1, 30_000_000).is_err());
+        assert!(validate_block(&block, &parent, &[], 0, &[8u8; 32], 1, 30_000_000).is_err());
 
         // Wrong slot / chain id / tampered tx list.
-        assert!(validate_block(&block, &parent, 1, &TEST_ROOT, 1, 30_000_000).is_err());
-        assert!(validate_block(&block, &parent, 0, &TEST_ROOT, 2, 30_000_000).is_err());
+        assert!(validate_block(&block, &parent, &[], 1, &TEST_ROOT, 1, 30_000_000).is_err());
+        assert!(validate_block(&block, &parent, &[], 0, &TEST_ROOT, 2, 30_000_000).is_err());
         let mut extra = block.clone();
         extra.extrinsics.push(signed_transfer(4, 0));
-        assert!(validate_block(&extra, &parent, 0, &TEST_ROOT, 1, 30_000_000).is_err());
+        assert!(validate_block(&extra, &parent, &[], 0, &TEST_ROOT, 1, 30_000_000).is_err());
+    }
+
+    fn precommit_cert(
+        keys: &[ed25519_dalek::SigningKey],
+        height: u64,
+        block_hash: [u8; 32],
+    ) -> common::consensus_types::CommitCertificate {
+        use common::consensus_types::{CommitCertificate, Step, Vote};
+        use ed25519_dalek::Signer;
+        let precommits = keys
+            .iter()
+            .map(|k| {
+                let mut v = Vote {
+                    height,
+                    round: 0,
+                    step: Step::Precommit,
+                    block_hash: Some(block_hash),
+                    signature: vec![],
+                    voter: k.verifying_key().to_bytes().to_vec(),
+                };
+                v.signature = k.sign(&v.signing_bytes()).to_bytes().to_vec();
+                v
+            })
+            .collect();
+        CommitCertificate {
+            height,
+            round: 0,
+            block_hash,
+            precommits,
+        }
+    }
+
+    #[test]
+    fn last_commit_must_be_committed_and_carry_a_quorum() {
+        let keys: Vec<_> = (10u8..14)
+            .map(|i| ed25519_dalek::SigningKey::from_bytes(&[i; 32]))
+            .collect();
+        let set: Vec<ValidatorInfo> = keys
+            .iter()
+            .map(|k| ValidatorInfo {
+                public_key: k.verifying_key().to_bytes().to_vec(),
+                stake: 100,
+                slashed: false,
+            })
+            .collect();
+        let parent = Block::new(Header::new([1; 32], 3), vec![]);
+        let with_cert = |cert: Option<common::consensus_types::CommitCertificate>| {
+            let mut b = Block::new(Header::new(parent.hash(), 4), vec![]);
+            b.last_commit = cert;
+            b.header.last_commit_hash = b.expected_last_commit_hash();
+            b
+        };
+
+        // 3 of 4 signed: valid, and those 3 are the reward recipients.
+        let block = with_cert(Some(precommit_cert(&keys[..3], 4, parent.hash())));
+        let signers = verify_last_commit(&block, &parent, &set).unwrap();
+        let mut expected: Vec<Vec<u8>> = set[..3].iter().map(|v| v.public_key.clone()).collect();
+        expected.sort();
+        assert_eq!(signers, expected);
+
+        // A relayer swapping the certificate breaks the header commitment.
+        let mut swapped = block.clone();
+        swapped.last_commit = Some(precommit_cert(&keys[1..], 4, parent.hash()));
+        assert!(verify_last_commit(&swapped, &parent, &set).is_err());
+
+        // 2 of 4 is not a quorum; a missing or misdirected one is rejected.
+        let short = with_cert(Some(precommit_cert(&keys[..2], 4, parent.hash())));
+        assert!(verify_last_commit(&short, &parent, &set).is_err());
+        assert!(verify_last_commit(&with_cert(None), &parent, &set).is_err());
+        let wrong = with_cert(Some(precommit_cert(&keys[..3], 4, [9; 32])));
+        assert!(verify_last_commit(&wrong, &parent, &set).is_err());
+
+        // On genesis there is nothing to certify.
+        let genesis = Block::genesis();
+        let mut first = Block::new(Header::new(genesis.hash(), 1), vec![]);
+        assert_eq!(verify_last_commit(&first, &genesis, &[]).unwrap().len(), 0);
+        first.last_commit = Some(precommit_cert(&keys[..3], 1, genesis.hash()));
+        first.header.last_commit_hash = first.expected_last_commit_hash();
+        assert!(verify_last_commit(&first, &genesis, &set).is_err());
     }
 
     #[test]
@@ -1056,7 +1186,7 @@ mod tests {
         );
         header.extrinsics_root = compute_extrinsics_root(std::slice::from_ref(&forged));
         let block = Block::new(header, vec![forged]);
-        let err = validate_block(&block, &parent, 0, &TEST_ROOT, 1, 30_000_000).unwrap_err();
+        let err = validate_block(&block, &parent, &[], 0, &TEST_ROOT, 1, 30_000_000).unwrap_err();
         assert!(err.contains("Invalid signature"), "{}", err);
     }
 

@@ -24,6 +24,10 @@ pub struct Header {
     pub signature: Signature,
     pub gas_used: u64, // Total gas used in block
     pub base_fee: u64, // Base fee per gas (EIP-1559)
+    /// Hash of `Block::last_commit` (zero when there is none), so the
+    /// previous block's precommits are fixed by this header's signature.
+    #[serde(default)]
+    pub last_commit_hash: Hash,
 }
 
 impl Header {
@@ -38,6 +42,7 @@ impl Header {
             signature: vec![],
             gas_used: 0,
             base_fee: 1_000_000_000, // 1 Gwei default
+            last_commit_hash: [0; 32],
         }
     }
 
@@ -54,6 +59,7 @@ impl Header {
         hasher.update(self.validator_set_id.to_le_bytes());
         hasher.update(self.gas_used.to_le_bytes());
         hasher.update(self.base_fee.to_le_bytes());
+        hasher.update(self.last_commit_hash);
         hasher.finalize().into()
     }
 }
@@ -189,6 +195,14 @@ pub struct Block {
     /// attached when the block is finalized so sync peers can verify finality.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commit: Option<crate::consensus_types::CommitCertificate>,
+    /// The precommits that finalized the parent block (CometBFT's
+    /// LastCommit), chosen by the proposer and fixed by
+    /// `header.last_commit_hash`. Every node pays vote rewards from this, so
+    /// rewards follow actual participation without depending on which
+    /// precommits each node collected locally. `None` only when the parent
+    /// is genesis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_commit: Option<crate::consensus_types::CommitCertificate>,
 }
 
 impl Block {
@@ -197,7 +211,16 @@ impl Block {
             header,
             extrinsics,
             commit: None,
+            last_commit: None,
         }
+    }
+
+    /// The value `header.last_commit_hash` must hold for this block.
+    pub fn expected_last_commit_hash(&self) -> Hash {
+        self.last_commit
+            .as_ref()
+            .map(|c| c.hash())
+            .unwrap_or([0; 32])
     }
 
     pub fn hash(&self) -> Hash {
@@ -209,6 +232,7 @@ impl Block {
             header: Header::new([0; 32], 0),
             extrinsics: vec![],
             commit: None,
+            last_commit: None,
         }
     }
 }
@@ -247,6 +271,17 @@ pub struct GenesisConfig {
     pub timestamp: u64,
     pub accounts: Vec<GenesisAccount>,
     pub validators: Vec<GenesisValidator>,
+    /// Bridge relayer set; without it the bridge cannot mint.
+    #[serde(default)]
+    pub bridge: Option<GenesisBridge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisBridge {
+    /// Hex Ed25519 public keys of the relayers.
+    pub relayers: Vec<String>,
+    /// Distinct relayer attestations a mint needs.
+    pub threshold: u32,
 }
 
 impl GenesisConfig {
@@ -273,6 +308,7 @@ impl Default for GenesisConfig {
                 },
             ],
             validators: vec![],
+            bridge: None,
         }
     }
 }

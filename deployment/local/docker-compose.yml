@@ -84,6 +84,8 @@ services:
       - VALIDATOR_NAME=validator1
       - RUST_LOG=info
       - ETH_RPC_URL=http://hardhat:9545
+      # Bridge contract from configs/bridge-deployment.json (Hardhat's first deploy).
+      - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       - GOVERNANCE_TEST_MODE=1
       - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
@@ -232,6 +234,8 @@ services:
       - NODE_NAME=rpc1
       - RUST_LOG=info
       - ETH_RPC_URL=http://hardhat:9545
+      # Bridge contract from configs/bridge-deployment.json (Hardhat's first deploy).
+      - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       # Governance params are part of genesis state: every node must match.
       - GOVERNANCE_TEST_MODE=1
       - GOVERNANCE_VOTING_PERIOD_BLOCKS=15

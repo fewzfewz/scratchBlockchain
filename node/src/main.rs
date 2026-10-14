@@ -58,7 +58,7 @@ use node::tx_pool::TxPool;
 
 use storage::receipt_store::ReceiptStore;
 use storage::trie::PatriciaTrie;
-use storage::{ChainStore, PruneConfig, StagedStore};
+use storage::{ChainStore, KeyValueStore, PruneConfig, StagedStore};
 
 use node::block_producer::{BlockExecutor, BlockProducer, BlockProducerConfig};
 use node::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
@@ -360,6 +360,23 @@ impl Node {
                 "✅ Initialized {} validators in state trie",
                 validator_infos.len()
             );
+
+            // Bridge relayer set: mints need `threshold` of these relayers.
+            if let Some(bridge) = &genesis_config.bridge {
+                let config = node::bridge_mint::BridgeConfig {
+                    relayers: bridge.relayers.clone(),
+                    threshold: bridge.threshold,
+                };
+                state_trie.lock().await.insert(
+                    node::bridge_mint::BRIDGE_CONFIG_KEY,
+                    &serde_json::to_vec(&config)?,
+                )?;
+                info!(
+                    "🌉 Bridge: {}-of-{} relayers",
+                    bridge.threshold,
+                    bridge.relayers.len()
+                );
+            }
 
             // Governance state is part of genesis (seeded once, here, so every
             // node starts from the same trie).
@@ -1044,9 +1061,11 @@ impl Node {
             .get_state_root()
             .map_err(|e| e.to_string())?
             .ok_or("no committed state root")?;
+        let parent_validators = self.parent_cert_set().map_err(|e| e.to_string())?;
         node::block_producer::validate_block(
             block,
             &parent,
+            &parent_validators,
             height.saturating_sub(1),
             &state_root,
             self.chain_id,
@@ -1160,6 +1179,20 @@ impl Node {
         block: &Block,
         proposer: Vec<u8>,
     ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
+        // Vote rewards go to the validators whose precommits finalized the
+        // parent, as listed in the block's last commit. The proposer picked
+        // that certificate and the header commits to it, so every node pays
+        // the same validators (a node's own collected precommits differ, which
+        // once forked the state root).
+        let parent = latest_block(&self.chain_store)?;
+        let voters =
+            node::block_producer::verify_last_commit(block, &parent, &self.parent_cert_set()?)?;
+        // Record the set certifying *this* block (the set before it applies),
+        // for checking the next block's last commit.
+        let cert_set = serde_json::to_vec(&self.get_validator_list().await?)?;
+        self.staged
+            .put(storage::ColumnFamily::State, CERT_SET_KEY, &cert_set)?;
+
         let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
 
         let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
@@ -1176,20 +1209,6 @@ impl Node {
             }
         }
 
-        // Vote rewards go to the whole active validator set. They must not
-        // depend on which precommits this node happened to collect (each node
-        // builds its own certificate, so that differs between nodes and
-        // forked the state root). Participation-based rewards need the
-        // proposer to include the previous commit in the block (CometBFT's
-        // LastCommit); until then, every active validator shares equally.
-        let mut voters: Vec<Vec<u8>> = self
-            .get_validator_list()
-            .await?
-            .into_iter()
-            .filter(|v| !v.slashed)
-            .map(|v| v.public_key)
-            .collect();
-        voters.sort();
         let rewards = {
             let mut rm = self.reward_manager.lock().await;
             rm.process_block(block, proposer, &voters, total_fees)
@@ -1533,6 +1552,18 @@ impl Node {
     }
 
     /// Get current validator list
+    /// The validator set that certified our tip block (recorded when it was
+    /// applied), against which the next block's last commit is checked.
+    fn parent_cert_set(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
+        match self
+            .staged
+            .get(storage::ColumnFamily::State, CERT_SET_KEY)?
+        {
+            Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            None => Ok(Vec::new()), // tip is genesis: no last commit to check
+        }
+    }
+
     async fn get_validator_list(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
         node::governance_store::load_consensus_validators(&self.state_trie)
             .await
@@ -1657,6 +1688,10 @@ impl Node {
 use warp::Filter;
 
 /// The latest committed block (the local genesis placeholder on a new chain).
+/// Node-local (outside the state root) record of the validator set that
+/// certified the tip block.
+const CERT_SET_KEY: &[u8] = b"local:consensus:cert_set";
+
 fn latest_block(chain_store: &ChainStore) -> Result<Block, Box<dyn std::error::Error>> {
     match chain_store.get_latest_height()? {
         Some(height) => {

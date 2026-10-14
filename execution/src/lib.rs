@@ -367,6 +367,7 @@ mod tests {
             header: Header::new([0; 32], 1),
             extrinsics: vec![tx],
             commit: None,
+            last_commit: None,
         };
 
         executor.execute_block(&block, &mut state).unwrap();
@@ -402,6 +403,7 @@ mod tests {
             header: Header::new([0; 32], 1),
             extrinsics: vec![tx],
             commit: None,
+            last_commit: None,
         };
 
         assert!(executor.execute_block(&block, &mut state).is_err());
@@ -435,6 +437,7 @@ mod tests {
             header: Header::new([0; 32], 1),
             extrinsics: vec![tx],
             commit: None,
+            last_commit: None,
         };
 
         assert!(executor.execute_block(&block, &mut state).is_err());

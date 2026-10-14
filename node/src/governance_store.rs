@@ -147,6 +147,13 @@ pub async fn apply_extrinsics(
 
     for tx in extrinsics {
         let body = tx.payload.as_slice();
+        if crate::bridge_mint::is_bridge_mint_payload(body) {
+            match crate::bridge_mint::apply(trie, chain_store, tx).await {
+                Ok(amount) => info!("🌉 Bridge mint of {} at block {}", amount, current_block),
+                Err(e) => warn!("Bridge mint rejected at block {}: {}", current_block, e),
+            }
+            continue;
+        }
         if is_staking_payload(body) {
             if let Err(e) = apply_staking_action(trie, chain_store, tx, body).await {
                 warn!(
@@ -587,14 +594,14 @@ fn parse_stake_value(v: &serde_json::Value) -> u128 {
     }
 }
 
-/// Record block production stats for the finalized block at `height`.
+/// Record block production stats for the finalized block at `slot`.
 ///
 /// - Increments `blocks_produced` for the actual proposer (matched by public key).
 /// - Increments `blocks_missed` for the validator the deterministic round-0
 ///   leader schedule expected to propose this height but did not.
 pub async fn record_block_stats(
     trie: &Arc<Mutex<PatriciaTrie>>,
-    height: u64,
+    slot: u64,
     proposer_pubkey: &[u8],
 ) -> Result<(), String> {
     let mut validators = load_validators(trie).await?;
@@ -602,7 +609,9 @@ pub async fn record_block_stats(
         return Ok(());
     }
     let proposer_hex = hex::encode(proposer_pubkey);
-    let expected = expected_round0_proposer(&validators, height);
+    // BFT height h finalizes the block at slot h - 1, and the proposer is
+    // chosen by BFT height.
+    let expected = expected_round0_proposer(&validators, slot.saturating_add(1));
 
     for entry in validators.iter_mut() {
         if entry.public_key.eq_ignore_ascii_case(&proposer_hex) {
@@ -622,26 +631,26 @@ pub async fn record_block_stats(
     persist_validators(trie, &validators).await
 }
 
-/// Deterministic round-0 proposer for a height, mirroring BFT's `select_proposer`
-/// (sorted public keys, index = LE u64 of SHA-256(height || 0) mod n).
+/// Deterministic round-0 proposer for a height, using the same stake-weighted
+/// selection as BFT (`common::consensus_types::select_proposer`) over the same
+/// stake (own + delegated) that `load_consensus_validators` feeds the engine.
 fn expected_round0_proposer(validators: &[ValidatorEntry], height: u64) -> Option<String> {
-    let mut pubkeys: Vec<&str> = validators
+    let set: Vec<(Vec<u8>, u128)> = validators
         .iter()
         .filter(|v| v.is_active && !v.public_key.is_empty())
-        .map(|v| v.public_key.as_str())
+        .filter_map(|v| {
+            let pk = hex::decode(&v.public_key).ok()?;
+            let delegated: u128 = v.total_delegated.parse().unwrap_or(0);
+            let stake = parse_stake_value(&v.stake).saturating_add(delegated).max(1);
+            Some((pk, stake))
+        })
         .collect();
-    if pubkeys.is_empty() {
-        return None;
-    }
-    pubkeys.sort();
-
-    let mut seed_input = Vec::with_capacity(16);
-    seed_input.extend_from_slice(&height.to_le_bytes());
-    seed_input.extend_from_slice(&0u64.to_le_bytes());
-    let seed = common::crypto::hash(&seed_input);
-    let index =
-        u64::from_le_bytes(seed[..8].try_into().unwrap_or([0u8; 8])) as usize % pubkeys.len();
-    Some(pubkeys[index].to_string())
+    common::consensus_types::select_proposer(
+        set.iter().map(|(pk, s)| (pk.as_slice(), *s)),
+        height,
+        0,
+    )
+    .map(hex::encode)
 }
 
 /// Load active validators for BFT / finality hot-reload (stake + delegated).
@@ -692,6 +701,44 @@ mod tests {
             .unwrap();
         let power = voter_power(&trie, &chain_store, &addr).await;
         assert_eq!(power, 5_000_000_000_000_000_000);
+    }
+
+    #[tokio::test]
+    async fn on_schedule_proposers_are_not_counted_as_missed() {
+        let inner = Arc::new(storage::MemDb::new());
+        let trie = Arc::new(Mutex::new(PatriciaTrie::new(inner).unwrap()));
+        let set: Vec<serde_json::Value> = (1u8..=4)
+            .map(|i| {
+                serde_json::json!({
+                    "address": format!("0x{:040x}", i),
+                    "public_key": hex::encode([i; 32]),
+                    "stake": (u128::from(i) * 1_000_000_000_000_000_000).to_string(),
+                    "is_active": true,
+                    "total_delegated": "0",
+                })
+            })
+            .collect();
+        trie.lock()
+            .await
+            .insert(b"validators", &serde_json::to_vec(&set).unwrap())
+            .unwrap();
+
+        // The block at slot s is proposed at BFT height s + 1, round 0.
+        let engine_set = load_consensus_validators(&trie).await.unwrap();
+        for slot in 1..=40u64 {
+            let proposer = common::consensus_types::select_proposer(
+                engine_set
+                    .iter()
+                    .map(|v| (v.public_key.as_slice(), v.stake)),
+                slot + 1,
+                0,
+            )
+            .unwrap();
+            record_block_stats(&trie, slot, &proposer).await.unwrap();
+        }
+        let after = load_validators(&trie).await.unwrap();
+        assert!(after.iter().all(|v| v.blocks_missed == 0));
+        assert_eq!(after.iter().map(|v| v.blocks_produced).sum::<u64>(), 40);
     }
 
     fn staking_tx(seed: u8, payload: serde_json::Value) -> common::types::Transaction {

@@ -205,5 +205,11 @@
     "app_state": {
         "total_supply": 15000000000,
         "total_stake": 3400000
+    },
+    "bridge": {
+        "relayers": [
+            "f8afd50f2ea33a6e78ac604afbf16a29f925b89fb2cdfea11c2cad0db239bcc9"
+        ],
+        "threshold": 1
     }
 }

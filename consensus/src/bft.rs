@@ -569,23 +569,17 @@ impl BftEngine {
     }
 
     fn select_proposer(&self, height: u64, round: u64) -> Vec<u8> {
-        if self.validators.is_empty() {
-            tracing::error!("No validators configured!");
-            return self.public_key.clone();
+        let set = self
+            .validators
+            .values()
+            .map(|v| (v.public_key.as_slice(), v.stake));
+        match common::consensus_types::select_proposer(set, height, round) {
+            Some(pk) => pk,
+            None => {
+                tracing::error!("No validators with stake configured!");
+                self.public_key.clone()
+            }
         }
-
-        let mut sorted_validators: Vec<&Vec<u8>> = self.validators.keys().collect();
-        sorted_validators.sort();
-
-        let mut seed_input = Vec::new();
-        seed_input.extend_from_slice(&height.to_le_bytes());
-        seed_input.extend_from_slice(&round.to_le_bytes());
-        let seed = crypto::hash(&seed_input);
-
-        let index = u64::from_le_bytes(seed[..8].try_into().unwrap_or([0u8; 8])) as usize
-            % sorted_validators.len();
-
-        sorted_validators[index].clone()
     }
 
     pub fn is_proposer(&self, height: u64, round: u64) -> bool {
@@ -764,9 +758,11 @@ mod tests {
                 signature: vec![],
                 gas_used: 0,
                 base_fee: 0,
+                last_commit_hash: [0; 32],
             },
             extrinsics: vec![],
             commit: None,
+            last_commit: None,
         }
     }
 

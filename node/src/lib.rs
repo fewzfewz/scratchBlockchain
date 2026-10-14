@@ -1,5 +1,6 @@
 pub mod accounts;
 pub mod block_producer;
+pub mod bridge_mint;
 pub mod bridge_queue;
 pub mod circuit_breaker;
 pub mod evm_store;

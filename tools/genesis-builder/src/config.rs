@@ -19,6 +19,17 @@ pub struct GenesisConfig {
     pub accounts: Vec<AccountConfig>,
     #[serde(default)]
     pub precompiles: Vec<PrecompileConfig>,
+    /// Bridge relayer set: a mint needs `threshold` distinct relayer
+    /// attestations. Without it the bridge cannot mint.
+    #[serde(default)]
+    pub bridge: Option<BridgeConfig>,
+}
+
+/// Bridge relayers (hex Ed25519 public keys) and the attestation threshold
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BridgeConfig {
+    pub relayers: Vec<String>,
+    pub threshold: u32,
 }
 
 /// Chain-specific configuration
