@@ -8,7 +8,9 @@ import {
   padHex,
   toHex,
 } from 'viem'
+import { privateKeyToAccount } from 'viem/accounts'
 import { mainnet, sepolia, hardhat } from 'viem/chains'
+import { adminHeaders } from './chain.js'
 
 export const BRIDGE_ABI = [
   {
@@ -95,7 +97,25 @@ export async function connectMetaMask() {
     transport: custom(window.ethereum),
     account: accounts[0],
   })
-  return { address: accounts[0], chainId, walletClient }
+  return { address: accounts[0], chainId, walletClient, account: accounts[0] }
+}
+
+// Hardhat's first default account. Its key is published in Hardhat's docs and
+// funds only local test chains; it is offered only for a localhost ETH RPC.
+const HARDHAT_DEV_KEY = '0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80'
+
+export function isLocalEthRpc(rpcUrl = getEthRpcUrl()) {
+  return /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?(\/|$)/.test(rpcUrl || '')
+}
+
+/** Sign with Hardhat's dev account (no browser wallet needed on a local chain). */
+export async function connectLocalDevAccount() {
+  const rpcUrl = getEthRpcUrl()
+  if (!isLocalEthRpc(rpcUrl)) throw new Error('The dev account is only for a local Ethereum RPC')
+  const chainId = await createPublicClient({ transport: http(rpcUrl) }).getChainId()
+  const account = privateKeyToAccount(HARDHAT_DEV_KEY)
+  const walletClient = createWalletClient({ account, chain: chainForRpc(rpcUrl, chainId), transport: http(rpcUrl) })
+  return { address: account.address, chainId, walletClient, account }
 }
 
 export function nebulaAddressToBytes32(addr) {
@@ -132,7 +152,7 @@ export async function requestNebulaMint({ recipient, amount, ethTxHash, ethRpcUr
   const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
   const r = await window.fetch(`${base}/bridge/mint`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: adminHeaders(),
     body: JSON.stringify({
       recipient,
       amount: amount?.toString(),
@@ -150,5 +170,13 @@ export async function fetchBridgeStatus() {
   const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
   const r = await window.fetch(`${base}/bridge/status`)
   if (!r.ok) throw new Error('Bridge status unavailable')
+  return r.json()
+}
+
+/** Relayer attestations pooled on the node for one Ethereum lock. */
+export async function fetchLockAttestations(ethTxHash) {
+  const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
+  const r = await window.fetch(`${base}/bridge/attestations/${ethTxHash}`)
+  if (!r.ok) throw new Error('Attestation status unavailable')
   return r.json()
 }

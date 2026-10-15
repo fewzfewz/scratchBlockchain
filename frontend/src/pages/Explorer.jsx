@@ -1,40 +1,41 @@
 import { useEffect, useState } from 'react'
-import { Compass, Activity, Shield } from 'lucide-react'
-import PageShell from '../components/PageShell.jsx'
-import AnimatedSection from '../components/AnimatedSection.jsx'
+import { useSearchParams } from 'react-router-dom'
+import { Compass, Search } from 'lucide-react'
 import DashboardTab from './explorer/DashboardTab.jsx'
 import ValidatorsTab from './explorer/ValidatorsTab.jsx'
 import StakingTab from './explorer/StakingTab.jsx'
 import BlocksTab from './explorer/BlocksTab.jsx'
 import AddressTab from './explorer/AddressTab.jsx'
-
-const API_URL = 'http://localhost:8545'
+import { getApiUrl } from '../lib/chain.js'
+import { Page, PageHeader, Tabs, LiveBadge, Notice, inputClass } from '../components/ui.jsx'
 
 const TABS = [
-  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'dashboard', label: 'Overview' },
   { id: 'blocks', label: 'Blocks' },
   { id: 'address', label: 'Address' },
   { id: 'validators', label: 'Validators' },
   { id: 'staking', label: 'Staking' },
 ]
 
-const fmt = (v) => v == null ? '--' : Number(v).toLocaleString()
+const fmt = (v) => (v == null ? '—' : Number(v).toLocaleString())
 
 export default function Explorer() {
-  const [activeTab, setActiveTab] = useState('dashboard')
-  const [online, setOnline] = useState(false)
+  const [params, setParams] = useSearchParams()
+  const [activeTab, setActiveTab] = useState(params.get('tab') || 'dashboard')
+  const [online, setOnline] = useState(undefined)
   const [tip, setTip] = useState(null)
+  const [query, setQuery] = useState('')
+  const [jumpBlock, setJumpBlock] = useState(null)
+  const [jumpAddress, setJumpAddress] = useState(params.get('address') || '')
+  const [searchError, setSearchError] = useState('')
 
   useEffect(() => {
     let active = true
     const poll = async () => {
       try {
-        const res = await window.fetch(`${API_URL}/status`)
-        if (!res.ok) throw new Error('offline')
+        const res = await window.fetch(`${getApiUrl()}/status`)
         const d = await res.json()
-        if (!active) return
-        setTip(d)
-        setOnline(true)
+        if (active) { setTip(d); setOnline(true) }
       } catch { if (active) setOnline(false) }
     }
     poll()
@@ -42,69 +43,53 @@ export default function Explorer() {
     return () => { active = false; clearInterval(t) }
   }, [])
 
+  const selectTab = (id) => {
+    setActiveTab(id)
+    setParams((p) => { p.set('tab', id); return p }, { replace: true })
+  }
+
+  // One search box: a block number or an address.
+  const search = (e) => {
+    e.preventDefault()
+    const q = query.trim().replace(/^#/, '')
+    setSearchError('')
+    if (/^\d+$/.test(q)) {
+      setJumpBlock(Number(q))
+      selectTab('blocks')
+    } else if (/^0x[a-fA-F0-9]{40}$/.test(q)) {
+      setJumpAddress(q)
+      selectTab('address')
+    } else if (q) {
+      setSearchError('Search by block number (e.g. 1200) or address (0x + 40 hex characters)')
+    }
+  }
+
   return (
-    <PageShell variant="default">
-      <div className="max-w-5xl mx-auto px-4 py-10 animate-fade-in">
-        {/* ── Header ─────────────────────────────────────────────── */}
-        <header className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
-            <span className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'}`} />
-            {online ? 'Local testnet live' : 'Node offline'}
-            <span className="text-slate-400 dark:text-slate-500">· 5 nodes · BFT</span>
-          </div>
+    <Page>
+      <PageHeader
+        icon={Compass}
+        eyebrow="Explorer"
+        title="Chain explorer"
+        description="Blocks, accounts, validators and staking — read live from your node."
+        actions={<LiveBadge online={online} label={`#${fmt(tip?.height)} · ${tip?.peer_count ?? 0} peers`} />}
+      />
 
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
-              <Compass className="w-6 h-6" />
-            </div>
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Nebula
-              <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Explorer</span>
-            </h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
-            A live control room for network activity, validators, and staking.
-          </p>
+      <form onSubmit={search} className="relative mb-6">
+        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+        <input value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Search the chain"
+          placeholder="Search by block number or address" className={`${inputClass} pl-10 h-12`} />
+      </form>
+      <Notice type="err" className="-mt-3 mb-6">{searchError}</Notice>
 
-          {online && tip && (
-            <div className="flex items-center justify-center gap-2 mt-5 text-xs">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Activity className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" />
-                Tip #{fmt(tip.height)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Shield className="w-3.5 h-3.5 text-emerald-500" />
-                Finalized #{fmt(tip.finalized_height)}
-              </span>
-            </div>
-          )}
-        </header>
+      <Tabs tabs={TABS} value={activeTab} onChange={selectTab} className="mb-6" />
 
-        {/* ── Tab bar ────────────────────────────────────────────── */}
-        <div className="flex flex-wrap gap-1 p-1 rounded-2xl glass-strong mb-6 max-w-2xl mx-auto">
-          {TABS.map(({ id, label }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`flex-1 px-4 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                activeTab === id
-                  ? 'bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-600/25'
-                  : 'text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/40'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-
-        <div key={activeTab} className="animate-in">
-          {activeTab === 'dashboard' && <DashboardTab />}
-          {activeTab === 'blocks' && <BlocksTab />}
-          {activeTab === 'address' && <AddressTab />}
-          {activeTab === 'validators' && <ValidatorsTab />}
-          {activeTab === 'staking' && <StakingTab />}
-        </div>
+      <div key={activeTab} className="animate-in">
+        {activeTab === 'dashboard' && <DashboardTab />}
+        {activeTab === 'blocks' && <BlocksTab jumpTo={jumpBlock} />}
+        {activeTab === 'address' && <AddressTab initialAddress={jumpAddress} />}
+        {activeTab === 'validators' && <ValidatorsTab />}
+        {activeTab === 'staking' && <StakingTab />}
       </div>
-    </PageShell>
+    </Page>
   )
 }

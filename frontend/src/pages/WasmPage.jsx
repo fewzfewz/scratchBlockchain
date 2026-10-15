@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { Cpu, Play, Upload, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react'
-import PageShell from '../components/PageShell.jsx'
+import { Cpu, Play, Upload, RefreshCw } from 'lucide-react'
+import { Page, PageHeader, Card, Field, Button, Notice, EmptyState, Badge, inputClass, textareaClass } from '../components/ui.jsx'
 import {
   deployWasm, callWasm, listWasmContracts, getApiUrl,
 } from '../lib/chain.js'
@@ -42,8 +42,19 @@ export default function WasmPage() {
     show('Deploying WASM module…')
     try {
       const res = await deployWasm(name.trim(), wasmB64.trim())
-      show(`Deployed "${res.name}" — hash ${res.code_hash?.slice(0, 12)}…`, 'ok')
-      refresh()
+      // Registered only when the deploy transaction is in a block.
+      show(`Deploy submitted — waiting for "${res.name}" to be included…`)
+      for (let i = 0; i < 30; i++) {
+        const list = await listWasmContracts().catch(() => [])
+        if (list.includes(res.name)) {
+          setContracts(list)
+          setCallName(res.name)
+          show(`Deployed "${res.name}" — code hash ${res.code_hash?.slice(0, 12)}…`, 'ok')
+          return
+        }
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+      show(`"${res.name}" was submitted but is not on chain yet — refresh in a moment`, 'err')
     } catch (e) {
       show(e.message || 'Deploy failed', 'err')
     } finally {
@@ -66,102 +77,58 @@ export default function WasmPage() {
     }
   }
 
-  const inputCls =
-    'w-full px-3 py-2.5 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40'
-
   return (
-    <PageShell>
-      <div className="max-w-3xl mx-auto px-4 py-10 animate-fade-in">
-        <header className="text-center mb-8">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-600 to-purple-600 flex items-center justify-center text-white shadow-lg">
-              <Cpu className="w-6 h-6" />
-            </div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">WASM Contracts</h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400">
-            Deploy and call WebAssembly modules via <code className="text-xs">POST /deploy_wasm</code> and{' '}
-            <code className="text-xs">POST /call_wasm</code> on {getApiUrl()}.
-          </p>
-        </header>
+    <Page width="max-w-5xl">
+      <PageHeader icon={Cpu} eyebrow="WASM" title="WebAssembly contracts"
+        description="Deploy a WASM module by name and call its exported i32 functions. Execution is fuel-metered by wasmtime."
+        actions={<Badge tone="amber">Dev mode</Badge>} />
 
-        {status && (
-          <div className={`mb-4 px-4 py-3 rounded-xl text-sm flex items-center gap-2 ${
-            statusType === 'ok' ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
-              : statusType === 'err' ? 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
-                : 'bg-blue-500/15 text-blue-400 border border-blue-500/30'
-          }`}>
-            {statusType === 'ok' ? <CheckCircle className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}
-            {status}
+      <div className="grid lg:grid-cols-2 gap-6 items-start">
+        <Card title="Deploy a module" icon={Upload} description="Registered on chain when the deploy transaction is included.">
+          <div className="space-y-4">
+            <Field label="Contract name"><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} font-mono`} /></Field>
+            <Field label="Module (base64)" hint="The sample exports double(i32) → i32.">
+              <textarea value={wasmB64} onChange={(e) => setWasmB64(e.target.value)} rows={3} className={`${textareaClass} font-mono text-xs`} />
+            </Field>
+            <Button icon={Upload} loading={busy} onClick={handleDeploy}>Deploy</Button>
           </div>
-        )}
+        </Card>
 
-        <div className="glass-strong rounded-2xl p-6 mb-6 space-y-4">
-          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-            <Upload className="w-4 h-4" /> Deploy module
-          </h2>
-          <div>
-            <label className="text-xs text-slate-500">Contract name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} className={inputCls} />
-          </div>
-          <div>
-            <label className="text-xs text-slate-500">WASM (base64)</label>
-            <textarea value={wasmB64} onChange={(e) => setWasmB64(e.target.value)} rows={3} className={inputCls} />
-          </div>
-          <button type="button" onClick={handleDeploy} disabled={busy}
-            className="px-5 py-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-sm font-semibold disabled:opacity-50">
-            Deploy
-          </button>
-        </div>
+        <div className="space-y-6">
+          <Card title="Call an export" icon={Play}>
+            <div className="space-y-4">
+              <Field label="Contract">
+                <input value={callName} onChange={(e) => setCallName(e.target.value)} className={`${inputClass} font-mono`} list="wasm-names" />
+                <datalist id="wasm-names">{contracts.map((c) => <option key={c} value={c} />)}</datalist>
+              </Field>
+              <div className="grid grid-cols-2 gap-3">
+                <Field label="Function"><input value={func} onChange={(e) => setFunc(e.target.value)} className={`${inputClass} font-mono`} /></Field>
+                <Field label="Argument (i32)"><input value={arg} onChange={(e) => setArg(e.target.value)} className={`${inputClass} font-mono`} /></Field>
+              </div>
+              <Button variant="secondary" icon={Play} loading={busy} onClick={handleCall} disabled={contracts.length === 0} title={contracts.length === 0 ? 'Deploy a module first' : undefined}>Call</Button>
+              {result != null && (
+                <div className="rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-800 p-4">
+                  <div className="text-xs text-slate-500">{func}({arg})</div>
+                  <div className="font-display text-2xl font-semibold tabular-nums text-slate-900 dark:text-white">{String(result)}</div>
+                </div>
+              )}
+            </div>
+          </Card>
 
-        <div className="glass-strong rounded-2xl p-6 mb-6 space-y-4">
-          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-            <Play className="w-4 h-4" /> Call export
-          </h2>
-          <div className="grid sm:grid-cols-3 gap-3">
-            <div>
-              <label className="text-xs text-slate-500">Name</label>
-              <input value={callName} onChange={(e) => setCallName(e.target.value)} className={inputCls} list="wasm-names" />
-              <datalist id="wasm-names">
-                {contracts.map((c) => <option key={c} value={c} />)}
-              </datalist>
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">Function</label>
-              <input value={func} onChange={(e) => setFunc(e.target.value)} className={inputCls} />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">i32 arg</label>
-              <input value={arg} onChange={(e) => setArg(e.target.value)} className={inputCls} />
-            </div>
-          </div>
-          <button type="button" onClick={handleCall} disabled={busy}
-            className="px-5 py-2.5 rounded-xl bg-cyan-600 hover:bg-cyan-500 text-white text-sm font-semibold disabled:opacity-50">
-            Call
-          </button>
-          {result != null && (
-            <p className="text-sm font-mono text-emerald-400">return = {String(result)}</p>
-          )}
-        </div>
-
-        <div className="glass-strong rounded-2xl p-6">
-          <div className="flex items-center justify-between mb-3">
-            <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300">Deployed ({contracts.length})</h2>
-            <button type="button" onClick={refresh} className="p-2 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700/40">
-              <RefreshCw className="w-4 h-4 text-slate-400" />
-            </button>
-          </div>
-          {contracts.length === 0 ? (
-            <p className="text-xs text-slate-500">No WASM contracts yet — deploy the sample module above.</p>
-          ) : (
-            <ul className="space-y-2">
-              {contracts.map((c) => (
-                <li key={c} className="px-3 py-2 rounded-xl bg-slate-100/60 dark:bg-slate-700/30 font-mono text-sm">{c}</li>
-              ))}
-            </ul>
-          )}
+          <Card title={`Deployed (${contracts.length})`} actions={<Button variant="ghost" size="sm" icon={RefreshCw} onClick={refresh} aria-label="Refresh" />}>
+            {contracts.length === 0 ? (
+              <EmptyState icon={Cpu} title="No modules yet">Deploy the sample module to try a call.</EmptyState>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {contracts.map((c) => (
+                  <button key={c} type="button" onClick={() => setCallName(c)} className="h-8 px-3 rounded-lg border border-slate-200 dark:border-slate-800 font-mono text-xs text-slate-600 dark:text-slate-300 hover:border-blue-500/50">{c}</button>
+                ))}
+              </div>
+            )}
+          </Card>
         </div>
       </div>
-    </PageShell>
+      <Notice type={statusType === 'err' ? 'err' : statusType === 'ok' ? 'ok' : 'info'} className="mt-6">{status}</Notice>
+    </Page>
   )
 }

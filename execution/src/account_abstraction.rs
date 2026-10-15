@@ -52,6 +52,7 @@ impl UserOperation {
     pub fn to_transaction(&self) -> Transaction {
         Transaction {
             sender: self.sender,
+            public_key: [0; 32],
             nonce: self.nonce,
             payload: self.call_data.clone(),
             signature: self.signature.clone(),

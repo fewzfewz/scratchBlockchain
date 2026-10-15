@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { History, Search, RefreshCw, ArrowUpRight, ArrowDownLeft, Copy } from 'lucide-react'
-import PageShell from '../components/PageShell.jsx'
+import { History, Search, ArrowUpRight, ArrowDownLeft, Copy, FileCode } from 'lucide-react'
+import { Page, PageHeader, Card, Button, Notice, Stat, Badge, EmptyState, inputClass } from '../components/ui.jsx'
 import {
   fetchTxHistory, fetchBalance, shorten, weiToNbl, walletAddress,
 } from '../lib/chain.js'
@@ -48,82 +48,68 @@ export default function HistoryPage() {
 
   const copy = (t) => navigator.clipboard?.writeText(t)
 
+  const me = address.trim().toLowerCase()
+
   return (
-    <PageShell variant="default">
-      <div className="max-w-4xl mx-auto px-4 py-10 animate-fade-in">
-        <header className="text-center mb-8">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white shadow-lg">
-              <History className="w-6 h-6" />
-            </div>
-            <h1 className="text-3xl md:text-4xl font-bold text-slate-900 dark:text-white">Transaction History</h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400">Live on-chain activity from the node RPC.</p>
-        </header>
+    <Page width="max-w-5xl">
+      <PageHeader icon={History} eyebrow="History" title="Transaction history"
+        description="Every transaction sent from or to an address, newest first." />
 
-        <form onSubmit={search} className="glass-strong rounded-2xl p-4 mb-6 flex flex-col sm:flex-row gap-3">
-          <input
-            className="flex-1 px-4 py-3 rounded-xl bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600 text-sm font-mono"
-            placeholder="0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18"
-            value={address}
-            onChange={(e) => setAddress(e.target.value)}
-          />
-          <button type="submit" disabled={loading}
-            className="px-6 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-50">
-            {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
-            Search
-          </button>
-        </form>
-
-        {balance && (
-          <div className="glass rounded-2xl p-4 mb-4 grid sm:grid-cols-2 gap-3 text-sm">
-            <div><span className="text-slate-500">Balance:</span> <span className="font-mono font-semibold">{weiToNbl(balance.balance)} NBL</span></div>
-            <div><span className="text-slate-500">Nonce:</span> <span className="font-mono font-semibold">{balance.nonce}</span></div>
-          </div>
-        )}
-
-        {error && <p className="text-red-500 text-sm mb-4 text-center">{error}</p>}
-        {meta && (
-          <p className="text-xs text-slate-500 text-center mb-4">
-            Scanned {meta.scanned} recent blocks · {meta.count} transaction{meta.count !== 1 ? 's' : ''}
-          </p>
-        )}
-
-        <div className="space-y-3">
-          {txs.length === 0 && !loading && !error && (
-            <div className="glass rounded-2xl p-8 text-center text-slate-500">
-              Enter an address and search, or open from <Link to="/wallet" className="text-violet-500 underline">Wallet</Link>.
-            </div>
-          )}
-          {txs.map((tx) => {
-            const outgoing = tx.sender?.toLowerCase() === address.toLowerCase()
-            return (
-              <div key={tx.hash} className="glass-strong rounded-2xl p-4 hover:border-violet-500/30 border border-transparent transition-all">
-                <div className="flex flex-wrap items-start justify-between gap-2 mb-2">
-                  <div className="flex items-center gap-2">
-                    {outgoing ? <ArrowUpRight className="w-4 h-4 text-amber-500" /> : <ArrowDownLeft className="w-4 h-4 text-emerald-500" />}
-                    <span className="text-xs font-semibold uppercase text-slate-500">{outgoing ? 'Sent' : 'Received'}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${tx.status === 'confirmed' ? 'bg-emerald-500/15 text-emerald-600' : tx.status === 'failed' ? 'bg-red-500/15 text-red-600' : 'bg-slate-500/15 text-slate-600'}`}>
-                      {tx.status || 'pending'}
-                    </span>
-                  </div>
-                  <span className="text-xs text-slate-400">Block #{tx.block_height}</span>
-                </div>
-                <div className="flex items-center gap-2 font-mono text-xs text-slate-600 dark:text-slate-300 mb-2">
-                  <span>{shorten(tx.hash, 10, 8)}</span>
-                  <button type="button" onClick={() => copy(tx.hash)} className="p-1 hover:text-violet-500"><Copy className="w-3 h-3" /></button>
-                  <Link to={`/history?address=${tx.sender}`} className="text-violet-500 ml-auto">from {shorten(tx.sender)}</Link>
-                </div>
-                <div className="flex flex-wrap gap-4 text-sm">
-                  <span><strong className="text-slate-500">To:</strong> {tx.is_contract_creation ? 'Contract deploy' : shorten(tx.to)}</span>
-                  <span><strong className="text-slate-500">Value:</strong> {weiToNbl(tx.value)} NBL</span>
-                  <span><strong className="text-slate-500">Nonce:</strong> {tx.nonce}</span>
-                </div>
-              </div>
-            )
-          })}
+      <form onSubmit={search} className="flex gap-2 mb-6">
+        <div className="relative flex-1">
+          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input value={address} onChange={(e) => setAddress(e.target.value)} aria-label="Address"
+            placeholder="0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18" className={`${inputClass} pl-10 font-mono`} />
         </div>
-      </div>
-    </PageShell>
+        <Button type="submit" loading={loading}>Search</Button>
+      </form>
+      <Notice type="err" className="mb-6">{error}</Notice>
+
+      {balance && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-6">
+          <Stat label="Balance" value={`${weiToNbl(balance.balance)} NBL`} />
+          <Stat label="Nonce" value={balance.nonce} sub="transactions sent" />
+          <Stat label="Shown" value={meta?.count ?? 0} sub="most recent first" />
+        </div>
+      )}
+
+      <Card padded={false}>
+        {txs.length === 0 ? (
+          <EmptyState icon={History} title={balance ? 'No transactions yet' : 'Search an address'}>
+            {balance ? 'Nothing has been sent from or to this address.' : <>Enter an address above, or open it from the <Link to="/wallet" className="text-blue-600 dark:text-blue-300 hover:underline">wallet</Link>.</>}
+          </EmptyState>
+        ) : (
+          <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+            {txs.map((tx) => {
+              const outgoing = tx.sender?.toLowerCase() === me
+              const counterparty = outgoing ? tx.to : tx.sender
+              return (
+                <li key={tx.hash} className="flex items-center gap-4 px-5 sm:px-6 py-3.5">
+                  <span className={`w-9 h-9 shrink-0 rounded-xl flex items-center justify-center ${tx.is_contract_creation ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300' : outgoing ? 'bg-rose-500/10 text-rose-500' : 'bg-emerald-500/10 text-emerald-500'}`}>
+                    {tx.is_contract_creation ? <FileCode className="w-4 h-4" /> : outgoing ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="font-medium text-slate-900 dark:text-white">{tx.is_contract_creation ? 'Contract / action' : outgoing ? 'Sent' : 'Received'}</span>
+                      <Badge tone={tx.status === 'confirmed' ? 'green' : tx.status === 'failed' ? 'red' : 'amber'}>{tx.status || 'pending'}</Badge>
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-2 text-xs text-slate-500">
+                      <span className="font-mono">{counterparty ? `${outgoing ? 'to' : 'from'} ${shorten(counterparty)}` : '—'}</span>
+                      <span>· block #{Number(tx.block_height).toLocaleString()}</span>
+                      <button type="button" onClick={() => copy(tx.hash)} className="inline-flex items-center gap-1 hover:text-slate-900 dark:hover:text-white" title="Copy transaction hash">
+                        <Copy className="w-3 h-3" /> {shorten(tx.hash, 6, 4)}
+                      </button>
+                    </div>
+                  </div>
+                  <span className={`text-sm font-semibold tabular-nums ${outgoing ? 'text-slate-900 dark:text-white' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                    {outgoing ? '−' : '+'}{weiToNbl(String(tx.value || 0))}
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </Card>
+    </Page>
   )
 }

@@ -31,6 +31,12 @@ stake = "600000000000000000000000"
 commission_rate = "0.10"
 public_key = "ec77526bdb058b2684570107a3581ccfe8cec4e03dfd5ac409213f181e66b93a"
 
+[[validators]]
+address = "0x4444444444444444444444444444444444444444"
+stake = "1000000000000000000000000"
+commission_rate = "0.10"
+public_key = "1f382a97836bd59994ca9e52541b0368bede3aabde53bebc310c5b1001074ac1"
+
 [[accounts]]
 address = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 balance = "10000000000"
@@ -38,3 +44,30 @@ balance = "10000000000"
 [[accounts]]
 address = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 balance = "5000000000"
+
+# Dev funding account (faucet / bridge mint / WASM deploy in dev mode).
+# Its key is api.dev_funding_key in the node configs — devnet only.
+[[accounts]]
+address = "0x575f06bc3506d23fa619b6c4f69cc9a40d182dc1"
+balance = "1000000000000000000000000000"
+
+# Standalone relayers (nebula-relayer containers relayer-a / relayer-b).
+# Devnet-only keys: seeds are sha256("nebula-devnet-relayer-a" / "-b").
+[[accounts]]
+address = "0xdf390055e77d321bcde0fe76bd44a7b871aabf92"
+balance = "1000000000000000000000"
+
+[[accounts]]
+address = "0xd42e169d17afe4aa97686fa0849fbbc4f411374b"
+balance = "1000000000000000000000"
+
+# Bridge relayers (hex Ed25519 public keys); a mint needs `threshold` of them.
+# Devnet: the dev funding key (the dev-mode /bridge/mint route) plus the two
+# standalone relayers, 2-of-3.
+[bridge]
+relayers = [
+  "f8afd50f2ea33a6e78ac604afbf16a29f925b89fb2cdfea11c2cad0db239bcc9",
+  "ed6db302da3394d6b7271c5dfd30d6181549942cec46c0831dd188317698a62f",
+  "f343c5c481ae138acb20d2d897bef3529a065b6ec87a5cf0c8a29b93ea964789",
+]
+threshold = 2

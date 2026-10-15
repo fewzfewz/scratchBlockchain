@@ -15,7 +15,7 @@ This will take 10-15 minutes to build Docker images.
 # Check all services are up
 docker-compose ps
 
-# Should see 9 services: validator1, validator2, validator3, rpc1, rpc2, prometheus, grafana, faucet, nginx
+# Should see 10 services: validator1, validator2, validator3, validator4, rpc1, rpc2, prometheus, grafana, faucet, nginx
 ```
 
 ### Step 3: Run Quick Tests

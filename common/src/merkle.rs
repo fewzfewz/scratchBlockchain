@@ -133,21 +133,21 @@ impl MultiProof {
 
                 if pair_idx < level_size {
                     // Try to get sibling
-                    if let Some(sibling) = hash_map.get(&sibling_key) {
+                    if let (Some(sibling), Some(node)) =
+                        (hash_map.get(&sibling_key), hash_map.get(&(offset + i)))
+                    {
                         let combined = if is_right {
-                            hash_pair(sibling, hash_map.get(&(offset + i)).unwrap())
+                            hash_pair(sibling, node)
                         } else {
-                            hash_pair(hash_map.get(&(offset + i)).unwrap(), sibling)
+                            hash_pair(node, sibling)
                         };
                         next_level.insert(offset / 2 + i / 2, combined);
                     }
                 } else {
                     // Odd number - duplicate
-                    let combined = hash_pair(
-                        hash_map.get(&(offset + i)).unwrap(),
-                        hash_map.get(&(offset + i)).unwrap(),
-                    );
-                    next_level.insert(offset / 2 + i / 2, combined);
+                    if let Some(node) = hash_map.get(&(offset + i)) {
+                        next_level.insert(offset / 2 + i / 2, hash_pair(node, node));
+                    }
                 }
             }
 

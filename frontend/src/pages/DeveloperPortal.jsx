@@ -5,8 +5,9 @@ import {
   Wallet, Layers, ArrowRight, Package, FileCode, Boxes,
 } from 'lucide-react'
 import { Link } from 'react-router-dom'
+import { getApiUrl } from '../lib/chain.js'
+import { PageHeader, LiveBadge } from '../components/ui.jsx'
 
-const RPC_URL = 'http://localhost:8545'
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
 
 function CodeBlock({ code, lang = 'bash' }) {
@@ -50,9 +51,9 @@ export default function DeveloperPortal() {
     const poll = async () => {
       try {
         const [hr, sr, gr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
         ])
         if (!hr.ok) throw new Error('offline')
         const sd = await sr.json()
@@ -73,54 +74,17 @@ export default function DeveloperPortal() {
 
   return (
     <div className="relative min-h-screen overflow-hidden">
-      {/* Aurora blobs + grid backdrop */}
-      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
-      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(251,146,60,0.35), transparent 70%)' }} />
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
 
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8 md:py-10 animate-fade-in">
+      <div className="relative z-10 py-12 max-w-5xl mx-auto px-4 animate-fade-in">
         {/* ── Header ─────────────────────────────────────────────── */}
-        <header className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
-            <span className={`w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'}`} />
-            {backendOnline ? 'Local testnet live' : 'Node offline'}
-            <span className="text-slate-400 dark:text-slate-500">· Tools for builders</span>
-          </div>
-
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
-              <Blocks className="w-6 h-6" />
-            </div>
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Nebula
-              <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Developer Portal</span>
-            </h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
-            Everything you need to build on Nebula — SDKs, starter kits, and CLI tools for the EVM-compatible execution layer.
-          </p>
-
-          {network && (
-            <div className="flex items-center justify-center flex-wrap gap-2 mt-5 text-xs">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Activity className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" /> Tip #{fmt(network.height)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Gauge className="w-3.5 h-3.5 text-emerald-500" /> Base fee {fmt(network.baseFee)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <ShieldCheck className="w-3.5 h-3.5 text-violet-500" /> Finalized #{fmt(network.finalized)}
-              </span>
-            </div>
-          )}
-        </header>
+        <PageHeader icon={Blocks} eyebrow="Developers" title="Build on Nebula"
+          description="Starter kits, tooling and examples for shipping against your local node."
+          actions={<LiveBadge online={backendOnline} label={network ? `#${Number(network.height).toLocaleString()}` : 'Online'} />} />
 
         {!backendOnline && (
           <div className="mb-8 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. Starter kits and SDK samples still work — start the testnet to deploy against it.</span>
+            <span>Node not reachable at {getApiUrl()}. Starter kits and SDK samples still work — start the testnet to deploy against it.</span>
           </div>
         )}
 

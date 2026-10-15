@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
-import { Droplets, CheckCircle, AlertCircle, Clock, Copy, WifiOff, Wallet, History, RefreshCw, Activity, Zap, ShieldCheck, Gauge } from 'lucide-react'
+import { Droplets, Clock, Wallet, History, RefreshCw } from 'lucide-react'
+import { Link } from 'react-router-dom'
+import { getApiUrl, walletAddress } from '../lib/chain.js'
+import { Page, PageHeader, Card, Field, Button, Notice, Stat, StatGrid, LiveBadge, EmptyState, inputClass } from '../components/ui.jsx'
 
-const RPC_URL = 'http://localhost:8545'
-const DRIP_AMOUNT = 100
+const DRIP_AMOUNT = 10 // node caps a drip at 10 NBL (one transfer)
 // Local dev: 60s cooldown (matches node RPC). Production UI can use 24h.
 const COOLDOWN_MS = import.meta.env.DEV ? 60 * 1000 : 24 * 60 * 60 * 1000
-
-const DEMO_ADDR = '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18'
 
 const TEST_ADDRESSES = [
   '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',
@@ -36,7 +36,8 @@ const formatTime = (ts) => {
 const shorten = (s) => s ? `${s.slice(0, 6)}...${s.slice(-4)}` : ''
 
 export default function FaucetPage() {
-  const [address, setAddress] = useState(DEMO_ADDR)
+  // Default to this browser's wallet; the faucet is for funding it.
+  const [address, setAddress] = useState(() => walletAddress() || '')
   const [status, setStatus] = useState('')
   const [statusType, setStatusType] = useState('')
   const [remaining, setRemaining] = useState(10)
@@ -49,15 +50,16 @@ export default function FaucetPage() {
   const [balanceLoading, setBalanceLoading] = useState(false)
   const [drips, setDrips] = useState([])
   const [network, setNetwork] = useState(null)
+  const [, setTick] = useState(0)
 
   // Node health + network info polling
   useEffect(() => {
     const poll = async () => {
       try {
         const [hr, sr, gr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
         ])
         if (!hr.ok) throw new Error('offline')
         const sd = await sr.json()
@@ -88,7 +90,8 @@ export default function FaucetPage() {
     if (!cooldownEnd) return
     const interval = setInterval(() => {
       if (Date.now() >= cooldownEnd) { setCooldownEnd(null); return }
-    }, 60000)
+      setTick((t) => t + 1)
+    }, 1000)
     return () => clearInterval(interval)
   }, [cooldownEnd])
 
@@ -105,7 +108,7 @@ export default function FaucetPage() {
     if (!addr || !addr.match(/^0x[a-fA-F0-9]{40}$/)) { setBalance(null); return }
     setBalanceLoading(true)
     try {
-      const r = await window.fetch(`${RPC_URL}/balance/${addr}`)
+      const r = await window.fetch(`${getApiUrl()}/balance/${addr}`)
       if (r.ok) {
         const d = await r.json()
         setBalance({ nbl: weiToNbl(d.balance), nonce: d.nonce || 0 })
@@ -121,7 +124,7 @@ export default function FaucetPage() {
     setStatusType('info')
     try {
       if (backendOnline) {
-        const res = await window.fetch(`${RPC_URL}/faucet/request`, {
+        const res = await window.fetch(`${getApiUrl()}/faucet/request`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ address }),
@@ -141,7 +144,7 @@ export default function FaucetPage() {
       saveData(address, { remaining: newRemaining, total: newTotal, lastRequest: now })
       setCooldownEnd(now + COOLDOWN_MS)
       setLastRequest(now)
-      setStatus(`${DRIP_AMOUNT} tokens sent to ${address}`)
+      setStatus(`${DRIP_AMOUNT} tokens on the way to ${address} — they arrive with the next block`)
       setStatusType('success')
 
       const drip = { address, amount: DRIP_AMOUNT, timestamp: now }
@@ -150,7 +153,8 @@ export default function FaucetPage() {
       localStorage.setItem('faucet_history', JSON.stringify(updated))
       setDrips(updated.slice(0, 10))
 
-      setTimeout(() => fetchBalance(address), 1500)
+      setTimeout(() => fetchBalance(address), 4000)
+      setTimeout(() => fetchBalance(address), 9000)
     } catch (e) {
       setStatus(`Error: ${e.message}`)
       setStatusType('error')
@@ -160,233 +164,94 @@ export default function FaucetPage() {
   }
 
   const cooldownRemaining = cooldownEnd ? Math.max(0, cooldownEnd - Date.now()) : 0
-  const cooldownHours = Math.floor(cooldownRemaining / (60 * 60 * 1000))
-  const cooldownMinutes = Math.floor((cooldownRemaining % (60 * 60 * 1000)) / (60 * 1000))
+  const cooldownLabel = cooldownRemaining >= 3600000
+    ? `${Math.floor(cooldownRemaining / 3600000)}h ${Math.floor((cooldownRemaining % 3600000) / 60000)}m`
+    : cooldownRemaining >= 60000 ? `${Math.ceil(cooldownRemaining / 60000)}m` : `${Math.ceil(cooldownRemaining / 1000)}s`
   const usedRequests = Math.max(0, 10 - remaining)
 
-  const heroStats = [
-    { icon: Droplets, label: 'Drip size', value: `${DRIP_AMOUNT} NBL`, sub: 'Per faucet request', chip: 'from-blue-500 to-cyan-600' },
-    { icon: Clock, label: 'Cooldown', value: import.meta.env.DEV ? '60 seconds' : '24 hours', sub: 'Between requests', chip: 'from-amber-500 to-orange-600' },
-    { icon: ShieldCheck, label: 'Requests left', value: `${remaining} / 10`, sub: 'Per address lifetime', chip: 'from-emerald-500 to-teal-600' },
-    { icon: Zap, label: 'Total distributed', value: `${fmt(totalDistributed)} NBL`, sub: 'From this browser', chip: 'from-violet-500 to-purple-600' },
-  ]
+  const mine = walletAddress()
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Aurora blobs + grid backdrop */}
-      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)' }} />
-      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(251,146,60,0.35), transparent 70%)' }} />
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
+    <Page width="max-w-5xl">
+      <PageHeader
+        icon={Droplets}
+        eyebrow="Faucet"
+        title="Get test NBL"
+        description={`Each request sends ${DRIP_AMOUNT} NBL from the devnet funding account, included in the next block.`}
+        actions={<LiveBadge online={network ? backendOnline : backendOnline ? undefined : false} label={`Block #${fmt(network?.height)}`} />}
+      />
 
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-8 animate-fade-in">
-        {/* ── Header ─────────────────────────────────────────────── */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
-            <span className={`w-2 h-2 rounded-full ${backendOnline ? 'bg-emerald-400 animate-pulse-dot' : 'bg-red-400'}`} />
-            {backendOnline ? 'Faucet online' : 'Node offline'}
-            <span className="text-slate-400 dark:text-slate-500">· {RPC_URL}</span>
-          </div>
+      <StatGrid>
+        <Stat icon={Droplets} label="Per request" value={`${DRIP_AMOUNT} NBL`} />
+        <Stat icon={Clock} label="Cooldown" value={import.meta.env.DEV ? '60 s' : '24 h'} sub="per address" />
+        <Stat label="Requests left" value={`${remaining} / 10`} sub="this address, this browser" />
+        <Stat label="Sent from here" value={`${fmt(totalDistributed)} NBL`} />
+      </StatGrid>
 
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
-              <Droplets className="w-6 h-6" />
-            </div>
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Nebula
-              <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Faucet</span>
-            </h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
-            Fund local wallets with development tokens so you can exercise transfers, explorer updates, and governance flows without manual setup.
-          </p>
-
-          {/* Network strip */}
-          {network && (
-            <div className="flex items-center justify-center flex-wrap gap-2 mt-5 text-xs">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Activity className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" /> Tip #{fmt(network.height)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Gauge className="w-3.5 h-3.5 text-emerald-500" /> Base fee {fmt(network.baseFee)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <ShieldCheck className="w-3.5 h-3.5 text-violet-500" /> Finalized #{fmt(network.finalized)}
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* ── Hero stats ─────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-          {heroStats.map(({ icon: Icon, label, value, sub, chip }) => (
-            <div key={label} className="p-4 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
-              <div className="flex items-center gap-2 mb-3">
-                <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${chip} flex items-center justify-center text-white shadow-md`}>
-                  <Icon className="w-4 h-4" />
-                </div>
-                <span className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">{label}</span>
-              </div>
-              <div className="text-2xl font-bold text-slate-900 dark:text-white tabular-nums">{value}</div>
-              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">{sub}</p>
-            </div>
-          ))}
-        </div>
-
-        {!backendOnline && (
-          <div className="mb-6 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
-            <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. Start the testnet first — the faucet credits the node's state trie directly.</span>
-          </div>
-        )}
-
-        <div className="grid lg:grid-cols-[1fr_320px] gap-4">
-          {/* ── Request card ─────────────────────────────────────── */}
-          <div className="p-5 rounded-2xl glass-strong animate-fade-in">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-white shadow-md">
-                <Droplets className="w-4 h-4" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">Request testnet funds</h2>
-                <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">One drip per address, 100 NBL each.</p>
-              </div>
-            </div>
-
-            {/* Remaining progress */}
-            <div className="mb-5">
-              <div className="flex items-center justify-between text-xs mb-1.5">
-                <span className="text-slate-500 dark:text-slate-400">Lifetime requests</span>
-                <span className="text-slate-600 dark:text-slate-300 font-medium tabular-nums">{usedRequests} / 10 used</span>
-              </div>
-              <div className="h-2 rounded-full bg-slate-200 dark:bg-slate-700/50 overflow-hidden">
-                <div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 transition-all"
-                  style={{ width: `${(usedRequests / 10) * 100}%` }} />
-              </div>
-            </div>
-
-            <div className="mb-3">
-              <label className="text-xs uppercase text-slate-500 dark:text-slate-400 mb-2 block flex items-center gap-1">
-                Wallet address
-                <button onClick={() => { navigator.clipboard.writeText(DEMO_ADDR); setStatus('Demo address copied'); setStatusType('success'); setTimeout(() => setStatus(''), 2000) }} className="text-blue-500 dark:text-blue-400 hover:text-blue-600 dark:hover:text-blue-300">
-                  <Copy className="w-3 h-3" />
-                </button>
-              </label>
-              <input value={address} onChange={e => setAddress(e.target.value)}
-                placeholder="0x..."
-                className="w-full px-3 py-3 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm text-slate-800 dark:text-slate-200 placeholder-slate-400 dark:placeholder-slate-500 font-mono focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
-            </div>
-
-            {/* Quick address chips */}
-            <div className="mb-4">
-              <span className="text-[10px] uppercase tracking-wider text-slate-400 dark:text-slate-500 block mb-1.5">Quick fill</span>
-              <div className="flex flex-wrap gap-1.5">
-                {TEST_ADDRESSES.map((a) => (
-                  <button key={a} onClick={() => setAddress(a)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-mono transition-all ${
-                      address === a
-                        ? 'bg-blue-500/20 text-blue-600 dark:text-blue-300 border border-blue-500/30'
-                        : 'bg-slate-200/50 dark:bg-slate-700/50 text-slate-500 dark:text-slate-400 border border-slate-300/50 dark:border-slate-600/50 hover:bg-slate-300/50 dark:hover:bg-slate-600/50'
-                    }`}>
-                    {shorten(a)}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <button onClick={requestTokens} disabled={submitting || !!cooldownEnd}
-              className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-600 text-white text-sm font-semibold shadow-lg shadow-blue-600/20 hover:opacity-90 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:translate-y-0 transition-all">
-              {submitting ? <><RefreshCw className="w-4 h-4 animate-spin" /> Processing...</> : cooldownEnd ? <><Clock className="w-4 h-4" /> Wait {cooldownHours}h {cooldownMinutes}m</> : <><Droplets className="w-4 h-4" /> Request {DRIP_AMOUNT} NBL</>}
-            </button>
-
-            {status && (
-              <div className={`mt-4 p-3 rounded-xl text-sm ${
-                statusType === 'success' ? 'bg-emerald-50 dark:bg-emerald-600/20 border border-emerald-200 dark:border-emerald-500/30 text-emerald-700 dark:text-emerald-300' :
-                statusType === 'error' ? 'bg-red-50 dark:bg-red-600/20 border border-red-200 dark:border-red-500/30 text-red-700 dark:text-red-300' :
-                'bg-blue-50 dark:bg-blue-600/20 border border-blue-200 dark:border-blue-500/30 text-blue-700 dark:text-blue-300'
-              }`}>
-                <div className="flex items-center gap-2">
-                  {statusType === 'success' ? <CheckCircle className="w-4 h-4 shrink-0" /> : statusType === 'error' ? <AlertCircle className="w-4 h-4 shrink-0" /> : <Clock className="w-4 h-4 shrink-0" />}
-                  <span className="break-all">{status}</span>
-                </div>
-              </div>
-            )}
-
-            {cooldownEnd && (
-              <p className="text-xs text-slate-500 dark:text-slate-500 mt-3">
-                Next request available in {cooldownHours}h {cooldownMinutes}m
-              </p>
-            )}
-
-            {/* Balance check */}
-            <div className="mt-5 p-4 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
-              <div className="flex items-center justify-between mb-2">
-                <span className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  <Wallet className="w-3.5 h-3.5" /> On-chain balance
-                </span>
-                <button onClick={() => fetchBalance(address)} className="p-1.5 rounded-lg hover:bg-slate-200/60 dark:hover:bg-slate-600/50 text-slate-400 dark:text-slate-500" title="Refresh balance">
-                  <RefreshCw className={`w-3.5 h-3.5 ${balanceLoading ? 'animate-spin' : ''}`} />
-                </button>
-              </div>
-              {balanceLoading ? (
-                <div className="h-8 rounded-lg bg-slate-200/60 dark:bg-slate-600/40 animate-pulse" />
-              ) : balance ? (
-                <div className="flex items-baseline gap-2">
-                  <span className="text-2xl font-bold text-slate-900 dark:text-white tabular-nums">{balance.nbl}</span>
-                  <span className="text-sm text-slate-400 dark:text-slate-500">NBL</span>
-                  <span className="ml-auto text-xs text-slate-400 dark:text-slate-500 tabular-nums">nonce {balance.nonce}</span>
-                </div>
-              ) : (
-                <p className="text-sm text-slate-400 dark:text-slate-500">No balance for this address yet.</p>
-              )}
-            </div>
-          </div>
-
-          {/* ── Right column ─────────────────────────────────────── */}
+      <div className="grid lg:grid-cols-[1.4fr_1fr] gap-6">
+        <Card title="Request tokens" icon={Droplets}>
           <div className="space-y-4">
-            <div className="p-4 rounded-2xl glass-strong">
-              <div className="flex items-center justify-between mb-2">
-                <span className="flex items-center gap-1.5 text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                  <History className="w-3.5 h-3.5" /> Drip history
-                </span>
-                <span className="text-[10px] text-slate-400 dark:text-slate-500">Last 10</span>
+            <Field label="Recipient address" hint={address && address === mine ? 'Your wallet in this browser' : !mine ? <>No wallet yet — <Link to="/wallet" className="text-blue-600 dark:text-blue-300 hover:underline">create one</Link> to fill this in.</> : undefined}>
+              <div className="flex gap-2">
+                <input value={address} onChange={(e) => setAddress(e.target.value.trim())} placeholder="0x..." className={`${inputClass} font-mono`} />
+                {mine && address !== mine && (
+                  <Button variant="secondary" icon={Wallet} onClick={() => setAddress(mine)} title="Use my wallet">Mine</Button>
+                )}
               </div>
-              {drips.length > 0 ? (
-                <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin">
-                  {drips.map((d, i) => (
-                    <div key={i} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
-                      <div className="min-w-0">
-                        <p className="text-xs font-mono text-slate-800 dark:text-slate-200 truncate">{shorten(d.address)}</p>
-                        <p className="text-[10px] text-slate-400 dark:text-slate-500">{formatTime(d.timestamp)}</p>
-                      </div>
-                      <span className="text-xs font-bold text-emerald-500 dark:text-emerald-400 shrink-0 ml-2">+{d.amount} NBL</span>
-                    </div>
-                  ))}
+            </Field>
+
+            <div className="flex items-center justify-between rounded-xl bg-slate-50 dark:bg-slate-950/40 border border-slate-100 dark:border-slate-800 px-4 py-3">
+              <div>
+                <div className="text-[11px] uppercase tracking-wider text-slate-500">Current balance</div>
+                <div className="font-display text-lg font-semibold tabular-nums text-slate-900 dark:text-white">
+                  {balanceLoading ? '…' : balance ? `${balance.nbl} NBL` : '—'}
                 </div>
-              ) : (
-                <p className="text-sm text-slate-400 dark:text-slate-500 py-4 text-center">No drips yet.</p>
-              )}
+              </div>
+              <Button variant="ghost" size="sm" icon={RefreshCw} onClick={() => fetchBalance(address)} aria-label="Refresh balance">Refresh</Button>
             </div>
 
-            <div className="p-4 rounded-2xl glass-strong">
-              <span className="text-xs uppercase tracking-wider text-slate-500 dark:text-slate-400">Last request</span>
-              <div className="text-xl font-bold text-slate-900 dark:text-white mt-1.5 tabular-nums">
-                {lastRequest ? formatTime(lastRequest) : '—'}
+            <div>
+              <div className="flex justify-between text-xs text-slate-500 mb-1.5">
+                <span>Lifetime requests</span><span className="tabular-nums">{usedRequests} / 10 used</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
+                <div className="h-full rounded-full bg-gradient-to-r from-blue-600 to-cyan-500 transition-all" style={{ width: `${(usedRequests / 10) * 100}%` }} />
               </div>
             </div>
 
-            <div className="p-4 rounded-2xl bg-gradient-to-br from-blue-600/10 via-cyan-600/10 to-teal-600/10 border border-blue-500/10">
-              <p className="text-xs font-semibold text-blue-600 dark:text-blue-300 mb-1.5">How it works</p>
-              <ul className="space-y-1.5 text-xs text-slate-500 dark:text-slate-400">
-                <li>Each request sends <strong className="text-slate-700 dark:text-slate-200">{DRIP_AMOUNT} test tokens</strong> to one local wallet address.</li>
-                <li>Addresses are limited to <strong className="text-slate-700 dark:text-slate-200">one request every {import.meta.env.DEV ? '60s' : '24h'}</strong> (browser-side) and the node enforces a 60s server cooldown.</li>
-                <li>Usage is capped at <strong className="text-slate-700 dark:text-slate-200">10 total requests</strong> per address.</li>
-              </ul>
-            </div>
+            <Button onClick={requestTokens} loading={submitting} disabled={!!cooldownEnd || !backendOnline} icon={cooldownEnd ? Clock : Droplets} className="w-full">
+              {cooldownEnd ? `Next request in ${cooldownLabel}` : `Request ${DRIP_AMOUNT} NBL`}
+            </Button>
+            <Notice type={statusType === 'error' ? 'err' : statusType === 'success' ? 'ok' : 'info'}>{status}</Notice>
+            {!backendOnline && <Notice type="err">Node not reachable at {getApiUrl()} — start the devnet first.</Notice>}
           </div>
+        </Card>
+
+        <div className="space-y-6">
+          <Card title="Recent requests" icon={History} padded>
+            {drips.length === 0 ? (
+              <EmptyState title="No requests yet">Requests from this browser show up here.</EmptyState>
+            ) : (
+              <ul className="divide-y divide-slate-100 dark:divide-slate-800 -my-2">
+                {drips.map((d, i) => (
+                  <li key={i} className="flex items-center justify-between py-2.5 text-sm">
+                    <button type="button" onClick={() => setAddress(d.address)} className="font-mono text-xs text-slate-600 dark:text-slate-300 hover:text-blue-600">{shorten(d.address)}</button>
+                    <span className="text-slate-900 dark:text-white tabular-nums">+{d.amount} NBL</span>
+                    <span className="text-xs text-slate-500">{formatTime(d.timestamp)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+          <Card title="Other test addresses" padded>
+            <div className="flex flex-col gap-1">
+              {TEST_ADDRESSES.map((a) => (
+                <button key={a} type="button" onClick={() => setAddress(a)} className="text-left font-mono text-xs text-slate-500 hover:text-blue-600 dark:hover:text-blue-300 truncate py-1">{a}</button>
+              ))}
+            </div>
+          </Card>
         </div>
       </div>
-    </div>
+    </Page>
   )
 }

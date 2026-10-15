@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
-import nacl from "tweetnacl";
+import { Page, PageHeader, LiveBadge, Notice, Tabs as KitTabs } from '../components/ui.jsx'
+import { signTx } from "../lib/chain.js";
 import {
   BarChart3, Vote, FileText, PlusCircle, Wallet, TrendingUp,
   TrendingDown, Clock, CheckCircle, XCircle, AlertTriangle,
@@ -9,8 +10,8 @@ import {
   ThumbsDown, Minus, Zap, Layers, Target, Loader2,
   Bell, Gauge, ShieldCheck, WifiOff, Copy, PenLine, Rocket, BookOpen,
 } from "lucide-react";
+import { getApiUrl } from '../lib/chain.js'
 
-const RPC_URL = "http://localhost:8545";
 
 // ── Wallet / signing helpers (mirror WalletPage.jsx) ──────────────────────
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, "0")).join("");
@@ -33,23 +34,6 @@ function loadWallet() {
   return null;
 }
 
-const sha256b = async (data) => new Uint8Array(await crypto.subtle.digest("SHA-256", data));
-
-const govTxHash = async (tx) => {
-  let h = new Uint8Array(0);
-  const ap = (b) => { const a = new Uint8Array(h.length + b.length); a.set(h); a.set(b, h.length); h = a };
-  ap(new Uint8Array(tx.sender.slice(0, 20)));
-  const nb = new Uint8Array(8); new DataView(nb.buffer).setBigUint64(0, BigInt(tx.nonce), true); ap(nb);
-  ap(new Uint8Array(tx.payload));
-  const gb = new Uint8Array(8); new DataView(gb.buffer).setBigUint64(0, BigInt(tx.gas_limit), true); ap(gb);
-  const fb = new Uint8Array(8); new DataView(fb.buffer).setBigUint64(0, BigInt(tx.max_fee_per_gas), true); ap(fb);
-  const pb = new Uint8Array(8); new DataView(pb.buffer).setBigUint64(0, BigInt(tx.max_priority_fee_per_gas), true); ap(pb);
-  if (tx.chain_id) { const cb = new Uint8Array(8); new DataView(cb.buffer).setBigUint64(0, BigInt(tx.chain_id), true); ap(cb) }
-  if (tx.to && tx.to.length) ap(new Uint8Array(tx.to.slice(0, 20)));
-  const vb = new Uint8Array(8); new DataView(vb.buffer).setBigUint64(0, BigInt(tx.value), true); ap(vb);
-  return await sha256b(h);
-};
-
 const buildGovTx = (wallet, payloadObj, nonceVal) => ({
   sender: Array.from(fromHex(wallet.address.replace("0x", ""))),
   to: null,
@@ -58,7 +42,7 @@ const buildGovTx = (wallet, payloadObj, nonceVal) => ({
   gas_limit: 21000,
   max_fee_per_gas: 1e9,
   max_priority_fee_per_gas: 1e9,
-  payload: [...Array.from(wallet.publicKey), ...Array.from(new TextEncoder().encode(JSON.stringify(payloadObj)))],
+  payload: Array.from(new TextEncoder().encode(JSON.stringify(payloadObj))),
   chain_id: 1,
   signature: [],
 });
@@ -69,10 +53,7 @@ async function submitGovTx(wallet, payloadObj, apiUrl) {
     const r = await window.fetch(`${apiUrl}/balance/${wallet.address}`);
     if (r.ok) { const d = await r.json(); nonce = d.nonce || 0; }
   } catch { /* keep nonce 0 */ }
-  const tx = buildGovTx(wallet, payloadObj, nonce);
-  const msg = await govTxHash(tx);
-  const sig = nacl.sign.detached(msg, wallet.secretKey);
-  tx.signature = Array.from(sig);
+  const tx = await signTx(buildGovTx(wallet, payloadObj, nonce), wallet);
   const res = await window.fetch(`${apiUrl}/submit_tx`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -246,29 +227,19 @@ function NotificationBar({ proposals, onDismiss, onViewProposals }) {
   );
 }
 
-function StatCard({ label, value, sub, icon: Icon, trend, color = "blue" }) {
-  const chips = {
-    blue: "from-blue-600 to-cyan-600",
-    emerald: "from-emerald-600 to-teal-600",
-    amber: "from-amber-500 to-orange-600",
-    violet: "from-violet-600 to-purple-600",
-    rose: "from-rose-500 to-pink-600",
-  };
-  const trendColor = trend === "up" ? "text-emerald-400" : trend === "down" ? "text-rose-400" : "text-slate-400 dark:text-slate-500";
+function StatCard({ label, value, sub, icon: Icon, trend }) {
+  const trendColor = trend === "up" ? "text-emerald-600 dark:text-emerald-400" : trend === "down" ? "text-rose-600 dark:text-rose-400" : "text-slate-500";
   return (
-    <div className="p-4 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
-      <div className="flex items-center gap-2 mb-3">
-        <div className={`w-8 h-8 rounded-lg bg-gradient-to-br ${chips[color] || chips.blue} flex items-center justify-center text-white shadow-md`}>
-          {Icon && <Icon className="w-4 h-4" />}
-        </div>
-        <span className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">{label}</span>
+    <div className="rounded-2xl glass-strong p-4">
+      <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-slate-500">
+        {Icon && <Icon className="w-3.5 h-3.5" />}{label}
       </div>
-      <div className="text-2xl font-bold text-slate-900 dark:text-white tabular-nums">{value}</div>
+      <div className="mt-1 font-display text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{value}</div>
       {sub && (
-        <div className="flex items-center gap-1 mt-1 text-xs">
-          {trend === "up" && <ArrowUpRight className="w-3 h-3 text-emerald-400" />}
-          {trend === "down" && <ArrowDownRight className="w-3 h-3 text-rose-400" />}
-          <span className={trendColor}>{sub}</span>
+        <div className={`mt-0.5 flex items-center gap-1 text-xs ${trendColor}`}>
+          {trend === "up" && <ArrowUpRight className="w-3 h-3" />}
+          {trend === "down" && <ArrowDownRight className="w-3 h-3" />}
+          {sub}
         </div>
       )}
     </div>
@@ -347,14 +318,14 @@ function Dashboard({ proposals, treasury, validators, govParams, onTabChange }) 
         <div className="p-5 rounded-2xl border border-slate-200 dark:border-slate-700/50 bg-white/70 dark:bg-slate-800/40 backdrop-blur-sm">
           <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4 flex items-center gap-2">
             <Activity className="w-4 h-4 text-blue-400" />
-            System Health
+            Network parameters
           </h3>
           <div className="space-y-3.5">
             {[
-              { label: "Voting Power Online", value: "78.2%", sub: "12.4M NBL staked", color: "bg-emerald-500" },
-              { label: "Quorum Threshold", value: `${govParams.quorum}%`, sub: "Current participation", color: "bg-blue-500" },
-              { label: "Active Validators", value: `${activeValidators}/${validators.length}`, sub: "Producing blocks", color: "bg-amber-500" },
-              { label: "Inflation Rate", value: "4.2%", sub: "Annualized", color: "bg-violet-500" },
+              { label: "Total staked", value: `${formatNbl(validators.reduce((s, v) => s + BigInt(v.stake || 0), 0n).toString())} NBL`, sub: "Votes are weighted by stake", color: "bg-emerald-500" },
+              { label: "Quorum", value: `${govParams.quorum}%`, sub: "Of stake must vote", color: "bg-blue-500" },
+              { label: "Active validators", value: `${activeValidators}/${validators.length}`, sub: "In the validator set", color: "bg-amber-500" },
+              { label: "Voting period", value: `${fmt(govParams.votingPeriod)} blocks`, sub: "From the block a proposal lands in", color: "bg-violet-500" },
             ].map(({ label, value, sub, color }) => (
               <div key={label} className="flex items-center justify-between">
                 <div>
@@ -979,6 +950,13 @@ function Analytics({ proposals, validators }) {
   const totalFor = proposals.reduce((sum, p) => sum + Number(p.yesVotes), 0);
   const totalAgainst = proposals.reduce((sum, p) => sum + Number(p.noVotes), 0);
   const totalAbstain = proposals.reduce((sum, p) => sum + Number(p.abstainVotes || 0), 0);
+  const uniqueVoters = new Set(proposals.flatMap(p => Object.keys(p.voters || {}))).size;
+  const stakeWei = validators.reduce((s, v) => s + Number(v.stake || 0), 0);
+  const turnouts = proposals
+    .map(p => Number(p.yesVotes) + Number(p.noVotes) + Number(p.abstainVotes || 0))
+    .filter(v => v > 0)
+    .map(v => (stakeWei > 0 ? Math.min(100, (v / stakeWei) * 100) : 0));
+  const avgTurnout = turnouts.length ? turnouts.reduce((a, b) => a + b, 0) / turnouts.length : 0;
 
   return (
     <div className="space-y-6">
@@ -986,7 +964,7 @@ function Analytics({ proposals, validators }) {
         <StatCard label="Total Proposals" value={proposals.length.toString()} sub="All time" icon={FileText} color="blue" />
         <StatCard label="Success Rate" value={`${successRate}%`} sub={`${passed} passed · ${rejected} rejected`} icon={Target} color="emerald" />
         <StatCard label="Active Now" value={active.toString()} sub="Open for voting" icon={Zap} color="amber" />
-        <StatCard label="Total Voters" value={totalVotes.toLocaleString()} sub="Across all proposals" icon={Users} color="violet" />
+        <StatCard label="Voters" value={uniqueVoters.toString()} sub="Distinct addresses that voted" icon={Users} color="violet" />
       </div>
 
       <div className="grid md:grid-cols-2 gap-4 md:gap-6">
@@ -1042,9 +1020,9 @@ function Analytics({ proposals, validators }) {
         </h3>
         <div className="grid md:grid-cols-3 gap-4">
           {[
-            { label: "Avg. Turnout", value: "57.3%", desc: "Across active proposals", icon: Activity, color: "blue" },
-            { label: "Unique Voters", value: "24 validators", desc: "Have voted this epoch", icon: Users, color: "violet" },
-            { label: "Voting Power", value: "12,456,000 NBL", desc: "Total eligible stake", icon: Shield, color: "emerald" },
+            { label: "Avg. Turnout", value: `${avgTurnout.toFixed(1)}%`, desc: "Votes cast vs. staked NBL", icon: Activity, color: "blue" },
+            { label: "Unique Voters", value: `${uniqueVoters}`, desc: "Across all proposals", icon: Users, color: "violet" },
+            { label: "Voting Power", value: `${formatNbl(BigInt(Math.round(stakeWei)).toString())} NBL`, desc: "Total staked", icon: Shield, color: "emerald" },
           ].map(({ label, value, desc, icon: Icon, color }) => {
             const c = color === "blue" ? "from-blue-500/10 to-blue-600/5 border-blue-500/10 text-blue-400" : color === "violet" ? "from-violet-500/10 to-violet-600/5 border-violet-500/10 text-violet-400" : "from-emerald-500/10 to-emerald-600/5 border-emerald-500/10 text-emerald-400";
             return (
@@ -1083,11 +1061,11 @@ export default function Governance() {
     const poll = async () => {
       try {
         const [hr, sr, gr, gvr, vr] = await Promise.all([
-          window.fetch(`${RPC_URL}/health`),
-          window.fetch(`${RPC_URL}/status`),
-          window.fetch(`${RPC_URL}/gas_price`),
-          window.fetch(`${RPC_URL}/governance`),
-          window.fetch(`${RPC_URL}/validators`),
+          window.fetch(`${getApiUrl()}/health`),
+          window.fetch(`${getApiUrl()}/status`),
+          window.fetch(`${getApiUrl()}/gas_price`),
+          window.fetch(`${getApiUrl()}/governance`),
+          window.fetch(`${getApiUrl()}/validators`),
         ]);
         if (!hr.ok) throw new Error("offline");
         const sd = await sr.json();
@@ -1134,7 +1112,7 @@ export default function Governance() {
       throw new Error("Create a wallet on the Wallet page before voting");
     }
     const choice = support === "For" ? "yes" : support === "Against" ? "no" : "abstain";
-    return submitGovTx(activeWallet, { action: "vote", proposal_id: proposalId, choice }, RPC_URL);
+    return submitGovTx(activeWallet, { action: "vote", proposal_id: proposalId, choice }, getApiUrl());
   };
 
   const handleExecute = async (proposalId) => {
@@ -1142,7 +1120,7 @@ export default function Governance() {
     if (!activeWallet) {
       throw new Error("Create a wallet on the Wallet page before executing");
     }
-    return submitGovTx(activeWallet, { action: "execute", proposal_id: proposalId }, RPC_URL);
+    return submitGovTx(activeWallet, { action: "execute", proposal_id: proposalId }, getApiUrl());
   };
 
   const submitProposal = async (proposal) => {
@@ -1150,80 +1128,20 @@ export default function Governance() {
     if (!activeWallet) {
       throw new Error("Create a wallet on the Wallet page before proposing");
     }
-    return submitGovTx(activeWallet, { action: "propose", title: proposal.title, description: proposal.description }, RPC_URL);
+    return submitGovTx(activeWallet, { action: "propose", title: proposal.title, description: proposal.description }, getApiUrl());
   };
 
   return (
-    <div className="relative min-h-screen overflow-hidden">
-      {/* Aurora blobs + grid backdrop */}
-      <div className="absolute -top-40 -left-40 w-[38rem] h-[38rem] rounded-full opacity-25 animate-float pointer-events-none"
-        style={{ background: "radial-gradient(circle, rgba(14,165,233,0.45), transparent 70%)" }} />
-      <div className="absolute top-40 -right-40 w-[34rem] h-[34rem] rounded-full opacity-20 animate-float-alt pointer-events-none"
-        style={{ background: "radial-gradient(circle, rgba(139,92,246,0.4), transparent 70%)" }} />
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
+    <Page width="max-w-6xl">
+      <PageHeader icon={Vote} eyebrow="Governance" title="Govern the network"
+        description="Propose parameter changes, upgrades and treasury spends. Votes are weighted by stake and counted on chain."
+        actions={<LiveBadge online={backendOnline} label={network ? `#${fmt(network.height)}` : "Online"} />} />
 
-      <div className="relative z-10 max-w-5xl mx-auto px-4 md:px-6 py-8 md:py-10 animate-fade-in">
-        {/* ── Header ─────────────────────────────────────────────── */}
-        <header className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full glass text-xs font-medium text-slate-600 dark:text-slate-300 mb-5">
-            <span className={`w-2 h-2 rounded-full ${backendOnline ? "bg-emerald-400 animate-pulse-dot" : "bg-red-400"}`} />
-            {backendOnline ? "Governance online" : "Node offline"}
-            <span className="text-slate-400 dark:text-slate-500">· BFT</span>
-          </div>
+      {!backendOnline && (
+        <Notice type="warn" className="mb-6">Node not reachable at {getApiUrl()}. The data below is sample data — start the devnet to connect.</Notice>
+      )}
 
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 flex items-center justify-center text-white shadow-lg shadow-blue-600/25">
-              <Vote className="w-6 h-6" />
-            </div>
-            <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-slate-900 dark:text-white">
-              Nebula
-              <span className="bg-gradient-to-r from-blue-500 via-cyan-500 to-violet-500 bg-clip-text text-transparent"> Governance</span>
-            </h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400 max-w-xl mx-auto">
-            Propose, vote, and steer the network — community-led parameter changes, runtime upgrades, and treasury allocations.
-          </p>
-
-          {/* Network strip */}
-          {network && (
-            <div className="flex items-center justify-center flex-wrap gap-2 mt-5 text-xs">
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Activity className="w-3.5 h-3.5 text-blue-500 dark:text-cyan-400" /> Tip #{fmt(network.height)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <Gauge className="w-3.5 h-3.5 text-emerald-500" /> Base fee {fmt(network.baseFee)}
-              </span>
-              <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full glass-strong font-mono text-slate-700 dark:text-slate-200">
-                <ShieldCheck className="w-3.5 h-3.5 text-violet-500" /> Finalized #{fmt(network.finalized)}
-              </span>
-            </div>
-          )}
-        </header>
-
-        {!backendOnline && (
-          <div className="mb-6 px-4 py-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-sm text-amber-400 flex items-center gap-2">
-            <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Node not reachable at {RPC_URL}. Governance data below is sample data — start the testnet to connect.</span>
-          </div>
-        )}
-
-        {/* ── Tab bar ────────────────────────────────────────────── */}
-        <div className="flex flex-wrap gap-1 p-1 rounded-2xl glass-strong mb-6 max-w-md mx-auto">
-          {TABS.map(({ id, label, icon: Icon }) => (
-            <button
-              key={id}
-              onClick={() => setActiveTab(id)}
-              className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-sm font-semibold transition-all ${
-                activeTab === id
-                  ? "bg-gradient-to-r from-blue-600 to-cyan-600 text-white shadow-lg shadow-blue-600/25"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-200/50 dark:hover:bg-slate-700/40"
-              }`}
-            >
-              <Icon className="w-4 h-4" />
-              {label}
-            </button>
-          ))}
-        </div>
+      <KitTabs tabs={TABS} value={activeTab} onChange={setActiveTab} className="mb-6" />
 
         {!notifDismissed && activeProposals.length > 0 && (
           <div className="mb-6">
@@ -1255,10 +1173,6 @@ export default function Governance() {
           )}
         </div>
 
-        <footer className="mt-12 pt-6 border-t border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500 dark:text-slate-600">
-          Nebula Governance v1.0.0 · Scratch Blockchain · Data reflects the current network state
-        </footer>
-      </div>
-    </div>
+    </Page>
   );
 }

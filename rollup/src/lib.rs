@@ -83,7 +83,10 @@ impl RollupNode {
         }
 
         {
-            let mut da = self.da_layer.lock().unwrap();
+            let mut da = self
+                .da_layer
+                .lock()
+                .map_err(|_| anyhow::anyhow!("DA layer lock poisoned"))?;
             let commitment = da.submit_blob(blob_data)?;
             batch.da_commitment = Some(commitment.commitment);
         }

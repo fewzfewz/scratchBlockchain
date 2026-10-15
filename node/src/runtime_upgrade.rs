@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 /// Runtime version information
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -26,7 +26,9 @@ pub struct UpgradeProposal {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RuntimeUpgradeManager {
     current_version: RuntimeVersion,
-    pending_upgrades: HashMap<u64, UpgradeProposal>,
+    /// BTreeMap: serialized into the state trie and iterated on activation, so
+    /// its order must be the same on every node.
+    pending_upgrades: BTreeMap<u64, UpgradeProposal>,
     upgrade_history: Vec<RuntimeVersion>,
     next_proposal_id: u64,
 }
@@ -35,7 +37,7 @@ impl RuntimeUpgradeManager {
     pub fn new(initial_version: RuntimeVersion) -> Self {
         Self {
             current_version: initial_version.clone(),
-            pending_upgrades: HashMap::new(),
+            pending_upgrades: BTreeMap::new(),
             upgrade_history: vec![initial_version],
             next_proposal_id: 1,
         }
@@ -135,7 +137,9 @@ impl RuntimeUpgradeManager {
         self.upgrade_history.pop();
 
         // Revert to previous
-        self.current_version = self.upgrade_history.last().unwrap().clone();
+        if let Some(previous) = self.upgrade_history.last() {
+            self.current_version = previous.clone();
+        }
 
         Ok(self.current_version.clone())
     }

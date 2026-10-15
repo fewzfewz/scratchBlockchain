@@ -116,6 +116,7 @@ echo ""
 run_test "5.1 Stake Tokens" "./16-stake-tokens.js"
 run_test "5.2 Unstake Tokens" "./17-unstake-tokens.js"
 run_test "5.3 Validator Registration" "./18-register-validator.js"
+run_test "5.3b Staking Lifecycle (epochs, unbonding, slashing)" "./19-staking-lifecycle.js"
 run_test "5.4 Bridge Lock Readiness" "./21-bridge-lock.js"
 run_test "5.5 Upgrade Proposal" "./25-propose-upgrade.js"
 
@@ -127,6 +128,7 @@ echo ""
 
 run_test "6.1 Load Test" "./40-load-test.js"
 run_test "6.2 Chaos Smoke" "./41-chaos-smoke.js"
+run_test "6.3 Jail Offline Validator (stops validator4)" "./20-jail-offline-validator.js"
 
 echo ""
 echo "=========================================="

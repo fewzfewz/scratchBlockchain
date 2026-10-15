@@ -28,7 +28,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tokio::time::interval;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, info, warn};
 
 // Import from our modules
 mod config;
@@ -39,14 +39,14 @@ use config::NodeConfig;
 use rewards::{RewardConfig, RewardManager};
 
 // External imports
-use common::consensus_types::{ConsensusMessage, Proposal, Step, Vote};
+use common::consensus_types::ConsensusMessage;
 use common::crypto::SigningKey;
 use common::traits::Consensus;
-use common::types::{Block, Header, Transaction};
+use common::types::Block;
 
-use consensus::bft::{BftEngine, BftEvent};
+use consensus::bft::{BftEngine, BftEvent, BftSafetyState};
 use consensus::slashing::{SlashingConfig, SlashingTracker};
-use consensus::{EnhancedConsensus, FinalityGadget, SlashingCondition, ValidatorInfo};
+use consensus::{EnhancedConsensus, FinalityGadget, ValidatorInfo};
 
 use execution::evm::EvmExecutor;
 use node::evm_store::ChainStoreEvmStore;
@@ -58,12 +58,10 @@ use node::tx_pool::TxPool;
 
 use storage::receipt_store::ReceiptStore;
 use storage::trie::PatriciaTrie;
-use storage::{ChainStore, ColumnFamily, PruneConfig, WriteBatch};
+use storage::{ChainStore, KeyValueStore, PruneConfig, StagedStore};
 
 use node::block_producer::{BlockExecutor, BlockProducer, BlockProducerConfig};
 use node::circuit_breaker::{CircuitBreaker, CircuitBreakerConfig};
-use node::fork_choice::ForkChoice;
-use node::light_client::{LightClient, SyncCommittee, SyncCommitteeManager};
 use node::metrics::Metrics;
 
 /// Seconds without a finalized block before a node attempts to re-sync from peers.
@@ -175,16 +173,27 @@ enum Commands {
     },
 }
 
-/// BFT state persistence for crash recovery
+/// BFT state persisted for crash recovery: the lock and the signing
+/// watermark. Written (atomically) before every signed vote or proposal is
+/// broadcast, so a restarted validator cannot vote against its lock or sign
+/// twice for the same height/round/step.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct BftPersistedState {
-    height: u64,
-    round: u64,
-    locked_block_hash: Option<[u8; 32]>,
-    locked_round: u64,
-    valid_block_hash: Option<[u8; 32]>,
-    valid_round: u64,
+    safety: BftSafetyState,
     last_saved: u64,
+}
+
+/// Load persisted BFT safety state. A missing or unreadable file (e.g. the
+/// pre-Phase-2 format) yields `None`.
+fn load_bft_state(path: &PathBuf) -> Option<BftSafetyState> {
+    let content = fs::read_to_string(path).ok()?;
+    match serde_json::from_str::<BftPersistedState>(&content) {
+        Ok(state) => Some(state.safety),
+        Err(e) => {
+            warn!("Ignoring unreadable BFT state at {}: {}", path.display(), e);
+            None
+        }
+    }
 }
 
 /// Node statistics
@@ -224,10 +233,19 @@ impl NodeStats {
 /// Main node structure
 struct Node {
     // Core components
+    #[allow(dead_code)]
     config: NodeConfig,
     chain_store: Arc<ChainStore>,
+    /// Write stage over the database: each block's whole state transition is
+    /// committed as one atomic batch (or discarded).
+    staged: Arc<StagedStore>,
+    #[allow(dead_code)]
     receipt_store: Arc<ReceiptStore>,
     state_trie: Arc<Mutex<PatriciaTrie>>,
+    chain_id: u64,
+    max_gas_per_block: u64,
+    /// Set when our state diverged from a finalized block; the node stops.
+    fatal_error: Option<String>,
 
     // Consensus
     bft_engine: Arc<Mutex<BftEngine>>,
@@ -242,6 +260,14 @@ struct Node {
 
     // Transaction pool (mempool + MEV + account abstraction)
     tx_pool: Arc<TxPool>,
+    /// This validator's key, used to sign double-sign evidence transactions.
+    evidence_key: ed25519_dalek::SigningKey,
+    /// Validators whose double signing we already reported on chain.
+    reported_equivocators: std::collections::HashSet<Vec<u8>>,
+    /// (height, block hash) of proposals that passed validation. The
+    /// proposer rebroadcasts every second, and re-checking a full block on
+    /// each copy took ~100 ms of the main loop.
+    validated_proposals: std::collections::HashSet<(u64, [u8; 32])>,
 
     // Slashing tracker
     slashing_tracker: Arc<Mutex<SlashingTracker>>,
@@ -252,6 +278,7 @@ struct Node {
 
     // Monitoring
     metrics: Arc<Metrics>,
+    #[allow(dead_code)]
     circuit_breaker: Arc<CircuitBreaker>,
     stats: NodeStats,
 
@@ -260,6 +287,11 @@ struct Node {
 
     // Block sync / catch-up state
     syncing: bool,
+    /// Rotates sync requests across connected peers, so one peer that
+    /// stops answering cannot stall catch-up forever.
+    sync_peer_cursor: usize,
+    /// Peer the in-flight sync request went to.
+    sync_peer: Option<PeerId>,
     last_sync_attempt_at: Instant,
     last_finalize_at: Instant,
     /// Set when the consensus engine signals that we are behind peers
@@ -289,8 +321,10 @@ impl Node {
         let data_dir = &config.storage.data_dir;
         fs::create_dir_all(data_dir)?;
 
-        let chain_store = Arc::new(ChainStore::open(data_dir)?);
-        let kv_store = chain_store.inner().clone();
+        let base_store = ChainStore::open(data_dir)?.inner().clone();
+        let staged = Arc::new(StagedStore::new(base_store));
+        let kv_store: Arc<dyn storage::KeyValueStore> = staged.clone();
+        let chain_store = Arc::new(ChainStore::new(kv_store.clone()));
         let receipt_store = Arc::new(ReceiptStore::new(kv_store.clone()));
         let state_trie = Arc::new(Mutex::new(PatriciaTrie::new(kv_store)?));
 
@@ -303,13 +337,13 @@ impl Node {
             let genesis_config: common::types::GenesisConfig =
                 serde_json::from_str(&genesis_content)?;
 
-            // Initialize genesis accounts in state trie
-            for account in genesis_config.accounts {
-                let account_json = serde_json::to_vec(&account)?;
-                state_trie
-                    .lock()
-                    .await
-                    .insert(&account.address, &account_json)?;
+            // The whole genesis state is written as one atomic batch, together
+            // with its state root (which block 0's header must commit to).
+            staged.begin()?;
+
+            // Genesis balances live where transfers and /balance read them.
+            for account in &genesis_config.accounts {
+                node::accounts::store(&chain_store, &account.address, account.balance, 0)?;
             }
 
             // Initialize genesis validators in state trie (for /validators RPC)
@@ -340,6 +374,28 @@ impl Node {
                 validator_infos.len()
             );
 
+            // Bridge relayer set: mints need `threshold` of these relayers.
+            if let Some(bridge) = &genesis_config.bridge {
+                let config = node::bridge_mint::BridgeConfig {
+                    relayers: bridge.relayers.clone(),
+                    threshold: bridge.threshold,
+                };
+                state_trie.lock().await.insert(
+                    node::bridge_mint::BRIDGE_CONFIG_KEY,
+                    &serde_json::to_vec(&config)?,
+                )?;
+                info!(
+                    "🌉 Bridge: {}-of-{} relayers",
+                    bridge.threshold,
+                    bridge.relayers.len()
+                );
+            }
+
+            // Governance state is part of genesis (seeded once, here, so every
+            // node starts from the same trie).
+            node::governance_store::load_or_init(&state_trie).await?;
+            node::runtime_upgrade_store::load_or_init(&state_trie).await?;
+
             // Store genesis block
             let genesis_block = Block::genesis();
             let block_hash = genesis_block.hash();
@@ -347,6 +403,20 @@ impl Node {
             chain_store.put_block(&block_hash, &block_data)?;
             chain_store.put_block_height(0, &block_hash)?;
             chain_store.set_latest_height(0)?;
+
+            let trie_root = state_trie.lock().await.root_hash();
+            let flat = staged.staged_lthash()?.checksum();
+            let root = node::state_root::compute(&flat, &trie_root);
+            let mut meta = storage::WriteBatch::new();
+            meta.put(storage::ColumnFamily::Meta, storage::STATE_ROOT_KEY, root);
+            staged.commit(meta)?;
+            info!("🌱 Genesis state root {}", hex::encode(root));
+        }
+        if chain_store.get_state_root()?.is_none() {
+            return Err(
+                "Database has no state root (created before Phase 3). Wipe the data directory and restart."
+                    .into(),
+            );
         }
 
         // ================================================================
@@ -398,11 +468,14 @@ impl Node {
         // ================================================================
         // 6. Initialize Transaction Pool (MEV + account abstraction)
         // ================================================================
+        // Numeric chain ID signed into every tx. Non-numeric config values
+        // (e.g. "modular-testnet-1") fall back to 1, which clients default to.
+        let chain_id: u64 = config.network.chain_id.parse().unwrap_or(1);
         let mempool_config = mempool::MempoolConfig {
-            max_capacity: (config.security.max_tx_per_block * 2) as usize,
+            max_capacity: (config.security.max_tx_per_block * 2),
             max_per_sender: 100,
             min_fee_per_gas: 1_000_000_000,
-            chain_id: Some(1),
+            chain_id: Some(chain_id),
         };
         let validator_pubkeys: Vec<Vec<u8>> =
             validators.iter().map(|v| v.public_key.clone()).collect();
@@ -427,12 +500,21 @@ impl Node {
         } else {
             (chain_tip + 1, chain_tip + 2)
         };
-        let bft_engine = Arc::new(Mutex::new(BftEngine::new(
+        let mut engine = BftEngine::new(
             public_key.clone(),
             validators.clone(),
             bft_start_height,
             signing_key.clone(),
-        )));
+        );
+        if let Some(saved) = load_bft_state(&bft_state_path) {
+            info!(
+                "🔐 Restored BFT safety state (last signed {:?}, locked: {})",
+                saved.last_signed,
+                saved.locked.is_some()
+            );
+            engine.restore_safety_state(saved);
+        }
+        let bft_engine = Arc::new(Mutex::new(engine));
 
         // ================================================================
         // 8. Initialize Finality Gadget
@@ -442,7 +524,6 @@ impl Node {
         // ================================================================
         // 9. Initialize Block Executor
         // ================================================================
-        let chain_id: u64 = config.network.chain_id.parse().unwrap_or(1);
         let evm_store = Arc::new(ChainStoreEvmStore::new(chain_store.clone()));
         let block_executor = BlockExecutor::new(
             EvmExecutor::with_store(evm_store.clone(), chain_id),
@@ -493,7 +574,7 @@ impl Node {
         // Start listening
         let p2p_addr: libp2p::Multiaddr = format!("/ip4/0.0.0.0/tcp/{}", config.network.p2p_port)
             .parse()
-            .expect("Invalid P2P address");
+            .map_err(|e| format!("Invalid P2P address: {}", e))?;
         network_cmd_sender
             .send(NetworkCommand::StartListening(p2p_addr))
             .await?;
@@ -524,16 +605,39 @@ impl Node {
             slashing_tracker.clone(),
             config.api.rate_limit,
             chain_id,
-        );
+        )
+        .with_security(node::rpc::RpcSecurity {
+            dev_mode: config.api.dev_mode,
+            admin_token: config.api.admin_token.clone(),
+            cors_origins: config.api.cors_origins.clone(),
+            dev_funding_key: match (&config.api.dev_funding_key, config.api.dev_mode) {
+                (Some(hex_seed), true) => Some(
+                    hex::decode(hex_seed.trim())
+                        .ok()
+                        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+                        .ok_or("api.dev_funding_key must be a 32-byte hex seed")?,
+                ),
+                _ => None,
+            },
+        });
+        if config.api.dev_mode {
+            warn!(
+                "⚠️ RPC dev mode: faucet, validator registration, delegation, bridge \
+                 relayer and runtime-upgrade routes write state outside consensus. \
+                 Never enable this on a shared network."
+            );
+            if config.api.admin_token.is_none() {
+                warn!("⚠️ No api.admin_token set: admin routes are open to anyone who can reach the RPC port");
+            }
+        }
 
         let rpc_port = config.network.rpc_port;
-        let enable_cors = !config.api.cors_origins.is_empty();
         let rpc_server = Arc::new(rpc_server);
         tokio::spawn({
             let rpc_server = rpc_server.clone();
             async move {
                 info!("🔌 RPC server listening on port {}", rpc_port);
-                rpc_server.run(rpc_port, enable_cors).await;
+                rpc_server.run(rpc_port).await;
             }
         });
 
@@ -544,7 +648,7 @@ impl Node {
                     let rpc_server = rpc_server.clone();
                     async move {
                         info!("🔌 API server listening on port {}", api_port);
-                        rpc_server.run(api_port, enable_cors).await;
+                        rpc_server.run(api_port).await;
                     }
                 });
             } else {
@@ -555,9 +659,8 @@ impl Node {
             }
         }
 
-        // Ensure on-chain governance state exists (seeds it for fresh chains and
-        // for existing chains that predate governance).
-        node::governance_store::load_or_init(&state_trie).await?;
+        // Governance is seeded as part of genesis; nothing may write state
+        // here, outside a block (it would change the committed state root).
 
         let prune_config = PruneConfig::from_mode(
             &config.storage.pruning_mode,
@@ -569,17 +672,32 @@ impl Node {
             prune_config.mode, prune_config.blocks_to_keep, prune_config.prune_every_n_blocks
         );
 
+        let max_gas_per_block = config.security.max_gas_per_block;
+        let evidence_key = {
+            let seed: [u8; 32] = signing_key
+                .to_bytes()
+                .try_into()
+                .map_err(|_| "validator key is not a 32-byte Ed25519 seed")?;
+            ed25519_dalek::SigningKey::from_bytes(&seed)
+        };
         Ok(Self {
             config,
             chain_store,
+            staged,
             receipt_store,
             state_trie,
+            chain_id,
+            max_gas_per_block,
+            fatal_error: None,
             bft_engine,
             finality_gadget,
             block_executor,
             block_producer,
             reward_manager,
             tx_pool,
+            evidence_key,
+            reported_equivocators: std::collections::HashSet::new(),
+            validated_proposals: std::collections::HashSet::new(),
             slashing_tracker,
             network_cmd_sender,
             network_event_receiver,
@@ -588,6 +706,8 @@ impl Node {
             stats: NodeStats::new(),
             bft_state_path,
             syncing: false,
+            sync_peer_cursor: 0,
+            sync_peer: None,
             last_sync_attempt_at: Instant::now(),
             last_finalize_at: Instant::now(),
             sync_requested: false,
@@ -622,6 +742,12 @@ impl Node {
             }
             pending_events.extend(new_events);
 
+            if let Some(reason) = self.fatal_error.take() {
+                tracing::error!("🛑 State diverged from the network — stopping: {}", reason);
+                self.shutdown().await?;
+                return Err(reason.into());
+            }
+
             tokio::select! {
                 _ = consensus_interval.tick() => {
                     let mut engine = self.bft_engine.lock().await;
@@ -633,9 +759,6 @@ impl Node {
                 _ = metrics_interval.tick() => {
                     if let Err(e) = self.update_live_metrics().await {
                         warn!("Error updating metrics: {}", e);
-                    }
-                    if let Err(e) = self.sync_validator_set().await {
-                        warn!("Validator set sync failed: {}", e);
                     }
                 }
 
@@ -680,6 +803,9 @@ impl Node {
     ) -> Result<(), Box<dyn std::error::Error>> {
         match event {
             BftEvent::BroadcastVote(vote) => {
+                // Persist the lock + signing watermark before the vote leaves
+                // the node; if this fails, do not broadcast.
+                self.persist_bft_state().await?;
                 debug!("Broadcasting vote for round {}", vote.round);
                 self.network_cmd_sender
                     .send(NetworkCommand::BroadcastConsensusMessage(
@@ -689,6 +815,7 @@ impl Node {
             }
 
             BftEvent::BroadcastProposal(proposal) => {
+                self.persist_bft_state().await?;
                 info!("Broadcasting proposal for round {}", proposal.round);
                 self.network_cmd_sender
                     .send(NetworkCommand::BroadcastConsensusMessage(
@@ -697,80 +824,19 @@ impl Node {
                     .await?;
             }
 
-            BftEvent::FinalizeBlock(block, proposer) => {
+            BftEvent::FinalizeBlock(block, _) => {
                 info!("🔒 Finalizing block at height {}", block.header.slot);
                 self.last_finalize_at = Instant::now();
 
-                // Execute and commit block
-                let receipts = self
-                    .block_executor
-                    .lock()
-                    .await
-                    .execute_and_commit(&block)?;
-
-                // Calculate total fees
-                let total_fees: u64 = receipts
-                    .iter()
-                    .map(|r| r.gas_used * block.header.base_fee)
-                    .sum();
-
-                // Get voters (simplified - in production, get from consensus)
-                let voters: Vec<Vec<u8>> = vec![];
-
-                // Track per-validator block production stats in the state trie
-                if let Err(e) = node::governance_store::record_block_stats(
-                    &self.state_trie,
-                    block.header.slot,
-                    &proposer,
-                )
-                .await
-                {
-                    warn!("Error recording block stats: {}", e);
+                if let Err(e) = self.apply_state_transition(&block).await {
+                    // +2/3 of the stake finalized this block, so failing to apply
+                    // it means our state is not theirs. Stop rather than vote on.
+                    self.fatal_error = Some(format!(
+                        "cannot apply finalized block {}: {}",
+                        block.header.slot, e
+                    ));
+                    return Err(e);
                 }
-
-                // Process rewards
-                let rewards = {
-                    let mut rm = self.reward_manager.lock().await;
-                    rm.process_block(&block, proposer, &voters, total_fees)
-                };
-
-                // Apply rewards to state
-                for (validator, amount) in rewards {
-                    if amount > 0 {
-                        self.apply_reward(&validator, amount as u64).await?;
-                        info!(
-                            "💰 Rewarded {} with {} tokens",
-                            hex::encode(&validator[..4]),
-                            amount
-                        );
-                    }
-                }
-
-                // Apply on-chain governance actions included in this block
-                if let Err(e) = node::governance_store::apply_extrinsics(
-                    &self.state_trie,
-                    &self.chain_store,
-                    &block.extrinsics,
-                    block.header.slot,
-                )
-                .await
-                {
-                    warn!("Error applying governance actions: {}", e);
-                }
-
-                if let Err(e) = node::runtime_upgrade_store::apply_at_height(
-                    &self.state_trie,
-                    block.header.slot,
-                )
-                .await
-                {
-                    warn!("Error applying runtime upgrades: {}", e);
-                }
-
-                // Update metrics
-                self.metrics.record_block();
-                self.metrics.update_finalized_height(block.header.slot);
-                self.stats.record_block(block.extrinsics.len());
 
                 // Remove transactions from pool
                 self.tx_pool.remove_transactions(&block.extrinsics);
@@ -781,39 +847,7 @@ impl Node {
                     tracker.update_height(block.header.slot);
                 }
 
-                // Economic engine: burn 50% of fees; 10% to treasury
-                if total_fees > 0 {
-                    let burned = total_fees / 2;
-                    info!("🔥 Fee burn: {} tokens burned from block fees", burned);
-                    if let Err(e) = node::governance_store::collect_treasury_fee(
-                        &self.state_trie,
-                        total_fees / 10,
-                    )
-                    .await
-                    {
-                        warn!("Treasury fee collection failed: {}", e);
-                    }
-                }
-
-                // Prune old blocks/receipts below retention window
-                match self
-                    .chain_store
-                    .maybe_prune(&self.prune_config, block.header.slot)
-                {
-                    Ok(stats) if stats.blocks_pruned > 0 => {
-                        info!(
-                            "🧹 Pruned {} blocks, {} receipts (cutoff height {})",
-                            stats.blocks_pruned, stats.receipts_pruned, stats.to_height
-                        );
-                        if let Ok(removed) = self.state_trie.lock().await.gc_orphan_nodes() {
-                            if removed > 0 {
-                                info!("🧹 Trie GC removed {} orphan nodes", removed);
-                            }
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(e) => warn!("State pruning failed: {}", e),
-                }
+                self.prune_after(block.header.slot).await;
 
                 // Hot-reload BFT validator set from trie (post-governance extrinsics)
                 if let Err(e) = self.sync_validator_set().await {
@@ -829,11 +863,6 @@ impl Node {
             BftEvent::NewRound(height, round) => {
                 info!("🔄 New round: height={}, round={}", height, round);
 
-                // Persist BFT state periodically
-                if round % 10 == 0 {
-                    self.persist_bft_state().await?;
-                }
-
                 // Check if we're proposer
                 let is_proposer = {
                     let engine = self.bft_engine.lock().await;
@@ -843,8 +872,28 @@ impl Node {
                 if is_proposer {
                     info!("🎁 I am the proposer for round {}/{}", height, round);
                     let mut producer = self.block_producer.lock().await;
+                    match node::staking::next_validators_hash(
+                        &self.state_trie,
+                        height.saturating_sub(1),
+                    )
+                    .await
+                    {
+                        Ok(hash) => producer.next_validators_hash = hash,
+                        Err(e) => {
+                            warn!("Cannot compute the next validator set: {}", e);
+                            return Ok(());
+                        }
+                    }
+                    let produce_started = Instant::now();
                     match producer.produce_block().await {
                         Ok(block) => {
+                            if !block.extrinsics.is_empty() {
+                                info!(
+                                    "⏱️ Built block with {} txs in {} ms",
+                                    block.extrinsics.len(),
+                                    produce_started.elapsed().as_millis()
+                                );
+                            }
                             info!(
                                 "✅ Produced block with {} transactions",
                                 block.extrinsics.len()
@@ -858,23 +907,46 @@ impl Node {
                 }
             }
 
-            BftEvent::Timeout(step) => {
-                warn!("⏰ Timeout at step {:?}", step);
+            BftEvent::Timeout {
+                step,
+                height,
+                round,
+            } => {
                 let mut engine = self.bft_engine.lock().await;
-                let events = match step {
-                    Step::Propose => engine.handle_timeout_propose(),
-                    Step::Prevote => engine.handle_timeout_prevote(),
-                    Step::Precommit => engine.handle_timeout_precommit(),
-                    Step::Commit => vec![],
-                };
+                if (engine.height, engine.round, engine.step) == (height, round, step) {
+                    warn!("⏰ Timeout at step {:?}", step);
+                }
+                let events = engine.handle_timeout(step, height, round);
                 new_events.extend(events);
             }
 
             BftEvent::BehindSync(_target_height) => {
                 // Peers are ahead of us — request a contiguous sync on the
                 // next sync tick so we catch up to the canonical chain.
-                info!("🚩 Behind peers (height {}) — flagging sync", _target_height);
+                info!(
+                    "🚩 Behind peers (height {}) — flagging sync",
+                    _target_height
+                );
                 self.sync_requested = true;
+            }
+
+            BftEvent::Equivocation(evidence) => {
+                if evidence.is_valid() {
+                    let first = evidence.first.block_hash.unwrap_or([0u8; 32]);
+                    let second = evidence.second.block_hash.unwrap_or([0u8; 32]);
+                    self.slashing_tracker.lock().await.record_double_sign(
+                        evidence.first.voter.clone(),
+                        evidence.first.height,
+                        first,
+                        second,
+                    );
+                    if self.reported_equivocators.insert(evidence.first.voter.clone()) {
+                        if let Err(e) = self.submit_evidence(&evidence).await {
+                            warn!("Could not submit double-sign evidence: {}", e);
+                            self.reported_equivocators.remove(&evidence.first.voter);
+                        }
+                    }
+                }
             }
 
             BftEvent::NeedBlock(_hash, _height) => {
@@ -911,6 +983,57 @@ impl Node {
                         engine.handle_vote(vote)
                     }
                     ConsensusMessage::Proposal(proposal) => {
+                        let (engine_height, validator_keys) = {
+                            let engine = self.bft_engine.lock().await;
+                            let keys: Vec<Vec<u8>> = engine
+                                .validator_set()
+                                .into_iter()
+                                .map(|(pk, _)| pk)
+                                .collect();
+                            (engine.height, keys)
+                        };
+                        let proposal_key = (proposal.height, proposal.block.hash());
+                        self.validated_proposals.retain(|(h, _)| *h >= engine_height);
+                        if proposal.height == engine_height
+                            && !self.validated_proposals.contains(&proposal_key)
+                        {
+                            let next_set = node::staking::next_validators_hash(
+                                &self.state_trie,
+                                engine_height.saturating_sub(1),
+                            )
+                            .await;
+                            let validate_started = Instant::now();
+                            let checked = match next_set {
+                                Ok(hash) if hash != proposal.block.header.next_validators_hash => {
+                                    Err("next_validators_hash does not match our next validator set"
+                                        .to_string())
+                                }
+                                Ok(_) => self.validate_proposed_block(
+                                    &proposal.block,
+                                    &validator_keys,
+                                    engine_height,
+                                ),
+                                Err(e) => Err(e),
+                            };
+                            if !proposal.block.extrinsics.is_empty() {
+                                info!(
+                                    "⏱️ Validated proposal ({} txs) in {} ms",
+                                    proposal.block.extrinsics.len(),
+                                    validate_started.elapsed().as_millis()
+                                );
+                            }
+                            if checked.is_ok() {
+                                self.validated_proposals.insert(proposal_key);
+                            }
+                            if let Err(e) = checked {
+                                // Not voting for it: we prevote nil on timeout.
+                                warn!(
+                                    "Rejecting proposal at height {} round {}: {}",
+                                    proposal.height, proposal.round, e
+                                );
+                                return Ok(());
+                            }
+                        }
                         let mut engine = self.bft_engine.lock().await;
                         engine.handle_proposal(proposal)
                     }
@@ -953,8 +1076,6 @@ impl Node {
             NetworkEvent::ListeningOn(addr) => {
                 info!("🔊 Network listening on {}", addr);
             }
-
-            _ => {}
         }
 
         Ok(())
@@ -999,6 +1120,7 @@ impl Node {
             );
             self.syncing = true;
             self.last_sync_attempt_at = Instant::now();
+            self.sync_peer = Some(source);
             self.network_cmd_sender
                 .send(NetworkCommand::RequestBlock {
                     peer: source,
@@ -1010,62 +1132,213 @@ impl Node {
         Ok(())
     }
 
-    /// Verify, execute, and commit a block that we know is a contiguous
-    /// extension of our chain. Shared by the gossip path and the sync path.
+    /// Application-level validity of a proposed block for BFT height
+    /// `height` (which finalizes slot `height - 1`) on top of our tip.
+    fn validate_proposed_block(
+        &self,
+        block: &Block,
+        validator_keys: &[Vec<u8>],
+        height: u64,
+    ) -> Result<(), String> {
+        // Rewards and block stats credit `header.proposer`, the validator
+        // that built and signed the block (checked in validate_block). It
+        // need not be this round's proposer: under the Tendermint rules a
+        // proposer re-proposes a block that was already prevoted in an
+        // earlier round, built by someone else. (Requiring a match rejected
+        // those and cost rounds.) The round's proposer is authenticated by
+        // the engine through the proposal signature.
+        if !validator_keys
+            .iter()
+            .any(|k| k.as_slice() == block.header.proposer.as_slice())
+        {
+            return Err("block was not built by a validator".into());
+        }
+        let parent = latest_block(&self.chain_store).map_err(|e| e.to_string())?;
+        let state_root = self
+            .chain_store
+            .get_state_root()
+            .map_err(|e| e.to_string())?
+            .ok_or("no committed state root")?;
+        let parent_validators = self.parent_cert_set().map_err(|e| e.to_string())?;
+        node::block_producer::validate_block(
+            block,
+            &parent,
+            &parent_validators,
+            height.saturating_sub(1),
+            &state_root,
+            self.chain_id,
+            self.max_gas_per_block,
+        )
+    }
+
+    /// Verify and apply a block fetched by sync, which we know is a
+    /// contiguous extension of our chain.
     async fn apply_block(&mut self, block: &Block) -> Result<(), Box<dyn std::error::Error>> {
-        // Verify block signature by a known validator
         let validators = self.get_validator_list().await?;
+        // Finality: a synced block must carry +2/3 precommits from the
+        // validator set. A proposer signature alone proves nothing — one
+        // validator key could otherwise feed us an arbitrary chain.
+        // (BFT height h finalizes block slot h - 1.)
+        match &block.commit {
+            Some(cert) => {
+                cert.verify(&block.hash(), block.header.slot + 1, &validators)
+                    .map_err(|e| format!("Invalid commit certificate: {}", e))?;
+            }
+            None => return Err("Block has no commit certificate".into()),
+        }
         let consensus = EnhancedConsensus::new(validators);
         if let Err(e) = consensus.verify_block(block) {
             warn!("Invalid block: {}", e);
             return Err(format!("Invalid block: {}", e).into());
         }
-        let proposer = consensus.verify_block_author(block);
-
-        // Execute block
-        let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
-
-        // Verify state root when the header records one (non-zero).
-        if block.header.state_root.iter().any(|b| *b != 0) {
-            let parent_root = if block.header.slot == 0 {
-                [0u8; 32]
-            } else {
-                match self
-                    .chain_store
-                    .get_block_hash_by_height(block.header.slot.saturating_sub(1))
-                {
-                    Ok(Some(hash_bytes)) if hash_bytes.len() == 32 => {
-                        let mut hash = [0u8; 32];
-                        hash.copy_from_slice(&hash_bytes);
-                        if let Ok(Some(encoded)) = self.chain_store.get_block(&hash) {
-                            if let Ok(parent) = serde_json::from_slice::<Block>(&encoded) {
-                                parent.header.state_root
-                            } else {
-                                [0u8; 32]
-                            }
-                        } else {
-                            [0u8; 32]
-                        }
-                    }
-                    _ => [0u8; 32],
-                }
-            };
-            let computed = node::block_producer::BlockProducer::compute_state_root(
-                &parent_root,
-                &block.header.extrinsics_root,
-            );
-            if computed != block.header.state_root {
-                warn!("State root mismatch");
-                return Err("State root mismatch".into());
-            }
+        // The proposer named in the header (and signing it) must be one of
+        // the validators.
+        if consensus.verify_block_author(block).as_deref() != Some(&block.header.proposer[..]) {
+            return Err("Block header is not signed by its proposer".into());
         }
 
-        // Track per-validator block production stats in the state trie
-        if let Some(pubkey) = &proposer {
+        if let Err(e) = self.apply_state_transition(block).await {
+            // The block is certified, so a failure here means we diverged.
+            self.fatal_error = Some(format!(
+                "cannot apply certified block {}: {}",
+                block.header.slot, e
+            ));
+            return Err(e);
+        }
+
+        self.tx_pool.remove_transactions(&block.extrinsics);
+        info!("✅ Processed block at height {}", block.header.slot);
+        Ok(())
+    }
+
+    /// The state transition for one finalized block, applied atomically.
+    ///
+    /// 1. The header must commit to our state after its parent.
+    /// 2. Execute transactions, then rewards, block stats, governance,
+    ///    runtime upgrades and the treasury fee — all staged in memory.
+    /// 3. Compute the new state root and write everything (block, receipts,
+    ///    state, trie, commitment, root) as one batch. On any error the stage
+    ///    is discarded and the database is unchanged.
+    async fn apply_state_transition(
+        &mut self,
+        block: &Block,
+    ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
+        let expected = self
+            .chain_store
+            .get_state_root()?
+            .ok_or("No committed state root")?;
+        if block.header.state_root != expected {
+            return Err(format!(
+                "state root mismatch at slot {}: block commits to {}, ours is {}",
+                block.header.slot,
+                hex::encode(block.header.state_root),
+                hex::encode(expected)
+            )
+            .into());
+        }
+
+        // Rewards and block stats credit the proposer named in the header,
+        // never one derived from local bookkeeping (identical blocks from two
+        // proposers once made nodes disagree on who proposed).
+        if !block.header.verify_proposer_signature() {
+            return Err(
+                format!("block {} is not signed by its proposer", block.header.slot).into(),
+            );
+        }
+        let proposer = block.header.proposer.to_vec();
+
+        let started = Instant::now();
+        self.staged.begin()?;
+        let result = self.stage_block_effects(block, proposer).await;
+        let effects_ms = started.elapsed().as_millis();
+        let receipts = match result {
+            Ok(receipts) => receipts,
+            Err(e) => {
+                self.staged.discard();
+                self.state_trie.lock().await.reload_root()?;
+                return Err(e);
+            }
+        };
+
+        let trie_root = self.state_trie.lock().await.root_hash();
+        let flat = self.staged.staged_lthash()?.checksum();
+        let root = node::state_root::compute(&flat, &trie_root);
+        let mut meta = storage::WriteBatch::new();
+        meta.put(storage::ColumnFamily::Meta, storage::STATE_ROOT_KEY, root);
+        if let Err(e) = self.staged.commit(meta) {
+            self.staged.discard();
+            self.state_trie.lock().await.reload_root()?;
+            return Err(e);
+        }
+        debug!(
+            "State root after slot {}: {}",
+            block.header.slot,
+            hex::encode(root)
+        );
+        if !block.extrinsics.is_empty() {
+            info!(
+                "⏱️ Applied block {} ({} txs): {} ms total, {} ms of it executing and staging",
+                block.header.slot,
+                block.extrinsics.len(),
+                started.elapsed().as_millis(),
+                effects_ms
+            );
+        }
+
+        self.metrics.record_block();
+        self.metrics.update_finalized_height(block.header.slot);
+        self.stats.record_block(block.extrinsics.len());
+        Ok(receipts)
+    }
+
+    /// Everything a block changes, written into the open stage.
+    async fn stage_block_effects(
+        &mut self,
+        block: &Block,
+        proposer: Vec<u8>,
+    ) -> Result<Vec<execution::evm::TransactionReceipt>, Box<dyn std::error::Error>> {
+        // Vote rewards go to the validators whose precommits finalized the
+        // parent, as listed in the block's last commit. The proposer picked
+        // that certificate and the header commits to it, so every node pays
+        // the same validators (a node's own collected precommits differ, which
+        // once forked the state root).
+        let parent = latest_block(&self.chain_store)?;
+        let voters =
+            node::block_producer::verify_last_commit(block, &parent, &self.parent_cert_set()?)?;
+        // Record the set certifying *this* block (the set before it applies),
+        // for checking the next block's last commit.
+        let cert_set = serde_json::to_vec(&self.get_validator_list().await?)?;
+        self.staged
+            .put(storage::ColumnFamily::State, CERT_SET_KEY, &cert_set)?;
+
+        // Epoch rotation and matured unbonding, before the block's own
+        // transactions (so the next set is fixed by the state before it).
+        let certifying = node::staking::begin_block(
+            &self.state_trie,
+            &self.chain_store,
+            block.header.slot,
+        )
+        .await?;
+
+        let exec_started = Instant::now();
+        let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
+        if !block.extrinsics.is_empty() {
+            info!(
+                "⏱️ Executed {} txs of block {} in {} ms",
+                block.extrinsics.len(),
+                block.header.slot,
+                exec_started.elapsed().as_millis()
+            );
+        }
+
+        let total_fees = rewards::total_fees(&receipts, block.header.base_fee);
+
+        if !proposer.is_empty() {
             if let Err(e) = node::governance_store::record_block_stats(
                 &self.state_trie,
+                &certifying,
                 block.header.slot,
-                pubkey,
+                &proposer,
             )
             .await
             {
@@ -1073,53 +1346,84 @@ impl Node {
             }
         }
 
-        // Process rewards
-        let total_fees: u64 = receipts
-            .iter()
-            .map(|r| r.gas_used * block.header.base_fee)
-            .sum();
-        let proposer = proposer.unwrap_or_default();
-        let voters = vec![];
-
         let rewards = {
             let mut rm = self.reward_manager.lock().await;
             rm.process_block(block, proposer, &voters, total_fees)
         };
         for (validator, amount) in rewards {
             if amount > 0 {
-                self.apply_reward(&validator, amount as u64).await?;
+                self.apply_reward(&validator, amount)?;
             }
         }
 
-        // Apply on-chain governance actions included in this block
-        if let Err(e) = node::governance_store::apply_extrinsics(
+        // Governance actions, from authenticated txs only
+        let authenticated = node::block_producer::BlockExecutor::successful_txs(block, &receipts);
+        let mut receipts = receipts;
+        match node::governance_store::apply_extrinsics(
             &self.state_trie,
             &self.chain_store,
-            &block.extrinsics,
+            &authenticated,
             block.header.slot,
         )
         .await
         {
-            warn!("Error applying governance actions: {}", e);
+            // Record refused actions as failed (the tx still paid gas and
+            // used its nonce, like a reverted call).
+            Ok(refused) => {
+                for (hash, reason) in refused {
+                    let Some(i) = block.extrinsics.iter().position(|t| t.hash() == hash) else {
+                        continue;
+                    };
+                    let receipt =
+                        node::block_producer::BlockExecutor::failed_receipt(reason);
+                    self.chain_store
+                        .put_receipt(&hash, &serde_json::to_vec(&receipt)?)?;
+                    receipts[i] = receipt;
+                }
+            }
+            Err(e) => warn!("Error applying governance actions: {}", e),
         }
 
-        if let Err(e) = node::runtime_upgrade_store::apply_at_height(
-            &self.state_trie,
-            block.header.slot,
-        )
-        .await
+        if let Err(e) =
+            node::runtime_upgrade_store::apply_at_height(&self.state_trie, block.header.slot).await
         {
             warn!("Error applying runtime upgrades: {}", e);
         }
 
-        // Update mempool
-        self.tx_pool.remove_transactions(&block.extrinsics);
+        // Economic engine: burn 50% of fees; 10% to treasury
+        if total_fees > 0 {
+            info!(
+                "🔥 Fee burn: {} tokens burned from block fees",
+                total_fees / 2
+            );
+            if let Err(e) =
+                node::governance_store::collect_treasury_fee(&self.state_trie, total_fees / 10)
+                    .await
+            {
+                warn!("Treasury fee collection failed: {}", e);
+            }
+        }
 
-        info!("✅ Processed block at height {}", block.header.slot);
-        self.metrics.record_block();
-        self.stats.record_block(block.extrinsics.len());
+        Ok(receipts)
+    }
 
-        Ok(())
+    /// Prune old blocks/receipts below the retention window (not state).
+    async fn prune_after(&self, slot: u64) {
+        match self.chain_store.maybe_prune(&self.prune_config, slot) {
+            Ok(stats) if stats.blocks_pruned > 0 => {
+                info!(
+                    "🧹 Pruned {} blocks, {} receipts (cutoff height {})",
+                    stats.blocks_pruned, stats.receipts_pruned, stats.to_height
+                );
+                if let Ok(removed) = self.state_trie.lock().await.gc_orphan_nodes() {
+                    if removed > 0 {
+                        info!("🧹 Trie GC removed {} orphan nodes", removed);
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(e) => warn!("State pruning failed: {}", e),
+        }
     }
 
     /// Hash of the block currently at our chain tip.
@@ -1157,6 +1461,15 @@ impl Node {
                     SYNC_STUCK_SECS
                 );
                 self.syncing = false;
+                // A request that neither completes nor fails means the
+                // connection's request handling is wedged: drop the peer's
+                // connections so the next attempt starts from fresh ones.
+                if let Some(peer) = self.sync_peer.take() {
+                    let _ = self
+                        .network_cmd_sender
+                        .send(NetworkCommand::DisconnectPeer(peer))
+                        .await;
+                }
             } else {
                 return Ok(());
             }
@@ -1171,15 +1484,13 @@ impl Node {
         let sync_requested = std::mem::take(&mut self.sync_requested);
         let urgent = sync_requested || desync;
 
-        let stalled =
-            self.last_finalize_at.elapsed() >= Duration::from_secs(SYNC_GRACE_SECS);
+        let stalled = self.last_finalize_at.elapsed() >= Duration::from_secs(SYNC_GRACE_SECS);
 
         // Non-urgent (stall) triggers are throttled; urgent ones retry quickly.
         if !urgent && !stalled {
             return Ok(());
         }
-        if !urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS)
-        {
+        if !urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(SYNC_GRACE_SECS) {
             return Ok(());
         }
         if urgent && self.last_sync_attempt_at.elapsed() < Duration::from_secs(2) {
@@ -1197,7 +1508,15 @@ impl Node {
             .ok()
             .and_then(|r| r.ok())
             .unwrap_or_default();
-        let peer = peers.into_iter().next();
+        // A different peer on each attempt: a peer whose request stream hangs
+        // (no response and no failure event) once wedged a validator that
+        // kept asking it forever.
+        let peer = if peers.is_empty() {
+            None
+        } else {
+            self.sync_peer_cursor = self.sync_peer_cursor.wrapping_add(1);
+            peers.get(self.sync_peer_cursor % peers.len()).copied()
+        };
 
         match peer {
             Some(peer) => {
@@ -1207,6 +1526,7 @@ impl Node {
                 );
                 self.syncing = true;
                 self.last_sync_attempt_at = Instant::now();
+                self.sync_peer = Some(peer);
                 self.network_cmd_sender
                     .send(NetworkCommand::RequestBlock {
                         peer,
@@ -1242,8 +1562,14 @@ impl Node {
         let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
         if start_height <= tip {
             let end = (start_height + limit as u64 - 1).min(tip);
+            // Keep the response under the sync codec's message limit.
+            let mut bytes = 0usize;
             for height in start_height..=end {
                 if let Some(data) = self.chain_store.get_block_by_height(height)? {
+                    bytes = bytes.saturating_add(data.len());
+                    if bytes > network::protocol::MAX_MESSAGE_BYTES / 2 && !blocks.is_empty() {
+                        break;
+                    }
                     if let Ok(block) = serde_json::from_slice::<Block>(&data) {
                         blocks.push(block);
                     }
@@ -1275,8 +1601,15 @@ impl Node {
         blocks: Vec<Block>,
         pending_events: &mut Vec<BftEvent>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        // A response can arrive after the watchdog stopped waiting for it.
+        // Its blocks are verified like any other, so use them if they extend
+        // our chain instead of dropping them.
         if !self.syncing {
-            return Ok(());
+            let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
+            if !blocks.iter().any(|b| b.header.slot > tip) {
+                return Ok(());
+            }
+            self.syncing = true;
         }
 
         let total_received = blocks.len();
@@ -1287,8 +1620,10 @@ impl Node {
             let tip = self.chain_store.get_latest_height()?.unwrap_or(0);
             let slot = block.header.slot;
 
-            // Replacement of our current tip (handles genesis → produced block 0).
-            if slot == tip {
+            // Replacement of our current tip — only for slot 0 (the local
+            // genesis placeholder vs. the network's block 0). A finalized block
+            // is never replaced.
+            if slot == tip && tip == 0 {
                 let tip_hash = self.current_tip_hash()?;
                 if block.hash() != tip_hash {
                     if let Err(e) = self.apply_block(&block).await {
@@ -1301,6 +1636,9 @@ impl Node {
                     applied += 1;
                 }
                 continue;
+            }
+            if slot <= tip {
+                continue; // already have it
             }
 
             if slot != tip + 1 {
@@ -1353,6 +1691,7 @@ impl Node {
         // Fetch the next contiguous batch from the same peer.
         let start = if tip == 0 { 0 } else { tip + 1 };
         self.last_sync_attempt_at = Instant::now();
+        self.sync_peer = Some(peer);
         self.network_cmd_sender
             .send(NetworkCommand::RequestBlock {
                 peer,
@@ -1397,12 +1736,22 @@ impl Node {
     }
 
     /// Get current validator list
+    /// The validator set that certified our tip block (recorded when it was
+    /// applied), against which the next block's last commit is checked.
+    fn parent_cert_set(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
+        match self
+            .staged
+            .get(storage::ColumnFamily::State, CERT_SET_KEY)?
+        {
+            Some(bytes) => Ok(serde_json::from_slice(&bytes)?),
+            None => Ok(Vec::new()), // tip is genesis: no last commit to check
+        }
+    }
+
     async fn get_validator_list(&self) -> Result<Vec<ValidatorInfo>, Box<dyn std::error::Error>> {
-        Ok(
-            node::governance_store::load_consensus_validators(&self.state_trie)
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
-        )
+        node::governance_store::load_consensus_validators(&self.state_trie)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })
     }
 
     /// Reload BFT + finality validator sets from the state trie when changed.
@@ -1413,8 +1762,16 @@ impl Node {
             return Ok(());
         }
         let mut engine = self.bft_engine.lock().await;
-        if engine.validator_count() != validators.len() {
-            let count = validators.len();
+        let mut incoming: Vec<(Vec<u8>, u128)> = validators
+            .iter()
+            .filter(|v| !v.slashed)
+            .map(|v| (v.public_key.clone(), v.stake))
+            .collect();
+        incoming.sort();
+        // Compare keys and stakes, not just the count: a swapped validator or a
+        // stake change alters what counts as a quorum.
+        if engine.validator_set() != incoming {
+            let count = incoming.len();
             engine.update_validator_set(validators.clone());
             drop(engine);
             self.finality_gadget
@@ -1457,52 +1814,84 @@ impl Node {
         Ok(())
     }
 
-    /// Apply reward to validator
-    async fn apply_reward(
+    /// Credit a validator's reward account (address derived from its key).
+    fn apply_reward(
         &mut self,
         validator: &[u8],
-        amount: u64,
+        amount: u128,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let address = {
-            use sha2::{Digest, Sha256};
-            let mut hasher = Sha256::new();
-            hasher.update(validator);
-            let digest = hasher.finalize();
-            let mut addr = [0u8; 20];
-            addr.copy_from_slice(&digest[digest.len() - 20..]);
-            addr
+        let address = node::accounts::address_of_public_key(validator);
+        node::accounts::credit(&self.chain_store, &address, amount)?;
+        Ok(())
+    }
+
+    /// Put double-sign evidence on chain as a staking transaction signed by
+    /// this validator, so every node slashes the equivocator (a local record
+    /// alone changes nothing).
+    async fn submit_evidence(
+        &self,
+        evidence: &common::consensus_types::DoubleSignEvidence,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let address = common::crypto::derive_address_from_public_key(
+            &self.evidence_key.verifying_key().to_bytes(),
+        );
+        let (_, onchain) = node::accounts::load(&self.chain_store, &address);
+        let pending = self
+            .tx_pool
+            .mempool_snapshot(100_000)
+            .iter()
+            .filter(|t| t.sender == address && t.nonce >= onchain)
+            .count() as u64;
+        let mut tx = common::types::Transaction {
+            sender: address,
+            nonce: onchain + pending,
+            public_key: [0; 32],
+            payload: serde_json::to_vec(&serde_json::json!({
+                "action": "evidence",
+                "evidence": evidence,
+            }))?,
+            signature: vec![],
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            chain_id: Some(self.chain_id),
+            to: None,
+            value: 0,
         };
-
-        let mut trie = self.state_trie.lock().await;
-        let mut account: common::types::Account = match trie.get(&address)? {
-            Some(data) => serde_json::from_slice(&data)?,
-            None => common::types::Account::default(),
-        };
-
-        account.balance += amount as u128;
-        trie.insert(&address, &serde_json::to_vec(&account)?)?;
-
+        tx.sign_with(&self.evidence_key);
+        self.tx_pool.add_transaction(tx.clone())?;
+        self.network_cmd_sender
+            .send(NetworkCommand::BroadcastTransaction(tx))
+            .await?;
+        warn!(
+            "⚔️ Submitted double-sign evidence against {} at height {}",
+            hex::encode(&evidence.first.voter[..8]),
+            evidence.first.height
+        );
         Ok(())
     }
 
     /// Persist BFT state to disk
     async fn persist_bft_state(&self) -> Result<(), Box<dyn std::error::Error>> {
-        let engine = self.bft_engine.lock().await;
+        let safety = self.bft_engine.lock().await.safety_state();
         let state = BftPersistedState {
-            height: engine.height,
-            round: engine.round,
-            locked_block_hash: None,
-            locked_round: 0,
-            valid_block_hash: None,
-            valid_round: 0,
+            safety,
             last_saved: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs(),
         };
 
-        let content = serde_json::to_string_pretty(&state)?;
-        fs::write(&self.bft_state_path, content)?;
+        // Write-then-rename so a crash mid-write never leaves a torn file.
+        let content = serde_json::to_vec(&state)?;
+        let tmp = self.bft_state_path.with_extension("json.tmp");
+        {
+            use std::io::Write;
+            let mut file = fs::File::create(&tmp)?;
+            file.write_all(&content)?;
+            file.sync_all()?;
+        }
+        fs::rename(&tmp, &self.bft_state_path)?;
         Ok(())
     }
 
@@ -1527,6 +1916,23 @@ impl Node {
 // ============================================================================
 
 use warp::Filter;
+
+/// The latest committed block (the local genesis placeholder on a new chain).
+/// Node-local (outside the state root) record of the validator set that
+/// certified the tip block.
+const CERT_SET_KEY: &[u8] = b"local:consensus:cert_set";
+
+fn latest_block(chain_store: &ChainStore) -> Result<Block, Box<dyn std::error::Error>> {
+    match chain_store.get_latest_height()? {
+        Some(height) => {
+            let data = chain_store
+                .get_block_by_height(height)?
+                .ok_or_else(|| format!("Block not found at height {}", height))?;
+            Ok(serde_json::from_slice(&data)?)
+        }
+        None => Ok(Block::genesis()),
+    }
+}
 
 /// Load or generate validator key
 fn load_or_generate_key(key_path: &PathBuf) -> Result<SigningKey, Box<dyn std::error::Error>> {
@@ -1562,12 +1968,10 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
 
     let drip_amount = env::var("DRIP_AMOUNT")
         .unwrap_or_else(|_| "1000000000000000000000".to_string())
-        .parse::<u128>()
-        .unwrap();
+        .parse::<u128>()?;
     let cooldown = env::var("COOLDOWN_SECONDS")
         .unwrap_or_else(|_| "86400".to_string())
-        .parse::<u64>()
-        .unwrap();
+        .parse::<u64>()?;
 
     let config = node::faucet::FaucetConfig {
         drip_amount,
@@ -1651,7 +2055,12 @@ async fn run_faucet() -> Result<(), Box<dyn std::error::Error>> {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize logging
+    // RUST_LOG selects levels per target (e.g. `info,network=debug`).
     tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .with_target(true)
         .with_thread_ids(true)
         .init();

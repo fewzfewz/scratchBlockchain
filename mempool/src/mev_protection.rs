@@ -14,9 +14,10 @@
 
 use anyhow::Result;
 use common::types::Transaction;
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tracing::{debug, info};
 
 /// Commit-reveal scheme for MEV protection
@@ -150,13 +151,13 @@ impl MevProtection {
         current_round: u64,
     ) -> Result<TransactionCommitment> {
         // Check for duplicate commitment
-        let mut commitments = self.commitments.lock().unwrap();
+        let mut commitments = self.commitments.lock();
         if commitments.contains_key(&tx_hash) {
             return Err(anyhow::anyhow!("Transaction already committed"));
         }
 
         // Check commitment limit per height (prevent spam)
-        let mut by_height = self.commitments_by_height.lock().unwrap();
+        let mut by_height = self.commitments_by_height.lock();
         let height_commitments = by_height.entry(current_height).or_default();
 
         if height_commitments.len() >= self.config.max_commitments_per_height {
@@ -168,7 +169,7 @@ impl MevProtection {
         }
 
         // Get next commit index for deterministic ordering
-        let mut counter = self.commit_counter.lock().unwrap();
+        let mut counter = self.commit_counter.lock();
         let commit_index = *counter;
         *counter += 1;
 
@@ -203,7 +204,7 @@ impl MevProtection {
         let tx_hash = tx.hash();
 
         // Step 1: Check if commitment exists
-        let mut commitments = self.commitments.lock().unwrap();
+        let mut commitments = self.commitments.lock();
         let commitment = commitments
             .get(&tx_hash)
             .ok_or_else(|| anyhow::anyhow!("No commitment found for transaction"))?
@@ -250,14 +251,14 @@ impl MevProtection {
             reveal_height: current_height,
         };
 
-        let mut revealed = self.revealed.lock().unwrap();
+        let mut revealed = self.revealed.lock();
         revealed.push_back(revealed_tx);
 
         // Step 6: Remove from commitments
         commitments.remove(&tx_hash);
 
         // Clean up height tracking
-        let mut by_height = self.commitments_by_height.lock().unwrap();
+        let mut by_height = self.commitments_by_height.lock();
         if let Some(commitments_list) = by_height.get_mut(&commit_height) {
             commitments_list.retain(|h| h != &tx_hash);
             if commitments_list.is_empty() {
@@ -307,7 +308,7 @@ impl MevProtection {
     /// # Returns
     /// * `Vec<Transaction>` - Transactions in FIFO order (oldest commit first)
     pub fn get_ready_transactions(&self, limit: usize) -> Vec<Transaction> {
-        let mut revealed = self.revealed.lock().unwrap();
+        let mut revealed = self.revealed.lock();
 
         // Sort by commit order (height, then round, then index)
         // This ensures fairness: earlier commits are included first
@@ -335,7 +336,7 @@ impl MevProtection {
     /// # Arguments
     /// * `txs` - Transactions that were included in the block
     pub fn remove_transactions(&self, txs: &[Transaction]) {
-        let mut revealed = self.revealed.lock().unwrap();
+        let mut revealed = self.revealed.lock();
         let tx_hashes: Vec<[u8; 32]> = txs.iter().map(|tx| tx.hash()).collect();
 
         let before_count = revealed.len();
@@ -355,8 +356,8 @@ impl MevProtection {
     /// # Arguments
     /// * `current_height` - Current block height
     pub fn cleanup_expired(&self, current_height: u64) {
-        let mut commitments = self.commitments.lock().unwrap();
-        let mut by_height = self.commitments_by_height.lock().unwrap();
+        let mut commitments = self.commitments.lock();
+        let mut by_height = self.commitments_by_height.lock();
 
         let before_count = commitments.len();
 
@@ -392,19 +393,19 @@ impl MevProtection {
 
     /// Get number of pending commitments
     pub fn pending_commitments(&self) -> usize {
-        let commitments = self.commitments.lock().unwrap();
+        let commitments = self.commitments.lock();
         commitments.len()
     }
 
     /// Get number of revealed transactions
     pub fn revealed_count(&self) -> usize {
-        let revealed = self.revealed.lock().unwrap();
+        let revealed = self.revealed.lock();
         revealed.len()
     }
 
     /// Get a specific commitment by hash (for debugging)
     pub fn get_commitment(&self, hash: &[u8; 32]) -> Option<TransactionCommitment> {
-        let commitments = self.commitments.lock().unwrap();
+        let commitments = self.commitments.lock();
         commitments.get(hash).cloned()
     }
 }

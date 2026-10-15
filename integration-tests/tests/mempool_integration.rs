@@ -17,6 +17,7 @@ fn test_mempool_capacity_integration() {
         
         let tx = Transaction {
             sender: [0; 20],
+            public_key: [0; 32],
             nonce: i,
             payload: vec![],
             signature,
@@ -35,6 +36,7 @@ fn test_mempool_capacity_integration() {
     // Try to add one more
     let tx = Transaction {
         sender: [0; 20],
+        public_key: [0; 32],
         nonce: 10,
         payload: vec![],
         signature: vec![1; 64],

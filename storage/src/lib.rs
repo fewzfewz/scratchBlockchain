@@ -1,15 +1,20 @@
+pub mod commitment;
 mod db;
 pub mod pruner;
 pub mod receipt_store;
+pub mod staged;
 pub mod trie;
 
 use common::traits::Storage;
-use db::KeyValueStore;
 use std::error::Error;
 use std::sync::Arc;
 
-pub use db::{ChainStore, ColumnFamily, DbError, DbMetrics, MemDb, WriteBatch};
+pub use db::{
+    ChainStore, ColumnFamily, DbError, DbMetrics, KeyValueStore, KvIter, MemDb, WriteBatch,
+    STATE_ROOT_KEY,
+};
 pub use pruner::{PruneConfig, PruneStats};
+pub use staged::StagedStore;
 
 pub struct MemStore {
     db: Box<dyn KeyValueStore>,
@@ -64,7 +69,6 @@ impl Storage for MemStore {
 
 #[cfg(feature = "sled-legacy")]
 mod sled_legacy {
-    use super::*;
     use common::traits::Storage;
     use sled::Db;
     use std::error::Error;
@@ -82,12 +86,6 @@ mod sled_legacy {
 
         pub fn iter(&self) -> sled::Iter {
             self.db.iter()
-        }
-    }
-
-    impl Default for PersistentStore {
-        fn default() -> Self {
-            Self::new("node_db").unwrap()
         }
     }
 
@@ -198,8 +196,8 @@ impl StateStore {
         use sha2::{Digest, Sha256};
 
         let mut leaves = Vec::new();
-        let mut iter = self.chain.iter_state()?;
-        while let Some((key, value)) = iter.next() {
+        let iter = self.chain.iter_state()?;
+        for (key, value) in iter {
             if key.len() == 20 {
                 let account: common::types::Account = serde_json::from_slice(&value)?;
                 let mut hasher = Sha256::new();
@@ -256,21 +254,15 @@ impl StateStore {
 
 /// State storage using Patricia Merkle Trie
 pub struct TrieStateStore {
-    trie: std::sync::Arc<std::sync::Mutex<trie::PatriciaTrie>>,
+    trie: std::sync::Arc<parking_lot::Mutex<trie::PatriciaTrie>>,
 }
 
 impl TrieStateStore {
     pub fn new(db: Arc<dyn KeyValueStore>) -> Result<Self, Box<dyn Error>> {
         let trie = trie::PatriciaTrie::new(db)?;
         Ok(Self {
-            trie: std::sync::Arc::new(std::sync::Mutex::new(trie)),
+            trie: std::sync::Arc::new(parking_lot::Mutex::new(trie)),
         })
-    }
-}
-
-impl Default for TrieStateStore {
-    fn default() -> Self {
-        Self::new(Arc::new(MemDb::new())).unwrap()
     }
 }
 
@@ -279,7 +271,7 @@ impl TrieStateStore {
         &self,
         address: &[u8; 20],
     ) -> Result<Option<common::types::Account>, Box<dyn Error>> {
-        let trie = self.trie.lock().unwrap();
+        let trie = self.trie.lock();
         match trie.get(address)? {
             Some(data) => {
                 let account: common::types::Account = serde_json::from_slice(&data)?;
@@ -295,22 +287,22 @@ impl TrieStateStore {
         account: &common::types::Account,
     ) -> Result<(), Box<dyn Error>> {
         let data = serde_json::to_vec(account)?;
-        let mut trie = self.trie.lock().unwrap();
+        let mut trie = self.trie.lock();
         trie.insert(address, &data)
     }
 
     pub fn root_hash(&self) -> Result<[u8; 32], Box<dyn Error>> {
-        let trie = self.trie.lock().unwrap();
+        let trie = self.trie.lock();
         Ok(trie.root_hash())
     }
 
     pub fn get_proof(&self, address: &[u8; 20]) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
-        let trie = self.trie.lock().unwrap();
+        let trie = self.trie.lock();
         trie.get_proof(address)
     }
 
     pub fn delete_account(&self, address: &[u8; 20]) -> Result<(), Box<dyn Error>> {
-        let mut trie = self.trie.lock().unwrap();
+        let mut trie = self.trie.lock();
         trie.delete(address)
     }
 
@@ -422,9 +414,9 @@ pub mod block_store {
 
         pub fn get_latest_height(&self) -> Result<Option<u64>, Box<dyn Error>> {
             match self.store.get(b"latest_height")? {
-                Some(data) if data.len() == 8 => {
-                    Ok(Some(u64::from_le_bytes(data.try_into().unwrap())))
-                }
+                Some(data) => Ok(<[u8; 8]>::try_from(data.as_slice())
+                    .ok()
+                    .map(u64::from_le_bytes)),
                 _ => Ok(None),
             }
         }
@@ -454,9 +446,9 @@ pub mod block_store {
 
         pub fn get_latest_finalized_height(&self) -> Result<Option<u64>, Box<dyn Error>> {
             match self.store.get(b"latest_finalized")? {
-                Some(data) if data.len() == 8 => {
-                    Ok(Some(u64::from_le_bytes(data.try_into().unwrap())))
-                }
+                Some(data) => Ok(<[u8; 8]>::try_from(data.as_slice())
+                    .ok()
+                    .map(u64::from_le_bytes)),
                 _ => Ok(None),
             }
         }

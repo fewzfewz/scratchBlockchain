@@ -1,7 +1,7 @@
 const crypto = require('crypto');
-const nacl = require('tweetnacl');
 const { API_URL, fetchJson } = require('./helpers');
 const { generateWallet } = require('./gov-tx');
+const { signTx, txHash } = require('./tx-sign');
 
 const fromHex = (hex) => {
   const clean = hex.replace(/^0x/, '');
@@ -19,39 +19,11 @@ function encodeBridgePayload(destChain, recipient) {
   return Array.from(Buffer.from(`BRIDGE:${destChain}:${recipient}`));
 }
 
-async function txHash(tx) {
-  const parts = [];
-  parts.push(Buffer.from(tx.sender.slice(0, 20)));
-  const nonce = Buffer.alloc(8);
-  nonce.writeBigUInt64LE(BigInt(tx.nonce));
-  parts.push(nonce);
-  parts.push(Buffer.from(tx.payload));
-  const gas = Buffer.alloc(8);
-  gas.writeBigUInt64LE(BigInt(tx.gas_limit));
-  parts.push(gas);
-  const fee = Buffer.alloc(8);
-  fee.writeBigUInt64LE(BigInt(tx.max_fee_per_gas));
-  parts.push(fee);
-  const prio = Buffer.alloc(8);
-  prio.writeBigUInt64LE(BigInt(tx.max_priority_fee_per_gas));
-  parts.push(prio);
-  if (tx.chain_id) {
-    const cid = Buffer.alloc(8);
-    cid.writeBigUInt64LE(BigInt(tx.chain_id));
-    parts.push(cid);
-  }
-  if (tx.to && tx.to.length) parts.push(Buffer.from(tx.to.slice(0, 20)));
-  const val = Buffer.alloc(8);
-  val.writeBigUInt64LE(BigInt(tx.value));
-  parts.push(val);
-  return crypto.createHash('sha256').update(Buffer.concat(parts)).digest('hex');
-}
-
 async function submitLockTx(wallet, ethRecipient, amountWei) {
   const vault = bridgeVault();
   const bal = await fetchJson(`${API_URL}/balance/${wallet.address}`);
   const nonce = bal.nonce || 0;
-  const payload = [...Array.from(wallet.publicKey), ...encodeBridgePayload('ethereum', ethRecipient)];
+  const payload = encodeBridgePayload('ethereum', ethRecipient);
   const tx = {
     sender: Array.from(fromHex(wallet.address.replace('0x', ''))),
     to: Array.from(fromHex(vault.replace('0x', ''))),
@@ -64,8 +36,7 @@ async function submitLockTx(wallet, ethRecipient, amountWei) {
     chain_id: 1,
     signature: [],
   };
-  const msg = Buffer.from(await txHash(tx), 'hex');
-  tx.signature = Array.from(nacl.sign.detached(msg, wallet.secretKey));
+  signTx(tx, wallet);
   const res = await fetch(`${API_URL}/submit_tx`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -79,7 +50,7 @@ async function submitLockTx(wallet, ethRecipient, amountWei) {
     data = { hash: text.replace(/^"|"$/g, '') };
   }
   if (!res.ok && !data.hash) throw new Error(text);
-  return data.hash || (await txHash(tx));
+  return data.hash || txHash(tx).toString('hex');
 }
 
 module.exports = { bridgeVault, submitLockTx, generateWallet };

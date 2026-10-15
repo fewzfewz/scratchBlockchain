@@ -1,4 +1,4 @@
-use common::types::{Account, Address};
+use common::types::Address;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -50,7 +50,7 @@ impl Faucet {
     pub fn request_tokens(&mut self, address: Address) -> Result<u128, String> {
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .unwrap()
+            .unwrap_or_default()
             .as_secs();
 
         // Check cooldown
@@ -84,14 +84,10 @@ impl Faucet {
         self.last_request.get(address).map(|&last_time| {
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_secs();
             let elapsed = now - last_time;
-            if elapsed >= self.config.cooldown_seconds {
-                0
-            } else {
-                self.config.cooldown_seconds - elapsed
-            }
+            self.config.cooldown_seconds.saturating_sub(elapsed)
         })
     }
 

@@ -84,8 +84,10 @@ services:
       - VALIDATOR_NAME=validator1
       - RUST_LOG=info
       - ETH_RPC_URL=http://hardhat:9545
+      # Bridge contract from configs/bridge-deployment.json (Hardhat's first deploy).
+      - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -123,7 +125,7 @@ services:
       - VALIDATOR_NAME=validator2
       - RUST_LOG=info
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -160,12 +162,49 @@ services:
       - VALIDATOR_NAME=validator3
       - RUST_LOG=info
       - GOVERNANCE_TEST_MODE=1
-      - GOVERNANCE_VOTING_PERIOD_BLOCKS=15
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
         aliases:
           - validator3
+    depends_on:
+      - validator1
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sSf http://127.0.0.1:26657/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+      start_period: 15s
+    restart: unless-stopped
+
+  # Validator 4
+  validator4:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    container_name: validator4
+    ports:
+      - "26664:26656"
+      - "26665:26657"
+      - "8550:8545"
+      - "9097:9090"
+    volumes:
+      - validator4_data:/data
+      - ./configs/validator4.toml:/config.toml:ro
+      - ./configs/validator4_key.json:/data/validator_key.json:ro
+      - ./configs/genesis.json:/genesis.json:ro
+      - ../../target/release/node:/usr/local/bin/modular-node:ro
+    environment:
+      - VALIDATOR_NAME=validator4
+      - RUST_LOG=info
+      - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
+    command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
+    networks:
+      testnet:
+        aliases:
+          - validator4
     depends_on:
       - validator1
     healthcheck:
@@ -195,7 +234,11 @@ services:
       - NODE_NAME=rpc1
       - RUST_LOG=info
       - ETH_RPC_URL=http://hardhat:9545
+      # Bridge contract from configs/bridge-deployment.json (Hardhat's first deploy).
+      - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+      # Governance params are part of genesis state: every node must match.
       - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
       - NEBULA_CHAIN_ID=100
       - ETH_CHAIN_ID=1
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
@@ -234,6 +277,9 @@ services:
     environment:
       - NODE_NAME=rpc2
       - RUST_LOG=info
+      # Governance params are part of genesis state: every node must match.
+      - GOVERNANCE_TEST_MODE=1
+      - GOVERNANCE_VOTING_PERIOD_BLOCKS=300
     command: ["start", "--config", "/config.toml", "--genesis", "/genesis.json"]
     networks:
       testnet:
@@ -247,6 +293,62 @@ services:
       timeout: 5s
       retries: 6
       start_period: 10s
+    restart: unless-stopped
+
+  # Standalone Ethereum → Nebula bridge relayer A (nebula-relayer).
+  # Devnet-only key: sha256("nebula-devnet-relayer-a"); its account is
+  # funded in genesis to pay for mint transactions.
+  relayer-a:
+    image: local-validator1:latest
+    container_name: relayer-a
+    entrypoint: ["nebula-relayer"]
+    volumes:
+      - relayer_a_data:/data
+      - ../../target/release/nebula-relayer:/usr/local/bin/nebula-relayer:ro
+    environment:
+      - RUST_LOG=info
+      - RELAYER_KEY=49aaf3c17c42177bdceeaa40b065a29afd94524f5c47b59a6269095d9fbe0814
+      - ETH_RPC_URL=http://hardhat:9545
+      - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+      # Hardhat mines a block per transaction, so a deeper requirement would
+      # wait for the next unrelated transaction. Use more on a real chain.
+      - ETH_CONFIRMATIONS=1
+      - NEBULA_RPC_URLS=http://rpc1:8545,http://rpc2:8545,http://validator1:8545
+      - RELAYER_STATE_FILE=/data/state.json
+    networks:
+      - testnet
+    depends_on:
+      - rpc1
+      - rpc2
+      - hardhat
+    restart: unless-stopped
+
+  # Standalone Ethereum → Nebula bridge relayer B (nebula-relayer).
+  # Devnet-only key: sha256("nebula-devnet-relayer-b"); its account is
+  # funded in genesis to pay for mint transactions.
+  relayer-b:
+    image: local-validator1:latest
+    container_name: relayer-b
+    entrypoint: ["nebula-relayer"]
+    volumes:
+      - relayer_b_data:/data
+      - ../../target/release/nebula-relayer:/usr/local/bin/nebula-relayer:ro
+    environment:
+      - RUST_LOG=info
+      - RELAYER_KEY=8596f7f56059f5ee365d8a54ee84a65c671e124086b73028e17b36c6a21fe005
+      - ETH_RPC_URL=http://hardhat:9545
+      - ETH_BRIDGE_ADDRESS=0x5FbDB2315678afecb367f032d93F642f64180aa3
+      # Hardhat mines a block per transaction, so a deeper requirement would
+      # wait for the next unrelated transaction. Use more on a real chain.
+      - ETH_CONFIRMATIONS=1
+      - NEBULA_RPC_URLS=http://rpc1:8545,http://rpc2:8545,http://validator1:8545
+      - RELAYER_STATE_FILE=/data/state.json
+    networks:
+      - testnet
+    depends_on:
+      - rpc1
+      - rpc2
+      - hardhat
     restart: unless-stopped
 
   # Prometheus
@@ -363,8 +465,11 @@ volumes:
   validator1_data:
   validator2_data:
   validator3_data:
+  validator4_data:
   rpc1_data:
   rpc2_data:
+  relayer_a_data:
+  relayer_b_data:
   prometheus_data:
   grafana_data:
   alertmanager_data:

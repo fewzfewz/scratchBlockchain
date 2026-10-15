@@ -36,11 +36,9 @@ impl Relayer {
         );
 
         if msg.dest_chain == self.chain_a.chain_id {
-            self.chain_a
-                .unlock_assets(msg, relayer_sig, relayer_pubkey)
+            self.chain_a.unlock_assets(msg, relayer_sig, relayer_pubkey)
         } else if msg.dest_chain == self.chain_b.chain_id {
-            self.chain_b
-                .unlock_assets(msg, relayer_sig, relayer_pubkey)
+            self.chain_b.unlock_assets(msg, relayer_sig, relayer_pubkey)
         } else {
             Err(format!(
                 "Unknown destination chain: {} (configured: {} / {})",
@@ -57,8 +55,8 @@ mod tests {
     #[test]
     fn process_message_unlocks_on_dest_chain() {
         let relayer_pk = vec![1u8; 32];
-        let mut nebula = BridgeContract::new("nebula".into(), vec![relayer_pk.clone()]);
-        let mut eth = BridgeContract::new("ethereum".into(), vec![relayer_pk.clone()]);
+        let nebula = BridgeContract::new("nebula".into(), vec![relayer_pk.clone()]);
+        let eth = BridgeContract::new("ethereum".into(), vec![relayer_pk.clone()]);
         let mut relayer = Relayer::new(nebula, eth);
 
         let msg = CrossChainMessage {

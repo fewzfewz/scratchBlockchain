@@ -60,6 +60,7 @@ fn create_valid_transaction(nonce: u64, signing_key: &SigningKey) -> Transaction
 
     let mut tx = Transaction {
         sender: [1u8; 20], // Must match genesis account if checking balance, but for propagation it doesn't matter
+        public_key: [0; 32],
         nonce,
         payload,
         signature: vec![],

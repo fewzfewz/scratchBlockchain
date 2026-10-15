@@ -8,7 +8,7 @@
 use common::types::{Block, Header};
 use libp2p::PeerId;
 use sha2::{Digest, Sha256};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
@@ -228,7 +228,7 @@ impl SyncManager {
     /// Request state chunks in parallel
     async fn request_state_chunks(&self, state_root: [u8; 32]) -> Vec<Vec<u8>> {
         debug!("Requesting state chunks for root {:?}", state_root);
-        let chunk_size = self.config.snapshot_chunk_size.min(4096).max(256);
+        let chunk_size = self.config.snapshot_chunk_size.clamp(256, 4096);
         (0..4)
             .map(|i| {
                 let mut chunk = vec![0u8; chunk_size];
@@ -294,7 +294,7 @@ impl SyncManager {
     }
 
     /// Verify checkpoint block (validate signatures and finality)
-    fn verify_checkpoint(&self, block: &Block) -> bool {
+    fn verify_checkpoint(&self, _block: &Block) -> bool {
         // In production, verify:
         // 1. Block signature by validator set
         // 2. Checkpoint is finalized (2/3+ votes)
@@ -309,6 +309,12 @@ pub struct BlockDownloader {
     pending: HashMap<u64, Vec<PeerId>>,
     downloaded: HashMap<u64, Block>,
     failed: HashSet<u64>,
+}
+
+impl Default for BlockDownloader {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BlockDownloader {
@@ -367,11 +373,9 @@ mod tests {
     #[test]
     fn test_sync_progress_tracking() {
         let config = SyncConfig::default();
-        let mut sync = SyncManager::new(config);
+        let sync = SyncManager::new(config);
 
-        let peers = vec![(PeerId::random(), 1000), (PeerId::random(), 950)];
-
-        // Should find best height 1000
+        // A fresh manager tracks no peers yet.
         assert!(sync.peer_heights.is_empty());
     }
 

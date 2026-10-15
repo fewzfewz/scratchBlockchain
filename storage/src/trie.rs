@@ -19,11 +19,12 @@
 //! - **Extension**: Shared path prefix pointing to another node
 //! - **Branch**: 16-way split node (for hex-nibble paths)
 
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use tracing::debug;
 
 use crate::db::ColumnFamily;
@@ -41,10 +42,16 @@ type NibblePath = Vec<Nibble>;
 /// Hash type for node references (32 bytes, SHA256)
 pub type NodeHash = [u8; 32];
 
-/// Empty trie hash (SHA256 of empty string)
+/// New subtree root plus every node created or changed while building it.
+type TrieUpdate = (NodeHash, Vec<(NodeHash, TrieNode)>);
+
+/// Hash of `TrieNode::Empty` (the root of an empty trie and of every empty
+/// branch slot). It was once SHA-256 of the empty string, which no node
+/// hashes to, so the checks against it never matched (the GC then deleted
+/// the stored empty node; see `get_node`).
 pub const EMPTY_TRIE_HASH: NodeHash = [
-    0xe3, 0xb0, 0xc4, 0x42, 0x98, 0xfc, 0x1c, 0x14, 0x9a, 0xfb, 0xf4, 0xc8, 0x99, 0x6f, 0xb9, 0x24,
-    0x27, 0xae, 0x41, 0xe4, 0x64, 0x9b, 0x93, 0x4c, 0xa4, 0x95, 0x99, 0x1b, 0x78, 0x52, 0xb8, 0x55,
+    0x65, 0xb1, 0xcb, 0xba, 0x3b, 0x92, 0xc5, 0xb2, 0x59, 0x79, 0x26, 0xa0, 0xd5, 0xdc, 0xf1, 0xfe,
+    0x03, 0xcd, 0xb5, 0xfa, 0x8f, 0x51, 0x8d, 0xbf, 0xc1, 0xc6, 0x6a, 0x52, 0x34, 0x73, 0xbc, 0x7a,
 ];
 
 /// Convert bytes to nibble path (each byte becomes 2 nibbles)
@@ -162,7 +169,7 @@ impl PatriciaTrie {
     /// * `Result<Self>` - New trie instance
     pub fn new(db: Arc<dyn KeyValueStore>) -> Result<Self, Box<dyn Error>> {
         // Try to load existing root from database
-        let (root, cache) = if let Some(root_bytes) = db.get(ColumnFamily::State, b"root")? {
+        let (root, cache) = if let Some(root_bytes) = db.get(ColumnFamily::Trie, b"root")? {
             let mut root_hash = [0u8; 32];
             root_hash.copy_from_slice(&root_bytes);
             (root_hash, HashMap::new())
@@ -174,8 +181,8 @@ impl PatriciaTrie {
             let mut c = HashMap::new();
             c.insert(root_hash, empty_node.clone());
 
-            db.put(ColumnFamily::State, b"root", &root_hash)?;
-            db.put(ColumnFamily::State, &root_hash, &empty_node.encode())?;
+            db.put(ColumnFamily::Trie, b"root", &root_hash)?;
+            db.put(ColumnFamily::Trie, &root_hash, &empty_node.encode())?;
             db.flush()?;
 
             (root_hash, c)
@@ -189,9 +196,29 @@ impl PatriciaTrie {
         })
     }
 
+    /// Point the trie back at an earlier root, undoing every insert since
+    /// (nodes are content-addressed, so the old root's nodes are intact).
+    /// Used to make a multi-write state change all-or-nothing.
+    pub fn restore_root(&mut self, root: NodeHash) -> Result<(), Box<dyn Error>> {
+        *self.root.write() = root;
+        self.db.put(ColumnFamily::Trie, b"root", &root)?;
+        Ok(())
+    }
+
+    /// Re-read the root pointer from storage, dropping in-memory changes that
+    /// were never committed (e.g. after a discarded block stage).
+    pub fn reload_root(&self) -> Result<(), Box<dyn Error>> {
+        if let Some(root_bytes) = self.db.get(ColumnFamily::Trie, b"root")? {
+            if let Ok(root) = <[u8; 32]>::try_from(root_bytes.as_slice()) {
+                *self.root.write() = root;
+            }
+        }
+        Ok(())
+    }
+
     /// Get the current root hash
     pub fn root_hash(&self) -> NodeHash {
-        *self.root.read().unwrap()
+        *self.root.read()
     }
 
     /// Insert a key-value pair into the trie
@@ -206,10 +233,10 @@ impl PatriciaTrie {
         let (new_root, changed_nodes) = self.insert_at(current_root, &path, value.to_vec())?;
 
         // Update root
-        *self.root.write().unwrap() = new_root;
+        *self.root.write() = new_root;
 
         // Persist the new root pointer so the trie survives restarts
-        self.db.put(ColumnFamily::State, b"root", &new_root)?;
+        self.db.put(ColumnFamily::Trie, b"root", &new_root)?;
 
         // Persist changed nodes to disk
         for (hash, node) in changed_nodes {
@@ -218,14 +245,14 @@ impl PatriciaTrie {
 
         // Update stats
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write();
             stats.total_nodes += 1;
         }
 
         debug!(
             "Inserted key: {:?} -> root: {:?}",
             hex::encode(key),
-            hex::encode(&new_root)
+            hex::encode(new_root)
         );
         Ok(())
     }
@@ -256,10 +283,10 @@ impl PatriciaTrie {
         let (new_root, changed_nodes) = self.delete_at(current_root, &path)?;
 
         // Update root
-        *self.root.write().unwrap() = new_root;
+        *self.root.write() = new_root;
 
         // Persist the new root pointer so the trie survives restarts
-        self.db.put(ColumnFamily::State, b"root", &new_root)?;
+        self.db.put(ColumnFamily::Trie, b"root", &new_root)?;
 
         // Persist changed nodes
         for (hash, node) in changed_nodes {
@@ -269,7 +296,7 @@ impl PatriciaTrie {
         debug!(
             "Deleted key: {:?} -> root: {:?}",
             hex::encode(key),
-            hex::encode(&new_root)
+            hex::encode(new_root)
         );
         Ok(())
     }
@@ -355,7 +382,7 @@ impl PatriciaTrie {
 
     /// Get trie statistics
     pub fn get_stats(&self) -> TrieStats {
-        self.stats.read().unwrap().clone()
+        self.stats.read().clone()
     }
 
     /// Remove Patricia trie nodes not reachable from the current root.
@@ -366,21 +393,21 @@ impl PatriciaTrie {
 
         let mut batch = WriteBatch::new();
         let mut deleted = 0usize;
-        for (key, _) in self.db.iter(ColumnFamily::State)? {
-            if key == b"root" || key.len() != 32 {
+        for (key, _) in self.db.iter(ColumnFamily::Trie)? {
+            if key.len() != 32 {
                 continue;
             }
             let mut hash = [0u8; 32];
             hash.copy_from_slice(&key);
             if !reachable.contains(&hash) {
-                batch.delete(ColumnFamily::State, key);
+                batch.delete(ColumnFamily::Trie, key);
                 deleted += 1;
             }
         }
 
         if deleted > 0 {
             self.db.write_batch(batch)?;
-            let mut cache = self.node_cache.write().unwrap();
+            let mut cache = self.node_cache.write();
             cache.retain(|h, _| reachable.contains(h));
         }
 
@@ -413,11 +440,17 @@ impl PatriciaTrie {
 
     /// Get a node by hash (with caching)
     fn get_node(&self, hash: NodeHash) -> Result<TrieNode, Box<dyn Error>> {
+        // The empty node is implicit: it is never reachable from a root, so
+        // `gc_orphan_nodes` deletes its stored copy, and inserting into an
+        // empty branch slot afterwards failed with "Node not found".
+        if hash == EMPTY_TRIE_HASH {
+            return Ok(TrieNode::Empty);
+        }
         // Check in-memory cache first
         {
-            let cache = self.node_cache.read().unwrap();
+            let cache = self.node_cache.read();
             if let Some(node) = cache.get(&hash) {
-                let mut stats = self.stats.write().unwrap();
+                let mut stats = self.stats.write();
                 stats.cache_hits += 1;
                 return Ok(node.clone());
             }
@@ -425,38 +458,38 @@ impl PatriciaTrie {
 
         // Cache miss - load from disk
         {
-            let mut stats = self.stats.write().unwrap();
+            let mut stats = self.stats.write();
             stats.cache_misses += 1;
         }
 
-        if let Some(data) = self.db.get(ColumnFamily::State, &hash)? {
+        if let Some(data) = self.db.get(ColumnFamily::Trie, &hash)? {
             let node = TrieNode::decode(&data)?;
 
             // Cache for future use
             {
-                let mut cache = self.node_cache.write().unwrap();
+                let mut cache = self.node_cache.write();
                 cache.insert(hash, node.clone());
 
-                let mut stats = self.stats.write().unwrap();
+                let mut stats = self.stats.write();
                 stats.cached_nodes = cache.len();
                 stats.persisted_nodes += 1;
             }
 
             Ok(node)
         } else {
-            Err(format!("Node not found: {:?}", hex::encode(&hash)).into())
+            Err(format!("Node not found: {:?}", hex::encode(hash)).into())
         }
     }
 
     /// Persist a node to disk and cache
     fn persist_node(&mut self, hash: NodeHash, node: &TrieNode) -> Result<(), Box<dyn Error>> {
         let encoded = node.encode();
-        self.db.put(ColumnFamily::State, &hash, &encoded)?;
+        self.db.put(ColumnFamily::Trie, &hash, &encoded)?;
         self.db.flush()?;
 
         // Update cache
         {
-            let mut cache = self.node_cache.write().unwrap();
+            let mut cache = self.node_cache.write();
             cache.insert(hash, node.clone());
         }
 
@@ -469,7 +502,7 @@ impl PatriciaTrie {
         node_hash: NodeHash,
         path: &[Nibble],
         value: Vec<u8>,
-    ) -> Result<(NodeHash, Vec<(NodeHash, TrieNode)>), Box<dyn Error>> {
+    ) -> Result<TrieUpdate, Box<dyn Error>> {
         let node = self.get_node(node_hash)?;
         let mut changed = Vec::new();
 
@@ -493,76 +526,51 @@ impl PatriciaTrie {
                         value,
                     }
                 } else {
-                    // Split into branch
+                    // Split into a branch at the first differing nibble. A key
+                    // that ends exactly there (one key is a prefix of the
+                    // other) goes into the branch's value slot; dropping it
+                    // there once lost the shorter key's value.
                     let common_len = common_prefix_len(path, &leaf_path);
+                    let mut children = [None; 16];
+                    let mut branch_value = None;
 
-                    if common_len == 0 {
-                        // Create branch at root
-                        let mut children = [None; 16];
-
-                        // Insert old leaf
+                    if common_len == leaf_path.len() {
+                        branch_value = Some(leaf_value);
+                    } else {
                         let old_leaf = TrieNode::Leaf {
-                            path: leaf_path[1..].to_vec(),
+                            path: leaf_path[common_len + 1..].to_vec(),
                             value: leaf_value,
                         };
                         let old_hash = old_leaf.hash();
                         changed.push((old_hash, old_leaf));
-                        children[leaf_path[0] as usize] = Some(old_hash);
+                        children[leaf_path[common_len] as usize] = Some(old_hash);
+                    }
 
-                        // Insert new leaf
+                    if common_len == path.len() {
+                        branch_value = Some(value);
+                    } else {
                         let new_leaf = TrieNode::Leaf {
-                            path: path[1..].to_vec(),
+                            path: path[common_len + 1..].to_vec(),
                             value,
                         };
                         let new_hash = new_leaf.hash();
                         changed.push((new_hash, new_leaf));
-                        children[path[0] as usize] = Some(new_hash);
+                        children[path[common_len] as usize] = Some(new_hash);
+                    }
 
-                        TrieNode::Branch {
-                            children,
-                            value: None,
+                    let branch = TrieNode::Branch {
+                        children,
+                        value: branch_value,
+                    };
+                    if common_len > 0 {
+                        let branch_hash = branch.hash();
+                        changed.push((branch_hash, branch));
+                        TrieNode::Extension {
+                            path: path[..common_len].to_vec(),
+                            child: branch_hash,
                         }
                     } else {
-                        // Create extension + branch
-                        let mut children = [None; 16];
-
-                        // Old leaf continuation
-                        if common_len < leaf_path.len() {
-                            let old_leaf = TrieNode::Leaf {
-                                path: leaf_path[common_len + 1..].to_vec(),
-                                value: leaf_value,
-                            };
-                            let old_hash = old_leaf.hash();
-                            changed.push((old_hash, old_leaf));
-                            children[leaf_path[common_len] as usize] = Some(old_hash);
-                        }
-
-                        // New leaf continuation
-                        if common_len < path.len() {
-                            let new_leaf = TrieNode::Leaf {
-                                path: path[common_len + 1..].to_vec(),
-                                value,
-                            };
-                            let new_hash = new_leaf.hash();
-                            changed.push((new_hash, new_leaf));
-                            children[path[common_len] as usize] = Some(new_hash);
-                        }
-
-                        let branch = TrieNode::Branch {
-                            children,
-                            value: None,
-                        };
-                        let branch_hash = branch.hash();
-                        changed.push((branch_hash, branch.clone()));
-
-                        if common_len > 0 {
-                            TrieNode::Extension {
-                                path: path[..common_len].to_vec(),
-                                child: branch_hash,
-                            }
-                        } else {
-                            branch
-                        }
+                        branch
                     }
                 }
             }
@@ -584,35 +592,45 @@ impl PatriciaTrie {
                         child: new_child,
                     }
                 } else {
-                    // Split extension
+                    // Split the extension where the paths diverge (or where
+                    // the new key ends, which then becomes the branch value).
                     let mut children = [None; 16];
+                    let mut branch_value = None;
 
-                    // Old extension continues
-                    let old_ext = TrieNode::Extension {
-                        path: ext_path[common_len + 1..].to_vec(),
-                        child,
-                    };
-                    let old_hash = old_ext.hash();
-                    changed.push((old_hash, old_ext));
-                    children[ext_path[common_len] as usize] = Some(old_hash);
+                    // The rest of the extension continues below the branch;
+                    // with nothing left of its path it is just its child.
+                    let rest = &ext_path[common_len + 1..];
+                    children[ext_path[common_len] as usize] = Some(if rest.is_empty() {
+                        child
+                    } else {
+                        let old_ext = TrieNode::Extension {
+                            path: rest.to_vec(),
+                            child,
+                        };
+                        let old_hash = old_ext.hash();
+                        changed.push((old_hash, old_ext));
+                        old_hash
+                    });
 
-                    // New path
-                    let new_leaf = TrieNode::Leaf {
-                        path: path[common_len + 1..].to_vec(),
-                        value,
-                    };
-                    let new_hash = new_leaf.hash();
-                    changed.push((new_hash, new_leaf));
-                    children[path[common_len] as usize] = Some(new_hash);
+                    if common_len == path.len() {
+                        branch_value = Some(value);
+                    } else {
+                        let new_leaf = TrieNode::Leaf {
+                            path: path[common_len + 1..].to_vec(),
+                            value,
+                        };
+                        let new_hash = new_leaf.hash();
+                        changed.push((new_hash, new_leaf));
+                        children[path[common_len] as usize] = Some(new_hash);
+                    }
 
                     let branch = TrieNode::Branch {
                         children,
-                        value: None,
+                        value: branch_value,
                     };
-                    let branch_hash = branch.hash();
-                    changed.push((branch_hash, branch.clone()));
-
                     if common_len > 0 {
+                        let branch_hash = branch.hash();
+                        changed.push((branch_hash, branch));
                         TrieNode::Extension {
                             path: ext_path[..common_len].to_vec(),
                             child: branch_hash,
@@ -708,7 +726,7 @@ impl PatriciaTrie {
         &mut self,
         node_hash: NodeHash,
         path: &[Nibble],
-    ) -> Result<(NodeHash, Vec<(NodeHash, TrieNode)>), Box<dyn Error>> {
+    ) -> Result<TrieUpdate, Box<dyn Error>> {
         let node = self.get_node(node_hash)?;
         let mut changed = Vec::new();
 
@@ -816,7 +834,7 @@ impl PatriciaTrie {
     pub fn flush(&self) -> Result<(), Box<dyn Error>> {
         // Store root hash
         let root = self.root_hash();
-        self.db.put(ColumnFamily::State, b"root", &root)?;
+        self.db.put(ColumnFamily::Trie, b"root", &root)?;
 
         // Flush database
         self.db.flush()?;
@@ -934,5 +952,66 @@ mod tests {
             let value = trie.get(b"persistent").unwrap();
             assert_eq!(value, Some(b"data".to_vec()));
         }
+    }
+}
+
+#[cfg(test)]
+mod prefix_key_tests {
+    use super::*;
+
+    #[test]
+    fn key_that_extends_another_key_keeps_both() {
+        let mut trie = PatriciaTrie::new(std::sync::Arc::new(crate::MemDb::new())).unwrap();
+        trie.insert(b"validators", b"short").unwrap();
+        trie.insert(b"validators/epoch", b"long").unwrap();
+        assert_eq!(trie.get(b"validators").unwrap().as_deref(), Some(&b"short"[..]));
+        assert_eq!(trie.get(b"validators/epoch").unwrap().as_deref(), Some(&b"long"[..]));
+    }
+
+    /// Random keys drawn from a tiny alphabet (so prefixes and shared paths
+    /// are common), checked against a BTreeMap after every insert.
+    #[test]
+    fn matches_a_map_for_prefix_heavy_keys() {
+        let mut trie = PatriciaTrie::new(std::sync::Arc::new(crate::MemDb::new())).unwrap();
+        let mut model = std::collections::BTreeMap::new();
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed
+        };
+        for i in 0..2_000u32 {
+            let len = (next() % 5) as usize;
+            let key: Vec<u8> = (0..len).map(|_| [0x00, 0x01, 0x10, 0x11][(next() % 4) as usize]).collect();
+            let value = i.to_le_bytes().to_vec();
+            trie.insert(&key, &value).unwrap();
+            model.insert(key, value);
+        }
+        for (k, v) in &model {
+            assert_eq!(trie.get(k).unwrap().as_ref(), Some(v), "key {:?}", k);
+        }
+    }
+
+    #[test]
+    fn insert_into_empty_slot_after_gc() {
+        let mut trie = PatriciaTrie::new(std::sync::Arc::new(crate::MemDb::new())).unwrap();
+        assert_eq!(TrieNode::Empty.hash(), EMPTY_TRIE_HASH);
+        trie.insert(b"validators", b"a").unwrap();
+        trie.insert(b"governance", b"b").unwrap();
+        trie.gc_orphan_nodes().unwrap();
+        // Lands in an empty child slot of the root branch.
+        trie.insert(b"staking/unbonding", b"c").unwrap();
+        assert_eq!(trie.get(b"staking/unbonding").unwrap().as_deref(), Some(&b"c"[..]));
+        assert_eq!(trie.get(b"validators").unwrap().as_deref(), Some(&b"a"[..]));
+    }
+
+    #[test]
+    fn shorter_key_inserted_after_longer_keeps_both() {
+        let mut trie = PatriciaTrie::new(std::sync::Arc::new(crate::MemDb::new())).unwrap();
+        trie.insert(b"validators/epoch", b"long").unwrap();
+        trie.insert(b"validators", b"short").unwrap();
+        assert_eq!(trie.get(b"validators").unwrap().as_deref(), Some(&b"short"[..]));
+        assert_eq!(trie.get(b"validators/epoch").unwrap().as_deref(), Some(&b"long"[..]));
     }
 }

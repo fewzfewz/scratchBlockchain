@@ -1,5 +1,4 @@
-use prometheus::{Counter, Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry};
-use std::sync::Arc;
+use prometheus::{Gauge, Histogram, HistogramOpts, IntCounter, IntGauge, Opts, Registry};
 
 /// Blockchain metrics for Prometheus
 pub struct BlockchainMetrics {
@@ -177,11 +176,5 @@ impl BlockchainMetrics {
 
     pub fn registry(&self) -> &Registry {
         &self.registry
-    }
-}
-
-impl Default for BlockchainMetrics {
-    fn default() -> Self {
-        Self::new().expect("Failed to create metrics")
     }
 }

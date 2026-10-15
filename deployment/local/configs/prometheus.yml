@@ -28,6 +28,10 @@ scrape_configs:
     metrics_path: '/metrics'
     static_configs:
       - targets: ['validator3:26657']
+  - job_name: 'validator4'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['validator4:26657']
 
   - job_name: 'rpc1'
     metrics_path: '/metrics'

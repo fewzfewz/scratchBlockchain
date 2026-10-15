@@ -9,6 +9,7 @@ rocksdb = ["dep:rocksdb"]
 sled-legacy = ["dep:sled"]
 
 [dependencies]
+parking_lot = "0.12"
 common = { path = "../common" }
 rocksdb = { version = "0.21", optional = true }
 sled = { version = "0.34", optional = true }
@@ -23,3 +24,6 @@ hex = "0.4"
 
 [dev-dependencies]
 tempfile = "3"
+
+[lints]
+workspace = true

@@ -91,8 +91,6 @@ export class HttpProvider implements Provider {
       send_raw_transaction: "/submit_tx",
       connect_peer: "/connect_peer",
       estimate_gas: "/estimate_gas",
-      delegate_stake: "/delegate",
-      register_validator: "/validators/register",
       faucet_request: "/faucet/request",
       deploy_wasm: "/deploy_wasm",
       call_wasm: "/call_wasm",

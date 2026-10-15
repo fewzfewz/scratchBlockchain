@@ -21,6 +21,12 @@ pub struct BridgeUnlockQueue {
     pending: Vec<PendingUnlock>,
 }
 
+impl Default for BridgeUnlockQueue {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BridgeUnlockQueue {
     pub fn new() -> Self {
         Self {

@@ -8,6 +8,16 @@ pub type Address = [u8; 20];
 pub type Signature = Vec<u8>; // Changed from [u8; 64] to avoid serde limit
 pub type PublicKey = [u8; 32];
 
+/// Domain tags keep transaction and header hashes from ever colliding with each
+/// other (or with any other signed message), and version the encodings.
+pub const TX_DOMAIN: &[u8] = b"NEBULA_TX_V1";
+
+/// Largest block, as encoded on the wire (JSON). Proposals and blocks are
+/// gossiped whole, so this must stay below the gossip message limit; a block
+/// over it would be dropped by every peer and its round could never finish.
+pub const MAX_BLOCK_BYTES: usize = 1024 * 1024;
+pub const HEADER_DOMAIN: &[u8] = b"NEBULA_HEADER_V1";
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Header {
     pub parent_hash: Hash,
@@ -19,6 +29,22 @@ pub struct Header {
     pub signature: Signature,
     pub gas_used: u64, // Total gas used in block
     pub base_fee: u64, // Base fee per gas (EIP-1559)
+    /// Hash of `Block::last_commit` (zero when there is none), so the
+    /// previous block's precommits are fixed by this header's signature.
+    #[serde(default)]
+    pub last_commit_hash: Hash,
+    /// Ed25519 key of the validator that proposed (and signs) this block.
+    /// Part of the hash: two proposers can otherwise build byte-identical
+    /// blocks (e.g. empty ones on the same parent), and nodes then disagreed
+    /// about who proposed the block they finalized — and so about rewards.
+    #[serde(default)]
+    pub proposer: PublicKey,
+    /// `consensus_types::validator_set_hash` of the set that certifies the
+    /// *next* block. Validator-set changes take effect only at epoch
+    /// boundaries, so the proposer knows this set before executing the block;
+    /// a light client uses it to follow set changes.
+    #[serde(default)]
+    pub next_validators_hash: Hash,
 }
 
 impl Header {
@@ -33,18 +59,34 @@ impl Header {
             signature: vec![],
             gas_used: 0,
             base_fee: 1_000_000_000, // 1 Gwei default
+            last_commit_hash: [0; 32],
+            proposer: [0; 32],
+            next_validators_hash: [0; 32],
         }
     }
 
+    /// Canonical, domain-separated header hash. Covers every field except the
+    /// proposer's signature (which is computed over this hash).
     pub fn hash(&self) -> Hash {
         let mut hasher = Sha256::new();
+        hasher.update(HEADER_DOMAIN);
         hasher.update(self.parent_hash);
         hasher.update(self.state_root);
         hasher.update(self.extrinsics_root);
         hasher.update(self.slot.to_le_bytes());
         hasher.update(self.epoch.to_le_bytes());
         hasher.update(self.validator_set_id.to_le_bytes());
+        hasher.update(self.gas_used.to_le_bytes());
+        hasher.update(self.base_fee.to_le_bytes());
+        hasher.update(self.last_commit_hash);
+        hasher.update(self.proposer);
+        hasher.update(self.next_validators_hash);
         hasher.finalize().into()
+    }
+
+    /// The header is signed by the key it names as its proposer.
+    pub fn verify_proposer_signature(&self) -> bool {
+        crate::crypto::verify_signature(&self.proposer, &self.hash(), &self.signature).is_ok()
     }
 }
 
@@ -53,6 +95,8 @@ impl Header {
 pub struct Transaction {
     pub sender: Address,
     pub nonce: u64,
+    /// Ed25519 key that signed the transaction; `sender` must be derived from it.
+    pub public_key: PublicKey,
     pub payload: Vec<u8>,
     pub signature: Vec<u8>,
 
@@ -68,20 +112,35 @@ pub struct Transaction {
 }
 
 impl Transaction {
-    /// Compute transaction hash
+    /// Canonical transaction hash (the message that gets signed).
+    ///
+    /// Every variable-length field is length-prefixed and every optional field
+    /// carries a presence tag, so no two distinct transactions share an encoding
+    /// (e.g. `chain_id` cannot be stripped by shifting bytes into `payload`).
     pub fn hash(&self) -> Hash {
         let mut hasher = Sha256::new();
+        hasher.update(TX_DOMAIN);
         hasher.update(self.sender);
         hasher.update(self.nonce.to_le_bytes());
+        hasher.update(self.public_key);
+        hasher.update((self.payload.len() as u64).to_le_bytes());
         hasher.update(&self.payload);
         hasher.update(self.gas_limit.to_le_bytes());
         hasher.update(self.max_fee_per_gas.to_le_bytes());
         hasher.update(self.max_priority_fee_per_gas.to_le_bytes());
-        if let Some(chain_id) = self.chain_id {
-            hasher.update(chain_id.to_le_bytes());
+        match self.chain_id {
+            Some(chain_id) => {
+                hasher.update([1u8]);
+                hasher.update(chain_id.to_le_bytes());
+            }
+            None => hasher.update([0u8]),
         }
-        if let Some(to) = self.to {
-            hasher.update(to);
+        match self.to {
+            Some(to) => {
+                hasher.update([1u8]);
+                hasher.update(to);
+            }
+            None => hasher.update([0u8]),
         }
         hasher.update(self.value.to_le_bytes());
         hasher.finalize().into()
@@ -105,6 +164,14 @@ impl Transaction {
         verifying_key.verify(&message, &signature).is_ok()
     }
 
+    /// Set `public_key` and `sender` from `key`, then sign `self.hash()`.
+    pub fn sign_with(&mut self, key: &ed25519_dalek::SigningKey) {
+        use ed25519_dalek::Signer;
+        self.public_key = key.verifying_key().to_bytes();
+        self.sender = crate::crypto::derive_address_from_public_key(&self.public_key);
+        self.signature = key.sign(&self.hash()).to_bytes().to_vec();
+    }
+
     /// Create a simple transfer transaction with default gas values
     pub fn simple_transfer(
         sender: Address,
@@ -116,6 +183,7 @@ impl Transaction {
         Self {
             sender,
             nonce,
+            public_key: [0; 32],
             payload: vec![],
             signature: vec![],
             gas_limit: 21_000,
@@ -132,6 +200,7 @@ impl Transaction {
         Self {
             sender,
             nonce,
+            public_key: [0; 32],
             payload: vec![],
             signature: vec![0; 64],
             gas_limit: 21_000,
@@ -148,11 +217,36 @@ impl Transaction {
 pub struct Block {
     pub header: Header,
     pub extrinsics: Vec<Transaction>,
+    /// +2/3 precommits that finalized this block. Not part of the block hash;
+    /// attached when the block is finalized so sync peers can verify finality.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<crate::consensus_types::CommitCertificate>,
+    /// The precommits that finalized the parent block (CometBFT's
+    /// LastCommit), chosen by the proposer and fixed by
+    /// `header.last_commit_hash`. Every node pays vote rewards from this, so
+    /// rewards follow actual participation without depending on which
+    /// precommits each node collected locally. `None` only when the parent
+    /// is genesis.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_commit: Option<crate::consensus_types::CommitCertificate>,
 }
 
 impl Block {
     pub fn new(header: Header, extrinsics: Vec<Transaction>) -> Self {
-        Self { header, extrinsics }
+        Self {
+            header,
+            extrinsics,
+            commit: None,
+            last_commit: None,
+        }
+    }
+
+    /// The value `header.last_commit_hash` must hold for this block.
+    pub fn expected_last_commit_hash(&self) -> Hash {
+        self.last_commit
+            .as_ref()
+            .map(|c| c.hash())
+            .unwrap_or([0; 32])
     }
 
     pub fn hash(&self) -> Hash {
@@ -163,6 +257,8 @@ impl Block {
         Self {
             header: Header::new([0; 32], 0),
             extrinsics: vec![],
+            commit: None,
+            last_commit: None,
         }
     }
 }
@@ -201,6 +297,17 @@ pub struct GenesisConfig {
     pub timestamp: u64,
     pub accounts: Vec<GenesisAccount>,
     pub validators: Vec<GenesisValidator>,
+    /// Bridge relayer set; without it the bridge cannot mint.
+    #[serde(default)]
+    pub bridge: Option<GenesisBridge>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenesisBridge {
+    /// Hex Ed25519 public keys of the relayers.
+    pub relayers: Vec<String>,
+    /// Distinct relayer attestations a mint needs.
+    pub threshold: u32,
 }
 
 impl GenesisConfig {
@@ -227,6 +334,7 @@ impl Default for GenesisConfig {
                 },
             ],
             validators: vec![],
+            bridge: None,
         }
     }
 }
@@ -277,5 +385,119 @@ impl TransactionReceipt {
             to,
             contract_address: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_hash_commits_to_fee_fields() {
+        let header = Header::new([7; 32], 3);
+        let mut other = header.clone();
+        other.base_fee += 1;
+        assert_ne!(header.hash(), other.hash());
+        let mut other = header.clone();
+        other.gas_used += 1;
+        assert_ne!(header.hash(), other.hash());
+        // The proposer signature is over the hash, so it must not be part of it.
+        let mut signed = header.clone();
+        signed.signature = vec![1; 64];
+        assert_eq!(header.hash(), signed.hash());
+    }
+
+    #[test]
+    fn tx_hash_distinguishes_optional_fields() {
+        let mut a = Transaction::test_transaction([1; 20], 0);
+        a.to = None;
+        a.payload = [9u8; 20].to_vec();
+        let mut b = a.clone();
+        b.to = Some([9; 20]);
+        b.payload.clear();
+        assert_ne!(a.hash(), b.hash());
+    }
+
+    /// Fixed vectors shared with the JS clients (frontend `txHash`, SDK
+    /// `Wallet.signTransaction`). If this changes, every client must change too.
+    #[test]
+    fn tx_hash_matches_client_vectors() {
+        let tx = Transaction {
+            sender: [0x11; 20],
+            nonce: 7,
+            public_key: [0x22; 32],
+            payload: vec![1, 2, 3],
+            signature: vec![],
+            gas_limit: 21_000,
+            max_fee_per_gas: 1_000_000_000,
+            max_priority_fee_per_gas: 100_000_000,
+            chain_id: Some(1),
+            to: Some([0x33; 20]),
+            value: 5,
+        };
+        assert_eq!(
+            hex::encode(tx.hash()),
+            "3413644368542c163b3a62867bd5c0743479b00d5cb16a3a0629b2891d5c70b9"
+        );
+        let bare = Transaction {
+            chain_id: None,
+            to: None,
+            payload: vec![],
+            ..tx
+        };
+        assert_eq!(
+            hex::encode(bare.hash()),
+            "56ce5bd73e11baa36f745bdbc607a09e9d89c302d8a6676ea3c0731deea2f9cd"
+        );
+    }
+}
+
+#[cfg(test)]
+mod devnet_genesis_tests {
+    use super::*;
+
+    /// The local devnet genesis must parse and tolerate one validator being
+    /// down: every 3-of-4 subset holds more than 2/3 of the stake.
+    #[test]
+    fn local_devnet_genesis_tolerates_one_validator_down() {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../deployment/local/configs/genesis.json"
+        );
+        let genesis = GenesisConfig::load_from_file(path).unwrap();
+        assert_eq!(genesis.validators.len(), 4);
+        let total: u128 = genesis.validators.iter().map(|v| v.stake).sum();
+        for down in &genesis.validators {
+            assert!(
+                crate::consensus_types::is_quorum(total - down.stake, total),
+                "chain halts without validator {}",
+                down.public_key
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod header_proposer_tests {
+    use super::*;
+
+    #[test]
+    fn identical_blocks_from_different_proposers_have_different_hashes() {
+        let sign = |seed: u8| {
+            let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+            let mut h = Header::new([1; 32], 5);
+            h.proposer = key.verifying_key().to_bytes();
+            use ed25519_dalek::Signer;
+            h.signature = key.sign(&h.hash()).to_bytes().to_vec();
+            h
+        };
+        let (a, b) = (sign(1), sign(2));
+        assert_ne!(a.hash(), b.hash());
+        assert!(a.verify_proposer_signature() && b.verify_proposer_signature());
+
+        // Claiming someone else as proposer breaks the signature.
+        let mut forged = a.clone();
+        forged.proposer = b.proposer;
+        assert!(!forged.verify_proposer_signature());
     }
 }

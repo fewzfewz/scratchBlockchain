@@ -1,4 +1,5 @@
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tracing::{error, info, warn};
 
@@ -66,7 +67,7 @@ impl CircuitBreaker {
 
     /// Check if request should be allowed through
     pub fn is_request_allowed(&self) -> bool {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
 
         match state.current_state {
             CircuitState::Closed => true,
@@ -91,7 +92,7 @@ impl CircuitBreaker {
 
     /// Record a successful operation
     pub fn record_success(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
 
         match state.current_state {
             CircuitState::HalfOpen => {
@@ -118,7 +119,7 @@ impl CircuitBreaker {
 
     /// Record a failed operation
     pub fn record_failure(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
 
         match state.current_state {
             CircuitState::Closed => {
@@ -148,7 +149,7 @@ impl CircuitBreaker {
 
     /// Manually open the circuit (emergency halt)
     pub fn trip(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         error!("Circuit breaker manually tripped - emergency halt");
         state.current_state = CircuitState::Open;
         state.last_failure_time = Some(Instant::now());
@@ -156,7 +157,7 @@ impl CircuitBreaker {
 
     /// Manually close the circuit (manual recovery)
     pub fn reset(&self) {
-        let mut state = self.state.lock().unwrap();
+        let mut state = self.state.lock();
         info!("Circuit breaker manually reset");
         state.current_state = CircuitState::Closed;
         state.failure_count = 0;
@@ -166,7 +167,7 @@ impl CircuitBreaker {
 
     /// Get current state
     pub fn get_state(&self) -> CircuitState {
-        self.state.lock().unwrap().current_state.clone()
+        self.state.lock().current_state.clone()
     }
 }
 

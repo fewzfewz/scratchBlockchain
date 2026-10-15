@@ -19,10 +19,11 @@
 //! block data, state changes, and receipts are written atomically.
 //! If the node crashes mid-write, the database recovers to a consistent state.
 
+use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 use std::time::Instant;
 use tracing::{debug, trace};
 
@@ -126,6 +127,10 @@ pub enum ColumnFamily {
 
     /// Node metadata (latest height, genesis hash, chain ID)
     Meta,
+
+    /// Patricia trie nodes and root pointer (kept apart from `State` so the
+    /// flat application state can be committed to on its own).
+    Trie,
 }
 
 impl ColumnFamily {
@@ -138,6 +143,7 @@ impl ColumnFamily {
             ColumnFamily::State => 0x03,
             ColumnFamily::Receipts => 0x04,
             ColumnFamily::Meta => 0x05,
+            ColumnFamily::Trie => 0x06,
         }
     }
 
@@ -149,6 +155,7 @@ impl ColumnFamily {
             ColumnFamily::State => "state",
             ColumnFamily::Receipts => "receipts",
             ColumnFamily::Meta => "meta",
+            ColumnFamily::Trie => "trie",
         }
     }
 }
@@ -164,12 +171,12 @@ impl ColumnFamily {
 /// a commit, the batch is either fully applied or fully rolled back.
 #[derive(Default)]
 pub struct WriteBatch {
-    ops: Vec<BatchOp>,
+    pub(crate) ops: Vec<BatchOp>,
     size_hint: usize, // Estimated byte size for RocksDB
 }
 
 /// Single operation within a batch
-enum BatchOp {
+pub(crate) enum BatchOp {
     Put {
         cf: ColumnFamily,
         key: Vec<u8>,
@@ -223,6 +230,9 @@ impl WriteBatch {
 // ============================================================================
 
 /// Core database interface that all storage backends must implement
+/// Boxed iterator over `(key, value)` pairs from a column family.
+pub type KvIter<'a> = Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + 'a>;
+
 pub trait KeyValueStore: Send + Sync {
     /// Get a value by key from the specified column family
     fn get(&self, cf: ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>, Box<dyn Error>>;
@@ -242,10 +252,7 @@ pub trait KeyValueStore: Send + Sync {
 
     /// Iterate over all key-value pairs in a column family
     /// Returns an iterator that yields (key, value) pairs
-    fn iter(
-        &self,
-        cf: ColumnFamily,
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>>;
+    fn iter(&self, cf: ColumnFamily) -> Result<KvIter<'_>, Box<dyn Error>>;
 
     /// Iterate over a key range in a column family
     fn scan(
@@ -253,7 +260,7 @@ pub trait KeyValueStore: Send + Sync {
         cf: ColumnFamily,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>>;
+    ) -> Result<KvIter<'_>, Box<dyn Error>>;
 
     /// Flush all pending writes to disk
     /// Ensures data is persisted before returning
@@ -307,7 +314,7 @@ impl MemDb {
 
     /// Update read metrics
     fn record_read(&self, latency_us: u64, hit: bool) {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.metrics.write();
         metrics.reads += 1;
         metrics.read_latency_us += latency_us;
         if hit {
@@ -319,20 +326,20 @@ impl MemDb {
 
     /// Update write metrics
     fn record_write(&self, latency_us: u64) {
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.metrics.write();
         metrics.writes += 1;
         metrics.write_latency_us += latency_us;
     }
 
     /// Try to get from cache
     fn get_cached(&self, prefixed_key: &[u8]) -> Option<Vec<u8>> {
-        let cache = self.cache.read().unwrap();
+        let cache = self.cache.read();
         cache.get(prefixed_key).cloned()
     }
 
     /// Put into cache
     fn put_cache(&self, prefixed_key: Vec<u8>, value: Vec<u8>) {
-        let mut cache = self.cache.write().unwrap();
+        let mut cache = self.cache.write();
 
         // Evict oldest if cache is too large (simple FIFO for now)
         if cache.len() >= self.cache_size_limit {
@@ -358,10 +365,7 @@ impl KeyValueStore for MemDb {
         }
 
         // Cache miss - read from store
-        let guard = self
-            .store
-            .read()
-            .map_err(|_| DbError::new("RwLock poisoned on read"))?;
+        let guard = self.store.read();
 
         let result = guard.get(&prefixed).cloned();
 
@@ -379,10 +383,7 @@ impl KeyValueStore for MemDb {
         let start = Instant::now();
         let prefixed = Self::prefix_key(cf, key);
 
-        let mut guard = self
-            .store
-            .write()
-            .map_err(|_| DbError::new("RwLock poisoned on write"))?;
+        let mut guard = self.store.write();
 
         guard.insert(prefixed.clone(), value.to_vec());
 
@@ -398,18 +399,15 @@ impl KeyValueStore for MemDb {
         let start = Instant::now();
         let prefixed = Self::prefix_key(cf, key);
 
-        let mut guard = self
-            .store
-            .write()
-            .map_err(|_| DbError::new("RwLock poisoned on delete"))?;
+        let mut guard = self.store.write();
 
         guard.remove(&prefixed);
 
         // Remove from cache
-        let mut cache = self.cache.write().unwrap();
+        let mut cache = self.cache.write();
         cache.remove(&prefixed);
 
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.metrics.write();
         metrics.deletes += 1;
         metrics.write_latency_us += start.elapsed().as_micros() as u64;
 
@@ -422,10 +420,7 @@ impl KeyValueStore for MemDb {
 
     fn write_batch(&self, batch: WriteBatch) -> Result<(), Box<dyn Error>> {
         let start = Instant::now();
-        let mut guard = self
-            .store
-            .write()
-            .map_err(|_| DbError::new("RwLock poisoned on write_batch"))?;
+        let mut guard = self.store.write();
 
         for op in batch.ops {
             match op {
@@ -438,27 +433,21 @@ impl KeyValueStore for MemDb {
                     let prefixed = Self::prefix_key(cf, &key);
                     guard.remove(&prefixed);
 
-                    let mut cache = self.cache.write().unwrap();
+                    let mut cache = self.cache.write();
                     cache.remove(&prefixed);
                 }
             }
         }
 
-        let mut metrics = self.metrics.write().unwrap();
+        let mut metrics = self.metrics.write();
         metrics.batches += 1;
         metrics.write_latency_us += start.elapsed().as_micros() as u64;
 
         Ok(())
     }
 
-    fn iter(
-        &self,
-        cf: ColumnFamily,
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
-        let guard = self
-            .store
-            .read()
-            .map_err(|_| DbError::new("RwLock poisoned on iter"))?;
+    fn iter(&self, cf: ColumnFamily) -> Result<KvIter<'_>, Box<dyn Error>> {
+        let guard = self.store.read();
 
         let prefix = &[cf.prefix()];
         let mut results = Vec::new();
@@ -479,11 +468,8 @@ impl KeyValueStore for MemDb {
         cf: ColumnFamily,
         start_key: &[u8],
         end_key: &[u8],
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
-        let guard = self
-            .store
-            .read()
-            .map_err(|_| DbError::new("RwLock poisoned on scan"))?;
+    ) -> Result<KvIter<'_>, Box<dyn Error>> {
+        let guard = self.store.read();
 
         let prefix = &[cf.prefix()];
         let start_prefixed = [&[cf.prefix()], start_key].concat();
@@ -506,7 +492,7 @@ impl KeyValueStore for MemDb {
     }
 
     fn get_metrics(&self) -> DbMetrics {
-        self.metrics.read().unwrap().clone()
+        self.metrics.read().clone()
     }
 }
 
@@ -612,6 +598,7 @@ pub mod rocks {
                 ColumnFamily::State.name(),
                 ColumnFamily::Receipts.name(),
                 ColumnFamily::Meta.name(),
+                ColumnFamily::Trie.name(),
             ];
 
             let cfs: Vec<ColumnFamilyDescriptor> = cf_names
@@ -642,7 +629,7 @@ pub mod rocks {
         /// Record metrics for a read operation
         fn record_read(&self, latency_us: u64) {
             self.reads.fetch_add(1, Ordering::Relaxed);
-            let mut metrics = self.metrics.write().unwrap();
+            let mut metrics = self.metrics.write();
             metrics.reads += 1;
             metrics.read_latency_us += latency_us;
         }
@@ -651,15 +638,15 @@ pub mod rocks {
         fn record_write(&self, latency_us: u64, is_batch: bool) {
             if is_batch {
                 self.batches.fetch_add(1, Ordering::Relaxed);
-                let mut metrics = self.metrics.write().unwrap();
+                let mut metrics = self.metrics.write();
                 metrics.batches += 1;
             } else {
                 self.writes.fetch_add(1, Ordering::Relaxed);
-                let mut metrics = self.metrics.write().unwrap();
+                let mut metrics = self.metrics.write();
                 metrics.writes += 1;
             }
 
-            let mut metrics = self.metrics.write().unwrap();
+            let mut metrics = self.metrics.write();
             metrics.write_latency_us += latency_us;
         }
     }
@@ -733,17 +720,17 @@ pub mod rocks {
             Ok(())
         }
 
-        fn iter(
-            &self,
-            cf: ColumnFamily,
-        ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+        fn iter(&self, cf: ColumnFamily) -> Result<KvIter<'_>, Box<dyn Error>> {
             let handle = self.cf_handle(cf)?;
             let iter = self.db.iterator_cf(handle, IteratorMode::Start);
 
             // Convert RocksDB iterator to our iterator type
-            let mapped = iter.map(|item| {
-                let (key, value) = item.unwrap();
-                (key.to_vec(), value.to_vec())
+            let mapped = iter.filter_map(|item| match item {
+                Ok((key, value)) => Some((key.to_vec(), value.to_vec())),
+                Err(e) => {
+                    tracing::error!("RocksDB iterator error: {}", e);
+                    None
+                }
             });
 
             Ok(Box::new(mapped))
@@ -754,7 +741,7 @@ pub mod rocks {
             cf: ColumnFamily,
             start_key: &[u8],
             end_key: &[u8],
-        ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+        ) -> Result<KvIter<'_>, Box<dyn Error>> {
             let handle = self.cf_handle(cf)?;
             let end_key_owned = end_key.to_vec();
             let iter = self
@@ -769,9 +756,12 @@ pub mod rocks {
                         false
                     }
                 })
-                .map(|item| {
-                    let (key, value) = item.unwrap();
-                    (key.to_vec(), value.to_vec())
+                .filter_map(|item| match item {
+                    Ok((key, value)) => Some((key.to_vec(), value.to_vec())),
+                    Err(e) => {
+                        tracing::error!("RocksDB scan error: {}", e);
+                        None
+                    }
                 });
 
             Ok(Box::new(mapped))
@@ -785,7 +775,7 @@ pub mod rocks {
         }
 
         fn get_metrics(&self) -> DbMetrics {
-            let mut metrics = self.metrics.read().unwrap().clone();
+            let mut metrics = self.metrics.read().clone();
             // Update atomic counters
             metrics.reads = self.reads.load(Ordering::Relaxed);
             metrics.writes = self.writes.load(Ordering::Relaxed);
@@ -804,6 +794,9 @@ pub mod rocks {
 ///
 /// This provides type-safe methods for blockchain-specific operations
 /// while using the underlying KeyValueStore for actual storage.
+/// Meta key for the state root after the latest committed block.
+pub const STATE_ROOT_KEY: &[u8] = b"state_root";
+
 pub struct ChainStore {
     inner: Arc<dyn KeyValueStore>,
 }
@@ -890,9 +883,7 @@ impl ChainStore {
     }
 
     /// Iterate over all state keys
-    pub fn iter_state(
-        &self,
-    ) -> Result<Box<dyn Iterator<Item = (Vec<u8>, Vec<u8>)> + '_>, Box<dyn Error>> {
+    pub fn iter_state(&self) -> Result<KvIter<'_>, Box<dyn Error>> {
         self.inner.iter(ColumnFamily::State)
     }
 
@@ -927,6 +918,12 @@ impl ChainStore {
             let arr: [u8; 8] = b.try_into().unwrap_or([0u8; 8]);
             u64::from_le_bytes(arr)
         }))
+    }
+
+    /// State root after the latest committed block (see `node::state_root`).
+    pub fn get_state_root(&self) -> Result<Option<[u8; 32]>, Box<dyn Error>> {
+        let raw = self.inner.get(ColumnFamily::Meta, STATE_ROOT_KEY)?;
+        Ok(raw.and_then(|b| b.as_slice().try_into().ok()))
     }
 
     /// Set the genesis block hash
@@ -987,7 +984,7 @@ impl ChainStore {
         batch.put(ColumnFamily::Blocks, hash.as_slice(), block_encoded);
         batch.put(
             ColumnFamily::BlockHeights,
-            &height.to_le_bytes(),
+            height.to_le_bytes(),
             hash.as_slice(),
         );
 
@@ -1005,7 +1002,7 @@ impl ChainStore {
         }
 
         // 4. Update metadata (last!)
-        batch.put(ColumnFamily::Meta, b"latest_height", &height.to_le_bytes());
+        batch.put(ColumnFamily::Meta, b"latest_height", height.to_le_bytes());
 
         debug!(
             "Committing block {} with {} state changes, {} receipts",
@@ -1087,7 +1084,7 @@ mod tests {
         let mut batch = WriteBatch::new();
         batch.put(ColumnFamily::Blocks, b"block1", b"data1");
         batch.put(ColumnFamily::Receipts, b"tx1", b"receipt1");
-        batch.put(ColumnFamily::Meta, b"height", &42u64.to_le_bytes());
+        batch.put(ColumnFamily::Meta, b"height", 42u64.to_le_bytes());
 
         db.write_batch(batch).unwrap();
 

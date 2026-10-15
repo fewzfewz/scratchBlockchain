@@ -1,5 +1,7 @@
+//! Helpers for the multi-node integration tests (not used by the node).
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use common::types::{Block, Transaction};
-use consensus::bft::BftEngine;
 use consensus::FinalityGadget;
 use libp2p::{Multiaddr, PeerId};
 use mempool::Mempool;
@@ -27,7 +29,7 @@ impl TestNode {
         self.listen_addr.clone()
     }
 
-    pub async fn connect_peer(&self, peer_id: PeerId, addr: Multiaddr) {
+    pub async fn connect_peer(&self, _peer_id: PeerId, addr: Multiaddr) {
         self.network_cmd_sender
             .send(NetworkCommand::Dial(addr))
             .await
@@ -63,19 +65,18 @@ impl TestNode {
 }
 
 pub async fn create_test_node(
-    rpc_port: u16,
+    _rpc_port: u16,
     p2p_port: u16,
 ) -> (TestNode, mpsc::Receiver<NetworkEvent>) {
     // Create temp dirs
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("db");
 
-    use storage::MemDb;
     // Initialize components
     let block_store = Arc::new(BlockStore::new(db_path.join("blocks").to_str().unwrap()).unwrap());
-    let state_store = Arc::new(StateStore::open(db_path.join("state").to_str().unwrap()).unwrap());
+    let _state_store = Arc::new(StateStore::open(db_path.join("state").to_str().unwrap()).unwrap());
     let receipt_kv: std::sync::Arc<storage::MemDb> = std::sync::Arc::new(storage::MemDb::new());
-    let receipt_store = Arc::new(ReceiptStore::new(receipt_kv));
+    let _receipt_store = Arc::new(ReceiptStore::new(receipt_kv));
     let mempool = Arc::new(Mempool::new(mempool::MempoolConfig::default()));
 
     // Create test validators
@@ -88,13 +89,13 @@ pub async fn create_test_node(
         slashed: false,
     }];
 
-    let finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators)));
-    let metrics = Arc::new(crate::metrics::Metrics::new());
+    let _finality_gadget = Arc::new(Mutex::new(FinalityGadget::new(validators)));
+    let _metrics = Arc::new(crate::metrics::Metrics::new());
 
     // Initialize network
-    let (mut network_service, network_cmd_sender, network_event_receiver) =
+    let (network_service, network_cmd_sender, network_event_receiver) =
         NetworkService::new(vec![], "").unwrap();
-    let peer_id = network_service.local_peer_id().clone();
+    let peer_id = network_service.local_peer_id();
 
     // Listen on localhost
     let listen_addr: Multiaddr = format!("/ip4/127.0.0.1/tcp/{}", p2p_port).parse().unwrap();
@@ -121,7 +122,7 @@ pub async fn create_test_node(
     );
 
     tokio::spawn(async move {
-        rpc_server.run(rpc_port, None).await;
+        rpc_server.run(rpc_port).await;
     });
     */
 
@@ -152,7 +153,7 @@ pub async fn create_test_node(
         vec![],
     ));
 
-    let block_producer = crate::block_producer::BlockProducer::new(
+    let _block_producer = crate::block_producer::BlockProducer::new(
         tx_pool.clone(),
         bft_engine,
         executor,
@@ -180,6 +181,7 @@ pub async fn create_test_node(
 pub fn create_dummy_transaction() -> Transaction {
     Transaction {
         sender: [1; 20],
+        public_key: [0; 32],
         to: Some([2; 20]),
         nonce: 0,
         value: 100,
@@ -192,7 +194,7 @@ pub fn create_dummy_transaction() -> Transaction {
     }
 }
 
-pub fn create_mock_components() -> (
+type MockComponents = (
     Arc<Mempool>,
     Arc<BlockStore>,
     Arc<StateStore>,
@@ -200,7 +202,9 @@ pub fn create_mock_components() -> (
     Arc<Mutex<FinalityGadget>>,
     Arc<crate::metrics::Metrics>,
     mpsc::Sender<NetworkCommand>,
-) {
+);
+
+pub fn create_mock_components() -> MockComponents {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path();
 

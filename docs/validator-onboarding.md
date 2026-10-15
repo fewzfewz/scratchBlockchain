@@ -237,10 +237,14 @@ curl https://rpc.testnet.modular-blockchain.io/validator/0x<YOUR_ADDRESS>
 
 | Parameter | Value | Description |
 |-----------|-------|-------------|
-| Minimum stake | 100,000 NBL | Minimum tokens to self-bond |
-| Maximum validators | 100 | Active validator set size |
-| Commission rate | 0.0 - 1.0 | Fee on delegator rewards |
-| Unbonding period | 21,600 blocks (~18 hrs) | Time to unstake |
+| Minimum own stake | 1 NBL | Below this a validator must unbond fully |
+| Epoch length | 20 blocks | Set changes (joins, leaves, jails) apply at the next epoch |
+| Commission rate | 0 - 100 (%) | Fee on delegator rewards |
+| Unbonding period | 100 blocks | Before unbonded stake returns to the balance |
+| Jailing | 10 missed proposer turns in a row, over 50+ blocks | Out of the set; `unjail` after 50 blocks |
+| Double signing | 5% of own stake burned | Removed permanently (tombstoned) |
+
+Current values are in `GET /staking`, along with the active epoch set and the unbonding queue.
 
 ---
 
@@ -418,17 +422,21 @@ modular-node tx update-commission \
 
 ### Unbonding / Stopping
 
-```bash
-# Initiate unbonding (18 hour waiting period)
-modular-node tx unbond \
-  --from 0x<YOUR_ADDRESS> \
-  --private-key <KEY> \
-  --amount 50000 \
-  --rpc https://rpc.testnet.modular-blockchain.io
+Staking actions are signed transactions (`to: null`) whose payload is JSON,
+submitted with `POST /submit_tx` like any other transaction (the Validators
+page in the web UI builds them for you):
 
-# Check unbonding status
-curl https://rpc.testnet.modular-blockchain.io/unbonding/0x<YOUR_ADDRESS>
-```
+| Action | Payload |
+|---|---|
+| Unbond own stake | `{"action":"unbond","amount":"<wei>"}` |
+| Leave the set | unbond all of it |
+| Rejoin after jail | `{"action":"unjail"}` |
+| Undelegate | `{"action":"undelegate","validator":"0x…","amount":"<wei>"}` |
+| Report double signing | `{"action":"evidence","evidence":{"first":<Vote>,"second":<Vote>}}` |
+
+Unbonded stake waits in the queue shown by `GET /staking` and is credited
+back automatically once the unbonding period has passed. Validator nodes
+submit double-sign evidence they observe on their own.
 
 ### Governance Participation
 

@@ -1,12 +1,45 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
-import { Image, Plus, Sparkles, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react'
-import PageShell from '../components/PageShell.jsx'
+import { Image, Plus, Sparkles, RefreshCw } from 'lucide-react'
+import { Page, PageHeader, Card, Field, Button, Notice, EmptyState, buttonClass, inputClass } from '../components/ui.jsx'
 import {
   encodeMint, loadNftsFromChain, scanDeployedContracts,
   loadWalletKeyPair, signAndSubmit, waitForReceipt, walletAddress, shorten,
   fetchJson,
 } from '../lib/chain.js'
+
+
+// Deterministic artwork for a token: hues and shape picked from a hash of
+// (contract, id), so every token looks distinct and always the same.
+function tokenArt(contract, id) {
+  let h = 2166136261
+  for (const c of `${contract}:${id}`) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619) >>> 0 }
+  const a = h % 360
+  const b = (a + 60 + ((h >> 9) % 120)) % 360
+  const shape = (h >> 17) % 3
+  return { a, b, shape, rot: (h >> 5) % 360 }
+}
+
+function TokenArt({ contract, id }) {
+  const { a, b, shape, rot } = tokenArt(contract, id)
+  return (
+    <svg viewBox="0 0 120 120" className="w-full h-full" aria-hidden="true">
+      <defs>
+        <linearGradient id={`g-${contract}-${id}`} x1="0" y1="0" x2="1" y2="1" gradientTransform={`rotate(${rot % 90})`}>
+          <stop offset="0" stopColor={`hsl(${a} 80% 60%)`} />
+          <stop offset="1" stopColor={`hsl(${b} 75% 45%)`} />
+        </linearGradient>
+      </defs>
+      <rect width="120" height="120" fill={`url(#g-${contract}-${id})`} />
+      <g transform={`rotate(${rot} 60 60)`} fill="white" fillOpacity="0.22">
+        {shape === 0 && <circle cx="60" cy="60" r="32" />}
+        {shape === 1 && <rect x="30" y="30" width="60" height="60" rx="12" />}
+        {shape === 2 && <path d="M60 22 L96 88 L24 88 Z" />}
+      </g>
+      <text x="60" y="66" textAnchor="middle" fontSize="18" fontWeight="600" fill="white" fontFamily="Sora, sans-serif">#{id}</text>
+    </svg>
+  )
+}
 
 export default function NftPage() {
   const [contracts, setContracts] = useState([])
@@ -20,24 +53,26 @@ export default function NftPage() {
 
   const addr = walletAddress()
 
+  // Contract list: saved deploys plus creations found in the wallet's history.
   const refresh = useCallback(async () => {
     const list = await scanDeployedContracts()
     const nfts = list.filter((c) => c.type === 'ERC721' || c.name?.includes('721') || c.name?.includes('NFT'))
     setContracts(nfts)
-    const pick = nfts[0]?.address || list.find((c) => c.type === 'ERC721')?.address || ''
-    setSelected((s) => s || pick)
-    if (pick && addr) {
-      const items = await loadNftsFromChain(pick, addr)
-      setGallery(items)
-    } else {
-      setGallery([])
-    }
+    setSelected((s) => s || nfts[0]?.address || '')
+  }, [])
+
+  // Gallery: always the selected contract's tokens.
+  const loadGallery = useCallback(async (contract) => {
+    if (!contract || !addr) { setGallery([]); return }
+    setGallery(await loadNftsFromChain(contract, addr))
   }, [addr])
 
   useEffect(() => {
     setMintTo(addr)
     refresh()
   }, [addr, refresh])
+
+  useEffect(() => { loadGallery(selected) }, [selected, loadGallery])
 
   const mint = async () => {
     if (!loadWalletKeyPair()) {
@@ -60,6 +95,7 @@ export default function NftPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: addr, to: selected, data, value: '0' }),
       })
+      if (est.error) throw new Error(`Mint would fail: ${est.error}`)
       const { hash } = await signAndSubmit({
         from: addr,
         to: selected,
@@ -70,7 +106,8 @@ export default function NftPage() {
       await waitForReceipt(hash)
       setStatus(`Minted token #${tokenId} — tx ${shorten(hash, 10, 8)}`)
       setStatusType('ok')
-      refresh()
+      setTokenId((id) => String(Number(id) + 1))
+      loadGallery(selected)
     } catch (e) {
       setStatus(e.message || 'Mint failed')
       setStatusType('err')
@@ -80,85 +117,54 @@ export default function NftPage() {
   }
 
   return (
-    <PageShell variant="default">
-      <div className="max-w-4xl mx-auto px-4 py-10 animate-fade-in">
-        <header className="text-center mb-8">
-          <div className="flex items-center justify-center gap-3 mb-2">
-            <div className="w-12 h-12 rounded-2xl bg-gradient-to-br from-pink-600 to-rose-600 flex items-center justify-center text-white shadow-lg">
-              <Image className="w-6 h-6" />
-            </div>
-            <h1 className="text-3xl font-bold text-slate-900 dark:text-white">NFT Marketplace</h1>
-          </div>
-          <p className="text-slate-500 dark:text-slate-400">Mint ERC721 tokens and browse on-chain ownership.</p>
-        </header>
+    <Page width="max-w-6xl">
+      <PageHeader icon={Image} eyebrow="NFTs" title="Mint and browse NFTs"
+        description="Mint ERC721 tokens on your node and see who owns them, read straight from the contract."
+        actions={<Link to="/deploy" className={buttonClass('secondary', 'sm')}><Sparkles className="w-4 h-4" /> Deploy a collection</Link>} />
 
-        <div className="glass-strong rounded-2xl p-6 mb-8 space-y-4">
-          <div>
-            <label className="text-xs text-slate-500">NFT contract</label>
-            <select value={selected} onChange={(e) => setSelected(e.target.value)}
-              className="w-full mt-1 px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600">
-              <option value="">— deploy ERC721 first —</option>
-              {contracts.map((c) => (
-                <option key={c.address} value={c.address}>{c.name || 'ERC721'} ({shorten(c.address)})</option>
+      <div className="grid lg:grid-cols-[1fr_2fr] gap-6 items-start">
+        <Card title="Mint">
+          <div className="space-y-4">
+            <Field label="Collection">
+              <select value={selected} onChange={(e) => setSelected(e.target.value)} className={`${inputClass} font-mono text-xs`}>
+                <option value="">— deploy an ERC721 first —</option>
+                {contracts.map((c) => (
+                  <option key={c.address} value={c.address}>{c.name || 'ERC721'} ({shorten(c.address)})</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Mint to">
+              <input value={mintTo} onChange={(e) => setMintTo(e.target.value)} placeholder="0x…" className={`${inputClass} font-mono`} />
+            </Field>
+            <Field label="Token id">
+              <input value={tokenId} onChange={(e) => setTokenId(e.target.value)} type="number" min="1" className={inputClass} />
+            </Field>
+            <div className="flex gap-2">
+              <Button icon={Plus} loading={submitting} onClick={mint} className="flex-1">Mint on-chain</Button>
+              <Button variant="secondary" icon={RefreshCw} onClick={() => { refresh(); loadGallery(selected) }} aria-label="Refresh" />
+            </div>
+            <Notice type={statusType === 'err' ? 'err' : 'ok'}>{status}</Notice>
+          </div>
+        </Card>
+
+        <Card title="Collection" description={selected ? `${gallery.length} token${gallery.length === 1 ? '' : 's'} minted · ${shorten(selected)}` : 'Pick or deploy a collection'}>
+          {gallery.length === 0 ? (
+            <EmptyState icon={Image} title="No tokens yet">Mint token #1 to start the collection.</EmptyState>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {gallery.map((n) => (
+                <figure key={`${n.contract}-${n.tokenId}`} className="rounded-xl overflow-hidden border border-slate-200 dark:border-slate-800">
+                  <div className="aspect-square"><TokenArt contract={n.contract} id={n.tokenId} /></div>
+                  <figcaption className="p-3">
+                    <div className="text-sm font-semibold text-slate-900 dark:text-white">{n.name}</div>
+                    <div className="mt-0.5 font-mono text-[11px] text-slate-500 truncate">Owner: {shorten(n.owner)}</div>
+                  </figcaption>
+                </figure>
               ))}
-            </select>
-          </div>
-          <div className="grid sm:grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-slate-500">Mint to</label>
-              <input value={mintTo} onChange={(e) => setMintTo(e.target.value)} placeholder="0x…"
-                className="w-full mt-1 px-4 py-3 rounded-xl font-mono text-sm bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-            </div>
-            <div>
-              <label className="text-xs text-slate-500">Token ID</label>
-              <input value={tokenId} onChange={(e) => setTokenId(e.target.value)} type="number" min="1"
-                className="w-full mt-1 px-4 py-3 rounded-xl font-mono bg-white/70 dark:bg-slate-800/60 border border-slate-300 dark:border-slate-600" />
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-3">
-            <button type="button" disabled={submitting} onClick={mint}
-              className="px-6 py-3 rounded-xl bg-gradient-to-r from-pink-600 to-rose-600 text-white font-semibold flex items-center gap-2 disabled:opacity-50">
-              {submitting ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-              Mint on-chain
-            </button>
-            <button type="button" onClick={refresh} className="px-4 py-3 rounded-xl border border-pink-500/40 text-pink-600">
-              <RefreshCw className="w-4 h-4" />
-            </button>
-            <Link to="/deploy"
-              className="px-6 py-3 rounded-xl border border-pink-500/50 text-pink-600 font-semibold flex items-center gap-2">
-              <Sparkles className="w-4 h-4" /> Deploy ERC721
-            </Link>
-          </div>
-          {status && (
-            <p className={`text-sm flex items-center gap-2 ${statusType === 'err' ? 'text-red-500' : 'text-emerald-600'}`}>
-              {statusType === 'err' ? <AlertCircle className="w-4 h-4" /> : <CheckCircle className="w-4 h-4" />}
-              {status}
-            </p>
-          )}
-        </div>
-
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {gallery.length === 0 && (
-            <div className="col-span-full glass rounded-2xl p-10 text-center text-slate-500">
-              No tokens found via <code className="font-mono text-xs">ownerOf</code> — mint or deploy at{' '}
-              <Link to="/deploy" className="text-pink-500 underline">/deploy</Link>
             </div>
           )}
-          {gallery.map((n) => (
-            <div key={`${n.contract}-${n.tokenId}`} className="glass-strong rounded-2xl overflow-hidden">
-              <div className="h-32 bg-gradient-to-br from-pink-500/30 via-violet-500/20 to-cyan-500/30 flex items-center justify-center">
-                <Image className="w-12 h-12 text-white/60" />
-              </div>
-              <div className="p-4">
-                <p className="font-semibold">{n.name}</p>
-                <p className="text-xs text-slate-500 font-mono">#{n.tokenId}</p>
-                <p className="text-xs text-slate-400 mt-1 truncate">Owner: {shorten(n.owner)}</p>
-                <p className="text-xs text-slate-400 truncate">{shorten(n.contract)}</p>
-              </div>
-            </div>
-          ))}
-        </div>
+        </Card>
       </div>
-    </PageShell>
+    </Page>
   )
 }

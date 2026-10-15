@@ -5,7 +5,6 @@
 use crate::config::GenesisConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashSet;
-use std::str::FromStr;
 
 pub struct Validator;
 
@@ -149,7 +148,7 @@ impl Validator {
 
         // Validate treasury address format
         let treasury = economic.treasury_address.trim_start_matches("0x");
-        if treasury.len() != 40 && treasury.len() != 0 {
+        if treasury.len() != 40 && !treasury.is_empty() {
             return Err(anyhow!("Treasury address must be 20 bytes (40 hex chars)"));
         }
 

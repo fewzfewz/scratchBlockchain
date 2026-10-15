@@ -344,10 +344,54 @@ paths:
                     type: integer
 
   # ─── Validators & Staking ─────────────────────────────────────────────────
+  /staking:
+    get:
+      summary: Staking state
+      description: >
+        Staking parameters (epoch length, unbonding and jail periods, slash
+        rate), the validator set consensus uses this epoch and its hash (what
+        block headers commit to in next_validators_hash), and stake waiting
+        in the unbonding queue. Staking actions are signed transactions whose
+        payload is JSON: register_validator {stake, commission_rate},
+        delegate {validator, amount}, unbond {amount}, undelegate
+        {validator, amount}, unjail {}, evidence {evidence}.
+      operationId: getStaking
+      responses:
+        "200":
+          description: Staking state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  height: { type: integer }
+                  epoch: { type: integer }
+                  next_epoch_at: { type: integer }
+                  params: { type: object }
+                  epoch_set:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        public_key: { type: string }
+                        voting_power: { type: string }
+                  epoch_set_hash: { type: string }
+                  unbonding:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        owner: { type: string }
+                        validator: { type: string }
+                        amount: { type: string }
+                        release_at: { type: integer }
   /validators:
     get:
       summary: List validators
-      description: Returns the active validator set.
+      description: >
+        Returns the validator registry, including jailed (missed proposer
+        turns), tombstoned (slashed for double signing) and leaving
+        validators. Consensus uses the epoch snapshot from /staking.
       operationId: getValidators
       responses:
         "200":
@@ -576,6 +620,8 @@ paths:
 
   /delegate:
     post:
+      deprecated: true
+      description: 'Removed (410). Submit a signed transaction with payload {"action":"delegate","validator":"0x…","amount":"<wei>"} to /submit_tx.'
       summary: Delegate stake to validator
       operationId: delegateStake
       requestBody:
@@ -597,6 +643,8 @@ paths:
 
   /validators/register:
     post:
+      deprecated: true
+      description: 'Removed (410). Submit a signed transaction with payload {"action":"register_validator","stake":"<wei>","commission_rate":10} to /submit_tx.'
       summary: Register a new validator
       operationId: registerValidator
       requestBody:
@@ -815,6 +863,8 @@ paths:
 
   /runtime/propose:
     post:
+      deprecated: true
+      description: 'Removed (410). Runtime upgrades go through a governance software_upgrade proposal.'
       summary: Propose runtime upgrade
       operationId: proposeRuntimeUpgrade
       requestBody:
@@ -839,6 +889,8 @@ paths:
 
   /runtime/approve:
     post:
+      deprecated: true
+      description: 'Removed (410). Approved by executing the governance proposal.'
       summary: Approve runtime upgrade
       operationId: approveRuntimeUpgrade
       requestBody:
@@ -881,6 +933,11 @@ components:
           type: integer
         max_priority_fee_per_gas:
           type: integer
+        public_key:
+          type: array
+          items:
+            type: integer
+          description: Signer's 32-byte Ed25519 public key; sender must equal the last 20 bytes of SHA-256(public_key)
         payload:
           type: array
           items:

@@ -2,7 +2,7 @@
 chain_id = "modular-testnet-1"
 p2p_port = 26656
 rpc_port = 26657
-bootstrap_nodes = ["/dns4/validator1/tcp/26656", "/dns4/validator2/tcp/26656", "/dns4/validator3/tcp/26656"]
+bootstrap_nodes = ["/dns4/validator1/tcp/26656", "/dns4/validator2/tcp/26656", "/dns4/validator3/tcp/26656", "/dns4/validator4/tcp/26656"]
 
 [consensus]
 block_time_ms = 3000
@@ -17,6 +17,11 @@ data_dir = "/data"
 enabled = true
 address = "0.0.0.0:8545"
 cors_origins = ["*"]
+# Local devnet only: exposes faucet / validator-register / bridge-relayer routes.
+# Set NODE_API_ADMIN_TOKEN to require a bearer token on admin routes.
+dev_mode = true
+# Genesis-funded devnet account that pays faucet / bridge-mint transfers.
+dev_funding_key = "06dd7f18ca902de0d0dd8e71e0214a459ef5d87efce01440ae651536f783e4e1"
 
 [metrics]
 enabled = true

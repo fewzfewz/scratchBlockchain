@@ -73,7 +73,7 @@ var ModularClient = class extends EventEmitter {
   }
   // Transactions
   async sendTransaction(tx) {
-    const response = await this.provider.request("submit_tx", [tx]);
+    const response = await this.provider.request("submit_tx", [toWireTransaction(tx)]);
     if (response.status && response.status.startsWith("error")) {
       throw new Error(response.status);
     }
@@ -179,12 +179,22 @@ var ModularClient = class extends EventEmitter {
       return null;
     }
   }
-  /** Governance writes use signed POST /submit_tx — use Wallet.signTransaction with governance payload. */
-  async createProposal(_req) {
-    throw new Error("Use Wallet.signTransaction with governance payload and client.sendTransaction()");
+  /** Governance writes require a `Wallet` for signing. */
+  async createProposal(req, wallet) {
+    const connected = wallet.connect(this.provider);
+    return connected.createProposal({
+      title: req.title,
+      description: req.description
+    });
   }
-  async vote(_req) {
-    throw new Error("Use Wallet.signTransaction with governance vote payload and client.sendTransaction()");
+  async vote(req, wallet) {
+    const connected = wallet.connect(this.provider);
+    const choice = req.support === "For" ? "yes" : req.support === "Against" ? "no" : "abstain";
+    return connected.vote(req.proposalId, choice);
+  }
+  async executeProposal(proposalId, wallet) {
+    const connected = wallet.connect(this.provider);
+    return connected.executeProposal(proposalId);
   }
   async getVotes(_proposalId) {
     const proposal = await this.getProposal(_proposalId);
@@ -218,8 +228,9 @@ var ModularClient = class extends EventEmitter {
     const response = await this.provider.request("get_delegations", [address]);
     return response.delegations || [];
   }
-  async delegate(delegator, validator, amount) {
-    return await this.provider.request("delegate_stake", [{ delegator, validator, amount }]);
+  /** Delegation is a signed transaction: use `ConnectedWallet.delegate`. */
+  async delegate(_delegator, _validator, _amount) {
+    throw new Error("Delegate with a signed transaction: ConnectedWallet.delegate(validator, amount)");
   }
   async undelegate(_delegator, _validator, _amount) {
     throw new Error("Undelegate via signed governance/staking transaction (POST /submit_tx)");
@@ -228,11 +239,11 @@ var ModularClient = class extends EventEmitter {
     const response = await this.provider.request("get_validators");
     return response.validators || response || [];
   }
-  async registerValidator(req) {
-    return await this.provider.request("register_validator", [req]);
-  }
-  async executeProposal(_proposalId) {
-    throw new Error("Execute via signed governance transaction (POST /submit_tx)");
+  /** Registration is a signed transaction: use `ConnectedWallet.registerValidator`. */
+  async registerValidator(_req) {
+    throw new Error(
+      "Register with a signed transaction: ConnectedWallet.registerValidator(stake, commissionRate)"
+    );
   }
   async requestFaucet(address, amount) {
     return await this.provider.request("faucet_request", [{ address, amount }]);
@@ -290,6 +301,28 @@ var ModularClient = class extends EventEmitter {
     return this.provider;
   }
 };
+var hexToByteArray = (hex) => {
+  const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
+  const out = [];
+  for (let i = 0; i < clean.length; i += 2)
+    out.push(parseInt(clean.slice(i, i + 2), 16));
+  return out;
+};
+function toWireTransaction(tx) {
+  return {
+    sender: hexToByteArray(tx.sender),
+    nonce: tx.nonce,
+    public_key: hexToByteArray(tx.publicKey),
+    payload: hexToByteArray(tx.payload),
+    signature: hexToByteArray(tx.signature),
+    gas_limit: tx.gasLimit,
+    max_fee_per_gas: tx.maxFeePerGas,
+    max_priority_fee_per_gas: tx.maxPriorityFeePerGas,
+    chain_id: tx.chainId,
+    to: tx.to === null ? null : hexToByteArray(tx.to),
+    value: tx.value
+  };
+}
 
 // src/wallet.ts
 import { ed25519 } from "@noble/curves/ed25519";
@@ -301,6 +334,32 @@ function uint64LE(value) {
   const view = new DataView(buf);
   view.setBigUint64(0, BigInt(value), true);
   return new Uint8Array(buf);
+}
+function concatBytes(parts) {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+var TX_DOMAIN = new TextEncoder().encode("NEBULA_TX_V1");
+function transactionSigningBytes(tx) {
+  return concatBytes([
+    TX_DOMAIN,
+    tx.sender,
+    uint64LE(tx.nonce),
+    tx.publicKey,
+    uint64LE(tx.payload.length),
+    tx.payload,
+    uint64LE(tx.gasLimit),
+    uint64LE(tx.maxFeePerGas),
+    uint64LE(tx.maxPriorityFeePerGas),
+    tx.chainId !== null ? concatBytes([Uint8Array.of(1), uint64LE(tx.chainId)]) : Uint8Array.of(0),
+    tx.to !== null ? concatBytes([Uint8Array.of(1), tx.to]) : Uint8Array.of(0),
+    uint64LE(tx.value)
+  ]);
 }
 var Wallet = class _Wallet {
   constructor(privateKey) {
@@ -342,36 +401,31 @@ var Wallet = class _Wallet {
     const rawPayload = tx.data ? hexToBytes(tx.data.startsWith("0x") ? tx.data.slice(2) : tx.data) : new Uint8Array();
     const gasLimit = Number(tx.gasLimit ?? 21e3);
     const maxFeePerGas = Number(tx.maxFeePerGas ?? 1e9);
-    const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 1e8);
-    const chainId = tx.chainId ?? null;
+    const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 1e9);
+    const chainId = tx.chainId ?? 1;
     const to = tx.to ?? null;
     const value = Number(tx.value ?? 0);
-    const parts = [
-      hexToBytes(sender.startsWith("0x") ? sender.slice(2) : sender),
-      uint64LE(nonce),
-      rawPayload,
-      uint64LE(gasLimit),
-      uint64LE(maxFeePerGas),
-      uint64LE(maxPriorityFeePerGas)
-    ];
-    if (chainId !== null)
-      parts.push(uint64LE(chainId));
-    if (to !== null) {
-      parts.push(hexToBytes(to.startsWith("0x") ? to.slice(2) : to));
-    }
-    parts.push(uint64LE(value));
-    const total = parts.reduce((sum, p) => sum + p.length, 0);
-    const message = new Uint8Array(total);
-    let offset = 0;
-    for (const p of parts) {
-      message.set(p, offset);
-      offset += p.length;
-    }
+    const senderBytes = hexToBytes(sender.startsWith("0x") ? sender.slice(2) : sender);
+    const pubKeyBytes = hexToBytes(this.publicKey);
+    const toBytes = to !== null ? hexToBytes(to.startsWith("0x") ? to.slice(2) : to) : null;
+    const message = transactionSigningBytes({
+      sender: senderBytes,
+      nonce,
+      publicKey: pubKeyBytes,
+      payload: rawPayload,
+      gasLimit,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      chainId,
+      to: toBytes,
+      value
+    });
     const hash = sha256(message);
     const signatureBytes = ed25519.sign(hash, this.privateKey);
     return {
       sender,
       nonce,
+      publicKey: "0x" + this.publicKey,
       payload: "0x" + bytesToHex(rawPayload),
       signature: "0x" + bytesToHex(signatureBytes),
       gasLimit,
@@ -427,6 +481,52 @@ var ConnectedWallet = class {
   }
   async getNonce() {
     return await this.client.getNonce(this.address);
+  }
+  /** Submit a signed governance action (propose / vote) via POST /submit_tx. */
+  async submitGovernanceAction(action) {
+    const nonce = await this.getNonce();
+    const body = new TextEncoder().encode(JSON.stringify(action));
+    return this.sendTransaction({
+      data: "0x" + bytesToHex(body),
+      gasLimit: 21e3,
+      chainId: 1,
+      nonce
+    });
+  }
+  async createProposal(req) {
+    return this.submitGovernanceAction({
+      action: "propose",
+      title: req.title,
+      description: req.description ?? "",
+      proposal_type: req.proposal_type,
+      version: req.version,
+      hash: req.hash
+    });
+  }
+  /** Register this account as a validator, bonding `stake` wei from its balance. */
+  async registerValidator(stake, commissionRate = 10) {
+    return this.submitGovernanceAction({
+      action: "register_validator",
+      stake,
+      commission_rate: commissionRate
+    });
+  }
+  /** Bond `amount` wei from this account to a registered validator. */
+  async delegate(validator, amount) {
+    return this.submitGovernanceAction({ action: "delegate", validator, amount });
+  }
+  async vote(proposalId, choice) {
+    return this.submitGovernanceAction({
+      action: "vote",
+      proposal_id: proposalId,
+      choice
+    });
+  }
+  async executeProposal(proposalId) {
+    return this.submitGovernanceAction({
+      action: "execute",
+      proposal_id: proposalId
+    });
   }
   getClient() {
     return this.client;
@@ -511,8 +611,6 @@ var HttpProvider = class {
       send_raw_transaction: "/submit_tx",
       connect_peer: "/connect_peer",
       estimate_gas: "/estimate_gas",
-      delegate_stake: "/delegate",
-      register_validator: "/validators/register",
       faucet_request: "/faucet/request",
       deploy_wasm: "/deploy_wasm",
       call_wasm: "/call_wasm",

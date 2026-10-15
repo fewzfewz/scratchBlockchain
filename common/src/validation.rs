@@ -102,6 +102,169 @@ impl TransactionValidator {
     }
 }
 
+/// Authenticate a transaction and return the signer's Ed25519 public key.
+///
+/// The signature must be over `tx.hash()` by `tx.public_key`, and `sender` must
+/// be the address derived from that key. `chain_id` is required, because a tx
+/// without one could be replayed on another chain.
+///
+/// Every executor branch (native, EVM, WASM, governance) must call this before
+/// trusting `tx.sender`.
+pub fn verify_tx_signature(tx: &Transaction, expected_chain_id: u64) -> Result<[u8; 32]> {
+    match tx.chain_id {
+        Some(id) if id == expected_chain_id => {}
+        other => {
+            return Err(anyhow!(
+                "Invalid chain ID: expected {}, got {:?}",
+                expected_chain_id,
+                other
+            ))
+        }
+    }
+
+    let public_key = tx.public_key;
+    if !signature_ok(tx) {
+        return Err(anyhow!("Invalid signature"));
+    }
+
+    if crate::crypto::derive_address_from_public_key(&public_key) != tx.sender {
+        return Err(anyhow!("Public key does not match sender"));
+    }
+
+    Ok(public_key)
+}
+
+/// Ed25519 checks already done, so a transaction is verified once per node
+/// instead of at RPC submit, mempool admission, gossip validation, proposal
+/// validation and execution. Keyed by a hash of the signed message *and* the
+/// signature, so a transaction re-signed (or tampered) never hits the cache.
+struct VerifiedCache {
+    set: std::collections::HashSet<[u8; 32]>,
+    order: std::collections::VecDeque<[u8; 32]>,
+}
+
+const VERIFIED_CACHE_CAP: usize = 200_000;
+
+static VERIFIED: std::sync::Mutex<Option<VerifiedCache>> = std::sync::Mutex::new(None);
+
+fn cache_key(tx: &Transaction) -> [u8; 32] {
+    let mut buf = Vec::with_capacity(32 + tx.signature.len());
+    buf.extend_from_slice(&tx.hash());
+    buf.extend_from_slice(&tx.signature);
+    crate::crypto::hash(&buf)
+}
+
+fn signature_ok(tx: &Transaction) -> bool {
+    let key = cache_key(tx);
+    {
+        let guard = VERIFIED.lock().unwrap_or_else(|p| p.into_inner());
+        if guard.as_ref().is_some_and(|c| c.set.contains(&key)) {
+            return true;
+        }
+    }
+    if !tx.verify(&tx.public_key) {
+        return false;
+    }
+    let mut guard = VERIFIED.lock().unwrap_or_else(|p| p.into_inner());
+    let cache = guard.get_or_insert_with(|| VerifiedCache {
+        set: std::collections::HashSet::new(),
+        order: std::collections::VecDeque::new(),
+    });
+    if cache.set.insert(key) {
+        cache.order.push_back(key);
+        if cache.order.len() > VERIFIED_CACHE_CAP {
+            if let Some(old) = cache.order.pop_front() {
+                cache.set.remove(&old);
+            }
+        }
+    }
+    true
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn signed_tx(key: &SigningKey, chain_id: Option<u64>) -> Transaction {
+        let public_key = key.verifying_key().to_bytes();
+        let sender = crate::crypto::derive_address_from_public_key(&public_key);
+        let mut tx = Transaction::simple_transfer(sender, [2u8; 20], 5, 0, 1);
+        tx.chain_id = chain_id;
+        tx.public_key = public_key;
+        tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
+        tx
+    }
+
+    #[test]
+    fn cached_signature_does_not_cover_a_tampered_one() {
+        let key = SigningKey::from_bytes(&[42u8; 32]);
+        let tx = signed_tx(&key, Some(1));
+        assert!(verify_tx_signature(&tx, 1).is_ok()); // now cached
+        let mut forged = tx.clone();
+        forged.signature[0] ^= 1;
+        assert!(verify_tx_signature(&forged, 1).is_err());
+        let mut changed = tx.clone();
+        changed.value += 1; // different message, same signature
+        assert!(verify_tx_signature(&changed, 1).is_err());
+        assert!(verify_tx_signature(&tx, 1).is_ok());
+    }
+
+    #[test]
+    fn accepts_valid_signature() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let tx = signed_tx(&key, Some(1));
+        assert_eq!(
+            verify_tx_signature(&tx, 1).unwrap(),
+            key.verifying_key().to_bytes()
+        );
+    }
+
+    #[test]
+    fn rejects_forged_sender() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let mut tx = signed_tx(&key, Some(1));
+        tx.sender = [9u8; 20];
+        tx.signature = key.sign(&tx.hash()).to_bytes().to_vec();
+        assert!(verify_tx_signature(&tx, 1).is_err());
+    }
+
+    #[test]
+    fn rejects_bad_signature_and_missing_key() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let mut tx = signed_tx(&key, Some(1));
+        tx.signature[0] ^= 0xFF;
+        assert!(verify_tx_signature(&tx, 1).is_err());
+
+        // Swapping in another key breaks the sender binding even if it signs.
+        let other = SigningKey::from_bytes(&[4u8; 32]);
+        let mut swapped = signed_tx(&key, Some(1));
+        swapped.public_key = other.verifying_key().to_bytes();
+        swapped.signature = other.sign(&swapped.hash()).to_bytes().to_vec();
+        assert!(verify_tx_signature(&swapped, 1).is_err());
+    }
+
+    #[test]
+    fn signature_does_not_survive_chain_id_stripping() {
+        // Old encoding: dropping chain_id and appending its 8 bytes to the
+        // payload produced the same hash, so the signature stayed valid.
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        let tx = signed_tx(&key, Some(1));
+        let mut stripped = tx.clone();
+        stripped.chain_id = None;
+        stripped.payload.extend_from_slice(&1u64.to_le_bytes());
+        assert_ne!(tx.hash(), stripped.hash());
+        assert!(!stripped.verify(&tx.public_key));
+    }
+
+    #[test]
+    fn rejects_wrong_or_missing_chain_id() {
+        let key = SigningKey::from_bytes(&[3u8; 32]);
+        assert!(verify_tx_signature(&signed_tx(&key, Some(2)), 1).is_err());
+        assert!(verify_tx_signature(&signed_tx(&key, None), 1).is_err());
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -118,6 +281,7 @@ mod tests {
         Transaction {
             sender: [1; 20],
             nonce,
+            public_key: [0; 32],
             payload: vec![],
             signature: vec![0; 64],
             gas_limit,

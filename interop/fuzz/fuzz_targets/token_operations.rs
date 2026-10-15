@@ -1,4 +1,4 @@
-use common::types::Address;
+#[cfg(test)]
 use interop::ethereum_bridge::EthereumBridge;
 use proptest::prelude::*;
 
@@ -12,7 +12,7 @@ proptest! {
         amount in any::<u128>(),
         eth_recipient in any::<[u8; 20]>()
     ) {
-        let relayers = vec![[1u8; 20], [2u8; 20], [3u8; 20]];
+        let relayers = vec![[1u8; 32], [2u8; 32], [3u8; 32]];
         let mut bridge = EthereumBridge::new(1, 2, relayers, 2);
 
         let result = bridge.lock_tokens(user, token, amount, eth_recipient);

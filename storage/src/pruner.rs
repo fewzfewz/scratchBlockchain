@@ -58,7 +58,7 @@ impl PruneConfig {
         if !self.enabled() || finalized_height == 0 {
             return false;
         }
-        finalized_height % self.prune_every_n_blocks == 0
+        finalized_height.is_multiple_of(self.prune_every_n_blocks)
     }
 
     pub fn cutoff_height(&self, finalized_height: u64) -> u64 {
@@ -115,10 +115,9 @@ impl ChainStore {
             let Some(hash_bytes) = self.get_block_hash_by_height(height)? else {
                 continue;
             };
-            if hash_bytes.len() != 32 {
+            let Ok(hash) = <[u8; 32]>::try_from(hash_bytes.as_slice()) else {
                 continue;
-            }
-            let hash: [u8; 32] = hash_bytes.as_slice().try_into().unwrap();
+            };
 
             if let Some(encoded) = self.get_block(&hash)? {
                 if let Ok(block) = serde_json::from_slice::<Block>(&encoded) {
@@ -131,7 +130,7 @@ impl ChainStore {
             }
 
             batch.delete(ColumnFamily::Blocks, hash.as_slice());
-            batch.delete(ColumnFamily::BlockHeights, &height.to_le_bytes());
+            batch.delete(ColumnFamily::BlockHeights, height.to_le_bytes());
             stats.blocks_pruned += 1;
         }
 

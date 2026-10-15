@@ -43,8 +43,7 @@ impl Codec for BlockExchangeCodec {
         T: AsyncRead + Unpin + Send,
     {
         let raw_bytes = read_length_prefixed(io).await?;
-        serde_json::from_slice(&raw_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        common::wire::decode(&raw_bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     async fn read_response<T>(
@@ -56,8 +55,7 @@ impl Codec for BlockExchangeCodec {
         T: AsyncRead + Unpin + Send,
     {
         let raw_bytes = read_length_prefixed(io).await?;
-        serde_json::from_slice(&raw_bytes)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+        common::wire::decode(&raw_bytes).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
     }
 
     async fn write_request<T>(
@@ -69,9 +67,9 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let json_bytes =
-            serde_json::to_vec(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        write_length_prefixed(io, &json_bytes).await
+        let bytes =
+            common::wire::encode(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        write_length_prefixed(io, &bytes).await
     }
 
     async fn write_response<T>(
@@ -83,17 +81,27 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let json_bytes =
-            serde_json::to_vec(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        write_length_prefixed(io, &json_bytes).await
+        let bytes =
+            common::wire::encode(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        write_length_prefixed(io, &bytes).await
     }
 }
+
+/// Largest block-sync request/response accepted (a full batch of blocks).
+pub const MAX_MESSAGE_BYTES: usize = 32 * 1024 * 1024;
 
 async fn read_length_prefixed<T>(io: &mut T) -> io::Result<Vec<u8>>
 where
     T: AsyncRead + Unpin,
 {
     let len = read_varint(io).await?;
+    // The length comes from the peer: bound it before allocating.
+    if len > MAX_MESSAGE_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("message of {} bytes exceeds {}", len, MAX_MESSAGE_BYTES),
+        ));
+    }
     let mut buf = vec![0u8; len];
     io.read_exact(&mut buf).await?;
     Ok(buf)
@@ -159,14 +167,19 @@ mod tests {
                 signature: vec![],
                 gas_used: 0,
                 base_fee: 0,
+                last_commit_hash: [0; 32],
+                proposer: [0; 32],
+                next_validators_hash: [0; 32],
             },
             extrinsics: vec![],
+            commit: None,
+            last_commit: None,
         }
     }
 
     #[tokio::test]
     async fn test_request_response_roundtrip() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let original_request = BlockRequest {
@@ -175,25 +188,43 @@ mod tests {
         };
 
         let mut write_buffer = Vec::new();
-        let write_cursor = Cursor::new(&mut write_buffer);
+        let mut write_cursor = Cursor::new(&mut write_buffer);
         codec
-            .write_request(&protocol, write_cursor, original_request.clone())
+            .write_request(&protocol, &mut write_cursor, original_request.clone())
             .await
             .unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let decoded_request = codec.read_request(&protocol, read_cursor).await.unwrap();
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let decoded_request = codec
+            .read_request(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
 
         assert_eq!(original_request, decoded_request);
     }
 
     #[tokio::test]
+    async fn oversized_length_prefix_is_rejected_before_allocating() {
+        let mut codec = BlockExchangeCodec;
+        let protocol = BlockExchangeProtocol();
+        // A peer claims a ~1 TB message (varint of 2^40).
+        let mut buf = [0u8; 10];
+        let prefix = unsigned_varint::encode::usize(1 << 40, &mut buf);
+        let mut read_cursor = Cursor::new(prefix.to_vec());
+        let err = codec
+            .read_response(&protocol, &mut read_cursor)
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[tokio::test]
     async fn test_multiple_messages_on_same_connection() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let mut write_buffer = Vec::new();
-        let write_cursor = Cursor::new(&mut write_buffer);
+        let mut write_cursor = Cursor::new(&mut write_buffer);
 
         let req1 = BlockRequest {
             start_height: 1,
@@ -205,17 +236,23 @@ mod tests {
         };
 
         codec
-            .write_request(&protocol, write_cursor, req1.clone())
+            .write_request(&protocol, &mut write_cursor, req1.clone())
             .await
             .unwrap();
         codec
-            .write_request(&protocol, write_cursor, req2.clone())
+            .write_request(&protocol, &mut write_cursor, req2.clone())
             .await
             .unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let decoded1 = codec.read_request(&protocol, read_cursor).await.unwrap();
-        let decoded2 = codec.read_request(&protocol, read_cursor).await.unwrap();
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let decoded1 = codec
+            .read_request(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
+        let decoded2 = codec
+            .read_request(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
 
         assert_eq!(req1, decoded1);
         assert_eq!(req2, decoded2);
@@ -223,7 +260,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_response_roundtrip() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let original_response = BlockResponse {
@@ -231,14 +268,17 @@ mod tests {
         };
 
         let mut write_buffer = Vec::new();
-        let write_cursor = Cursor::new(&mut write_buffer);
+        let mut write_cursor = Cursor::new(&mut write_buffer);
         codec
-            .write_response(&protocol, write_cursor, original_response.clone())
+            .write_response(&protocol, &mut write_cursor, original_response.clone())
             .await
             .unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let decoded_response = codec.read_response(&protocol, read_cursor).await.unwrap();
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let decoded_response = codec
+            .read_response(&protocol, &mut read_cursor)
+            .await
+            .unwrap();
 
         assert_eq!(
             original_response.blocks.len(),
@@ -248,7 +288,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_invalid_json_returns_error() {
-        let mut codec = BlockExchangeCodec::default();
+        let mut codec = BlockExchangeCodec;
         let protocol = BlockExchangeProtocol();
 
         let mut write_buffer = Vec::new();
@@ -259,8 +299,8 @@ mod tests {
         use futures::io::AsyncWriteExt;
         write_buffer.write_all(invalid_data).await.unwrap();
 
-        let read_cursor = Cursor::new(&write_buffer);
-        let result = codec.read_request(&protocol, read_cursor).await;
+        let mut read_cursor = Cursor::new(&write_buffer);
+        let result = codec.read_request(&protocol, &mut read_cursor).await;
 
         assert!(result.is_err(), "Invalid JSON should cause error");
         assert!(result.unwrap_err().kind() == io::ErrorKind::InvalidData);

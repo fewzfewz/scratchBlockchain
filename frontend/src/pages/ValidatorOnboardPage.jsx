@@ -1,14 +1,27 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import {
-  Shield, CheckCircle, AlertCircle, Server, Cpu, Wifi, ExternalLink,
-  Copy, RefreshCw, BookOpen, Activity, Gauge,
-} from 'lucide-react'
-import { walletAddress } from '../lib/chain.js'
+import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, Compass, Activity, Server, BellRing, LogOut, Unlock, UserCheck } from 'lucide-react'
+import { signAndSubmit, waitForReceipt, walletAddress, getApiUrl, nblToWei } from '../lib/chain.js'
+import { Page, PageHeader, Card, Field, Button, Notice, Badge, KeyValue, buttonClass, inputClass } from '../components/ui.jsx'
 
-const API_URL = 'http://localhost:8545'
 const GRAFANA_URL = 'http://localhost:3002/d/validator-onboarding/validator-onboarding'
 const ONBOARDING_DOC = 'https://github.com/fewzfewz/scratchBlockchain/blob/main/docs/validator-onboarding.md'
+
+const fmtNbl = (wei) => `${(Number(wei || 0) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 4 })} NBL`
+
+/** Sign and submit a staking action from the wallet; resolves to the receipt. */
+async function submitStaking(body) {
+  const payload = Array.from(new TextEncoder().encode(JSON.stringify(body)))
+  const { hash } = await signAndSubmit({ from: walletAddress(), to: null, valueWei: 0, payload })
+  return { hash, receipt: await waitForReceipt(hash) }
+}
+
+function validatorStatus(v) {
+  if (v.tombstoned) return ['Slashed', 'red', 'Removed for double signing. It cannot rejoin.']
+  if (v.jailed) return ['Jailed', 'amber', `Out of the set after ${v.missed_in_row} missed proposer turns. Unjail from block ${Number(v.jailed_until).toLocaleString()}.`]
+  if (!v.is_active) return ['Leaving', 'neutral', 'All stake is unbonding.']
+  return ['Active', 'green', 'In the validator set (changes apply at the next epoch).']
+}
 
 const CHECKS = [
   { id: 'health', label: 'Node health', path: '/health' },
@@ -20,15 +33,58 @@ const CHECKS = [
 export default function ValidatorOnboardPage() {
   const [results, setResults] = useState({})
   const [loading, setLoading] = useState(false)
-  const [registerAddr, setRegisterAddr] = useState(walletAddress())
   const [registerMsg, setRegisterMsg] = useState('')
+  const [stakeNbl, setStakeNbl] = useState('1')
+  const [commission, setCommission] = useState('10')
+  const [registering, setRegistering] = useState(false)
+  const [mine, setMine] = useState(null)
+  const [staking, setStaking] = useState(null)
+  const [unbondNbl, setUnbondNbl] = useState('')
+  const [actionMsg, setActionMsg] = useState({ type: 'info', text: '' })
+  const [acting, setActing] = useState('')
+
+  const loadMine = async () => {
+    const me = walletAddress()
+    if (!me) return
+    try {
+      const [vals, st] = await Promise.all([
+        window.fetch(`${getApiUrl()}/validators`).then((r) => r.json()),
+        window.fetch(`${getApiUrl()}/staking`).then((r) => r.json()),
+      ])
+      const list = Array.isArray(vals) ? vals : vals.validators || []
+      setMine(list.find((v) => v.address?.toLowerCase() === me.toLowerCase()) || null)
+      setStaking(st)
+    } catch { /* the pre-flight checks report connectivity */ }
+  }
+
+  useEffect(() => {
+    loadMine()
+    const t = setInterval(loadMine, 5000)
+    return () => clearInterval(t)
+  }, [])
+
+  const runAction = async (name, body, done) => {
+    setActing(name)
+    setActionMsg({ type: 'info', text: 'Submitting…' })
+    try {
+      const { hash, receipt } = await submitStaking(body)
+      setActionMsg(receipt?.success
+        ? { type: 'ok', text: `${done} (tx ${hash.slice(0, 10)}…)` }
+        : { type: 'err', text: `Failed: ${receipt?.revert_reason || 'not included yet'}` })
+      loadMine()
+    } catch (e) {
+      setActionMsg({ type: 'err', text: e.message })
+    } finally {
+      setActing('')
+    }
+  }
 
   const runChecks = async () => {
     setLoading(true)
     const next = {}
     for (const check of CHECKS) {
       try {
-        const r = await window.fetch(`${API_URL}${check.path}`)
+        const r = await window.fetch(`${getApiUrl()}${check.path}`)
         next[check.id] = { ok: r.ok, detail: r.ok ? 'OK' : `HTTP ${r.status}` }
       } catch (e) {
         next[check.id] = { ok: false, detail: e.message }
@@ -45,40 +101,38 @@ export default function ValidatorOnboardPage() {
   const registerValidator = async () => {
     const myAddr = walletAddress()
     if (!myAddr) {
-      setRegisterMsg('Create a wallet on /wallet first — you can only register yourself as a validator.')
+      setRegisterMsg('Create a wallet first — a validator registers itself with a signed transaction.')
       return
     }
-    if (!registerAddr) {
-      setRegisterMsg('Enter your validator address (0x...)')
-      return
-    }
-    if (registerAddr.toLowerCase() !== myAddr.toLowerCase()) {
-      setRegisterMsg('You can only register your own wallet address as a validator.')
-      return
-    }
-    const pub = localStorage.getItem('nebula_wallet_pub')
-    if (!pub) {
-      setRegisterMsg('Missing wallet public key — regenerate your wallet on /wallet.')
-      return
-    }
+    const stake = parseFloat(stakeNbl)
+    const rate = parseInt(commission, 10)
+    if (!(stake >= 1)) { setRegisterMsg('Stake at least 1 NBL'); return }
+    if (!(rate >= 0 && rate <= 100)) { setRegisterMsg('Commission is a percentage from 0 to 100'); return }
+    setRegistering(true)
     try {
-      const r = await window.fetch(`${API_URL}/validators/register`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          address: registerAddr,
-          public_key: pub,
-          stake: '1000000000000000000',
-          commission_rate: 10,
-        }),
-      })
-      const text = await r.text()
-      setRegisterMsg(r.ok ? `Registered: ${text}` : `Failed: ${text}`)
-      if (r.ok) runChecks()
+      // A signed staking transaction: bonds the stake from this wallet and
+      // registers it as a validator once the transaction is in a block.
+      const payload = Array.from(
+        new TextEncoder().encode(
+          JSON.stringify({ action: 'register_validator', stake: nblToWei(stakeNbl).toString(), commission_rate: rate }),
+        ),
+      )
+      const { hash } = await signAndSubmit({ from: myAddr, to: null, valueWei: 0, payload })
+      setRegisterMsg(`Registration submitted (tx ${hash.slice(0, 12)}…) — waiting for inclusion`)
+      const receipt = await waitForReceipt(hash)
+      setRegisterMsg(
+        receipt?.success
+          ? `Registered: you join the validator set at the next epoch${staking?.next_epoch_at ? ` (block ${Number(staking.next_epoch_at).toLocaleString()})` : ''}`
+          : `Registration failed: ${receipt?.revert_reason || 'not included yet'}`,
+      )
+      if (receipt?.success) { runChecks(); loadMine() }
     } catch (e) {
       setRegisterMsg('Error: ' + e.message)
+    } finally {
+      setRegistering(false)
     }
   }
+
 
   const steps = [
     { n: 1, title: 'Provision hardware', body: '4+ CPU cores, 16 GB RAM, 500 GB SSD. Open P2P 26656 and metrics 26657.' },
@@ -86,114 +140,117 @@ export default function ValidatorOnboardPage() {
     { n: 3, title: 'Generate keys', body: 'Use scripts/setup-validator.sh or import an Ed25519 keypair.' },
     { n: 4, title: 'Configure genesis', body: 'Point --genesis at genesis.json and set data_dir in node config.' },
     { n: 5, title: 'Join the network', body: 'POST /connect_peer with bootstrap multiaddrs from deployment/local.' },
-    { n: 6, title: 'Register stake', body: 'POST /validators/register (min 1 NBL) or delegate via POST /delegate.' },
+    { n: 6, title: 'Register stake', body: 'Submit a signed register_validator transaction (bonds min 1 NBL), or a delegate transaction, via POST /submit_tx.' },
     { n: 7, title: 'Monitor & alert', body: 'Watch Grafana Validator Onboarding dashboard; Alertmanager fires on validator down / stalled consensus.' },
   ]
 
+  const myAddr = walletAddress()
+  const regKind = /^Registered/.test(registerMsg) || /submitted/.test(registerMsg) ? 'ok' : /fail|Error|first|least|percentage/.test(registerMsg) ? 'err' : 'info'
+
   return (
-    <div className="relative min-h-[70vh] overflow-hidden animate-fade-in">
-      <div className="absolute inset-0 bg-grid pointer-events-none" />
-      <div className="relative z-10 max-w-5xl mx-auto px-4 py-10">
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full glass text-xs text-emerald-600 dark:text-emerald-400 mb-4">
-            <Shield className="w-3.5 h-3.5" />
-            Validator operator guide
-          </div>
-          <h1 className="text-3xl font-bold text-slate-900 dark:text-white mb-2">Run a Validator</h1>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            Onboarding checklist, health probes, and monitoring links
-          </p>
-        </div>
+    <Page width="max-w-5xl">
+      <PageHeader icon={Shield} eyebrow="Validators" title="Run a validator"
+        description="Check your node, register with a signed staking transaction, and watch it in the validator set."
+        actions={<>
+          <a href={ONBOARDING_DOC} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}><BookOpen className="w-4 h-4" /> Guide</a>
+          <a href={GRAFANA_URL} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}><ExternalLink className="w-4 h-4" /> Grafana</a>
+        </>} />
 
-        <div className="grid lg:grid-cols-2 gap-4 mb-6">
-          <div className="p-5 rounded-2xl glass-strong">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                <Activity className="w-4 h-4 text-blue-500" />
-                Pre-flight checks
-              </h2>
-              <button onClick={runChecks} disabled={loading}
-                className="p-2 rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-700/50">
-                <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              </button>
-            </div>
-            <div className="space-y-2">
-              {CHECKS.map(({ id, label }) => {
-                const r = results[id]
-                return (
-                  <div key={id} className="flex items-center justify-between p-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
-                    <span className="text-sm text-slate-700 dark:text-slate-200">{label}</span>
-                    {r ? (
-                      r.ok ? (
-                        <span className="flex items-center gap-1 text-xs text-emerald-500"><CheckCircle className="w-3.5 h-3.5" /> {r.detail}</span>
-                      ) : (
-                        <span className="flex items-center gap-1 text-xs text-red-400"><AlertCircle className="w-3.5 h-3.5" /> {r.detail}</span>
-                      )
-                    ) : (
-                      <span className="text-xs text-slate-400">…</span>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-          </div>
+      <div className="grid lg:grid-cols-2 gap-6 mb-6 items-start">
+        <Card title="Pre-flight checks" icon={Activity} description={getApiUrl()}
+          actions={<Button variant="ghost" size="sm" icon={RefreshCw} loading={loading} onClick={runChecks}>Run checks</Button>}>
+          <ul className="divide-y divide-slate-100 dark:divide-slate-800 -my-2">
+            {CHECKS.map(({ id, label }) => {
+              const r = results[id]
+              return (
+                <li key={id} className="flex items-center justify-between gap-3 py-2.5 text-sm">
+                  <span className="text-slate-700 dark:text-slate-200">{label}</span>
+                  {r ? (
+                    <span className={`inline-flex items-center gap-1.5 text-xs ${r.ok ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                      {r.ok ? <CheckCircle2 className="w-4 h-4" /> : <AlertCircle className="w-4 h-4" />}{r.detail}
+                    </span>
+                  ) : <span className="text-xs text-slate-400">…</span>}
+                </li>
+              )
+            })}
+          </ul>
+        </Card>
 
-          <div className="p-5 rounded-2xl glass-strong">
-            <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4 flex items-center gap-2">
-              <Gauge className="w-4 h-4 text-violet-500" />
-              Register validator (testnet)
-            </h2>
-            <input
-              value={registerAddr}
-              onChange={(e) => setRegisterAddr(e.target.value)}
-              placeholder="Your wallet address 0x..."
-              className="w-full px-3 py-2 rounded-xl bg-white/70 dark:bg-slate-700/60 border border-slate-300 dark:border-slate-600/60 text-sm font-mono mb-3"
-            />
-            <button onClick={registerValidator}
-              className="w-full py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 text-white text-sm font-medium">
-              Register my wallet as validator
-            </button>
-            {registerMsg && <p className="text-xs mt-2 text-slate-500 dark:text-slate-400">{registerMsg}</p>}
-            <div className="mt-4 flex flex-wrap gap-2">
-              <a href={GRAFANA_URL} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-slate-200/60 dark:bg-slate-700/50">
-                <ExternalLink className="w-3 h-3" /> Grafana dashboard
-              </a>
-              <a href={ONBOARDING_DOC} target="_blank" rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-slate-200/60 dark:bg-slate-700/50">
-                <BookOpen className="w-3 h-3" /> Full docs
-              </a>
-              <Link to="/explorer" className="inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-lg bg-slate-200/60 dark:bg-slate-700/50">
-                <Cpu className="w-3 h-3" /> Explorer
-              </Link>
+        <Card title="Register" icon={Shield} description="Bonds your stake from this wallet. Proposer turns are proportional to stake.">
+          <div className="space-y-4">
+            <Field label="Validator address" hint={myAddr ? 'Your wallet — validators register themselves.' : undefined}>
+              <input readOnly value={myAddr || ''} placeholder="Create a wallet first" className={`${inputClass} font-mono text-xs`} />
+            </Field>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Stake (NBL)"><input value={stakeNbl} onChange={(e) => setStakeNbl(e.target.value)} inputMode="decimal" className={inputClass} /></Field>
+              <Field label="Commission (%)"><input value={commission} onChange={(e) => setCommission(e.target.value)} inputMode="numeric" className={inputClass} /></Field>
             </div>
+            <Notice type="warn">Only register if you will run a node with this key: until it joins, your proposer turns time out and slow the chain.</Notice>
+            <Button icon={Shield} loading={registering} onClick={registerValidator} className="w-full">Register my wallet as validator</Button>
+            <Notice type={regKind}>{registerMsg}</Notice>
           </div>
-        </div>
-
-        <div className="p-5 rounded-2xl glass-strong">
-          <h2 className="text-sm font-semibold text-slate-700 dark:text-slate-300 mb-4 flex items-center gap-2">
-            <Server className="w-4 h-4" />
-            Onboarding steps
-          </h2>
-          <div className="space-y-3">
-            {steps.map(({ n, title, body }) => (
-              <div key={n} className="flex gap-3 p-3 rounded-xl bg-slate-100/50 dark:bg-slate-700/25">
-                <div className="w-7 h-7 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
-                  {n}
-                </div>
-                <div>
-                  <p className="text-sm font-medium text-slate-800 dark:text-slate-100">{title}</p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{body}</p>
-                </div>
-              </div>
-            ))}
-          </div>
-          <p className="text-[11px] text-slate-400 mt-4 flex items-center gap-1">
-            <Wifi className="w-3 h-3" />
-            Alerts: ValidatorDown, ConsensusStalled, LowPeerCount → Alertmanager (Slack/PagerDuty via env vars)
-          </p>
-        </div>
+        </Card>
       </div>
-    </div>
+
+      {mine && (() => {
+        const [label, tone, detail] = validatorStatus(mine)
+        const height = staking?.height || 0
+        const canUnjail = mine.jailed && !mine.tombstoned && height >= mine.jailed_until
+        const myUnbonding = (staking?.unbonding || []).filter((u) => u.owner?.toLowerCase() === mine.address.toLowerCase())
+        const p = staking?.params
+        return (
+          <Card title="Your validator" icon={UserCheck} className="mb-6"
+            actions={<Badge tone={tone}>{label}</Badge>}
+            description={detail}>
+            <div className="grid lg:grid-cols-2 gap-6">
+              <KeyValue rows={[
+                ['Own stake', fmtNbl(mine.stake)],
+                ['Delegated to you', fmtNbl(mine.total_delegated)],
+                ['Blocks proposed', Number(mine.blocks_produced || 0).toLocaleString()],
+                ['Missed turns in a row', `${mine.missed_in_row || 0}${p ? ` / ${p.max_missed_turns} before jail` : ''}`],
+                ...(mine.slashed && mine.slashed !== '0' ? [['Slashed', fmtNbl(mine.slashed)]] : []),
+                ...myUnbonding.map((u, i) => [`Unbonding #${i + 1}`, `${fmtNbl(u.amount)} at block ${Number(u.release_at).toLocaleString()}`]),
+              ]} />
+              <div className="space-y-4">
+                <Field label="Unbond (NBL)" hint={p ? `Returned to your balance ${p.unbonding_blocks} blocks later. Keep at least 1 NBL, or unbond everything to leave.` : undefined}>
+                  <div className="flex gap-2">
+                    <input value={unbondNbl} onChange={(e) => setUnbondNbl(e.target.value)} inputMode="decimal" placeholder="0.0" className={inputClass} />
+                    <Button variant="secondary" icon={LogOut} loading={acting === 'unbond'} disabled={!(parseFloat(unbondNbl) > 0)}
+                      onClick={() => runAction('unbond', { action: 'unbond', amount: nblToWei(unbondNbl).toString() }, 'Unbonding started')}>
+                      Unbond
+                    </Button>
+                  </div>
+                </Field>
+                {mine.jailed && !mine.tombstoned && (
+                  <Button icon={Unlock} loading={acting === 'unjail'} disabled={!canUnjail} className="w-full"
+                    onClick={() => runAction('unjail', { action: 'unjail' }, 'Unjailed: you rejoin at the next epoch')}>
+                    {canUnjail ? 'Unjail' : `Unjail at block ${Number(mine.jailed_until).toLocaleString()}`}
+                  </Button>
+                )}
+                <Notice type={actionMsg.type}>{actionMsg.text}</Notice>
+              </div>
+            </div>
+          </Card>
+        )
+      })()}
+
+      <Card title="Operator checklist" icon={Server}>
+        <ol className="grid md:grid-cols-2 gap-x-8 gap-y-5">
+          {steps.map(({ n, title, body }) => (
+            <li key={n} className="flex gap-3">
+              <span className="w-7 h-7 shrink-0 rounded-full bg-blue-500/10 text-blue-700 dark:text-blue-300 text-xs font-semibold flex items-center justify-center">{n}</span>
+              <div>
+                <p className="text-sm font-medium text-slate-900 dark:text-white">{title}</p>
+                <p className="mt-0.5 text-sm text-slate-500">{body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+        <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-500">
+          <span className="inline-flex items-center gap-1.5"><BellRing className="w-3.5 h-3.5" /> Alerts: ValidatorDown, ConsensusStalled, LowPeerCount → Alertmanager</span>
+          <Link to="/explorer?tab=validators" className="inline-flex items-center gap-1.5 font-medium text-blue-600 dark:text-blue-300 hover:underline"><Compass className="w-3.5 h-3.5" /> Validator set</Link>
+        </div>
+      </Card>
+    </Page>
   )
 }

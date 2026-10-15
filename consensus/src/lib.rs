@@ -608,7 +608,7 @@ impl Consensus for EnhancedConsensus {
 
     fn is_finalized(&self, hash: &[u8; 32]) -> bool {
         // Check if any finalized block has this hash
-        for (_height, finalized_hash) in &self.finality_gadget.finalized_blocks {
+        for finalized_hash in self.finality_gadget.finalized_blocks.values() {
             if finalized_hash == hash {
                 return true;
             }
@@ -879,8 +879,7 @@ mod tests {
         let keys: Vec<SigningKey> = (0..4).map(|_| SigningKey::generate()).collect();
         let validators: Vec<ValidatorInfo> = keys
             .iter()
-            .enumerate()
-            .map(|(i, key)| ValidatorInfo {
+            .map(|key| ValidatorInfo {
                 public_key: key.public_key(),
                 stake: 100,
                 slashed: false,

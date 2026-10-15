@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { Blocks, ArrowLeft, ChevronLeft, ChevronRight, Cpu, Fuel, ShieldCheck, Coins, Layers, Fingerprint, FileSignature, RefreshCw } from 'lucide-react'
+import { Blocks, ArrowLeft, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react'
+import { getApiUrl, weiToNbl } from '../../lib/chain.js'
+import { Card, Button, KeyValue, Badge, EmptyState, Notice } from '../../components/ui.jsx'
 
-const API_URL = 'http://localhost:8545'
 const PAGE_SIZE = 10
 
 const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleString()
@@ -13,7 +14,7 @@ const toHex = (arr) => {
 }
 const shorten = (s, n = 16) => !s || s === '0x00' ? '--' : `${s.slice(0, n)}...${s.slice(-8)}`
 
-export default function BlocksTab() {
+export default function BlocksTab({ jumpTo }) {
   const [blocks, setBlocks] = useState([])
   const [tip, setTip] = useState(null)
   const [cursor, setCursor] = useState(null)
@@ -21,13 +22,24 @@ export default function BlocksTab() {
   const [error, setError] = useState('')
   const [selected, setSelected] = useState(null)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [jumpError, setJumpError] = useState('')
+
+  // Open a specific block (from the explorer search).
+  useEffect(() => {
+    if (jumpTo == null) return
+    setJumpError('')
+    window.fetch(`${getApiUrl()}/block/${jumpTo}`)
+      .then((r) => r.json())
+      .then((d) => (d.block ? setSelected(d.block) : setJumpError(`Block #${jumpTo} not found`)))
+      .catch(() => setJumpError(`Block #${jumpTo} not found`))
+  }, [jumpTo])
 
   useEffect(() => {
     let active = true
     const fetchPage = async (from) => {
       setLoading(true)
       try {
-        const res = await window.fetch(`${API_URL}/block/latest`)
+        const res = await window.fetch(`${getApiUrl()}/block/latest`)
         if (!res.ok) throw new Error('Failed to fetch')
         const { block } = await res.json()
         if (!block) { if (active) setBlocks([]); return }
@@ -37,7 +49,7 @@ export default function BlocksTab() {
         const reqs = []
         for (let s = to; s >= fromSlot; s--) {
           reqs.push(
-            window.fetch(`${API_URL}/block/${s}`)
+            window.fetch(`${getApiUrl()}/block/${s}`)
               .then(r => r.json())
               .then(d => d.block)
               .catch(() => null),
@@ -66,7 +78,7 @@ export default function BlocksTab() {
       const reqs = []
       for (let s = to; s >= fromSlot; s--) {
         reqs.push(
-          window.fetch(`${API_URL}/block/${s}`)
+          window.fetch(`${getApiUrl()}/block/${s}`)
             .then(r => r.json())
             .then(d => d.block)
             .catch(() => null),
@@ -87,7 +99,7 @@ export default function BlocksTab() {
       const reqs = []
       for (let s = to; s >= fromSlot; s--) {
         reqs.push(
-          window.fetch(`${API_URL}/block/${s}`)
+          window.fetch(`${getApiUrl()}/block/${s}`)
             .then(r => r.json())
             .then(d => d.block)
             .catch(() => null),
@@ -102,103 +114,91 @@ export default function BlocksTab() {
   if (selected) {
     const b = selected
     const h = b.header
-    const rows = [
-      { icon: Layers, label: 'Parent hash', value: shorten(toHex(h.parent_hash), 20), mono: true },
-      { icon: Coins, label: 'Base fee', value: fmt(h.base_fee), mono: true },
-      { icon: Fuel, label: 'Gas used', value: fmt(h.gas_used), mono: true },
-      { icon: Fingerprint, label: 'State root', value: shorten(toHex(h.state_root), 20), mono: true },
-      { icon: Layers, label: 'Extrinsics root', value: shorten(toHex(h.extrinsics_root), 20), mono: true },
-      { icon: Cpu, label: 'Epoch', value: fmt(h.epoch), mono: true },
-      { icon: ShieldCheck, label: 'Validator set id', value: fmt(h.validator_set_id), mono: true },
-      { icon: FileSignature, label: 'Signature', value: shorten(toHex(h.signature), 20), mono: true },
-    ]
+    const txs = b.extrinsics || []
     return (
-      <div className="rounded-2xl glass-strong overflow-hidden">
-        <div className="bg-gradient-to-r from-blue-600/10 via-cyan-600/10 to-violet-600/10 border-b border-slate-200/50 dark:border-slate-700/40 px-5 py-4">
-          <button onClick={() => setSelected(null)}
-            className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-cyan-400 hover:underline mb-3">
+      <Card padded={false}>
+        <div className="p-5 sm:p-6 border-b border-slate-100 dark:border-slate-800">
+          <button type="button" onClick={() => setSelected(null)}
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-blue-600 dark:text-blue-300 hover:underline mb-3">
             <ArrowLeft className="w-3.5 h-3.5" /> All blocks
           </button>
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-blue-500 to-cyan-600 flex items-center justify-center text-white shadow-lg">
-              <Blocks className="w-5 h-5" />
-            </div>
-            <div>
-              <h3 className="text-lg font-bold text-slate-900 dark:text-white">Block #{fmt(h.slot)}</h3>
-              <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">{b.extrinsics?.length ?? 0} transactions</p>
-            </div>
+          <div className="flex flex-wrap items-center gap-3">
+            <h2 className="font-display text-2xl font-semibold text-slate-900 dark:text-white">Block #{fmt(h.slot)}</h2>
+            <Badge tone="green">Final</Badge>
+            <Badge>{txs.length} transaction{txs.length === 1 ? '' : 's'}</Badge>
           </div>
         </div>
-        <div className="p-5 grid sm:grid-cols-2 gap-2">
-          {rows.map(({ icon: Icon, label, value, mono }) => (
-            <div key={label} className="flex justify-between items-center gap-3 p-3 rounded-xl bg-slate-100/60 dark:bg-slate-700/30">
-              <span className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                <Icon className="w-3.5 h-3.5 shrink-0" /> {label}
-              </span>
-              <strong className={`text-sm text-slate-900 dark:text-white tabular-nums truncate ${mono ? 'font-mono' : ''}`}>{value}</strong>
-            </div>
-          ))}
+        <div className="p-5 sm:p-6 grid lg:grid-cols-2 gap-x-10">
+          <KeyValue rows={[
+            ['Proposer', shorten(toHex(h.proposer), 12), true],
+            ['Signed by', b.commit?.precommits ? `${b.commit.precommits.length} validators (round ${b.commit.round})` : '—'],
+            ['Parent', shorten(toHex(h.parent_hash), 12), true],
+            ['State root', shorten(toHex(h.state_root), 12), true],
+          ]} />
+          <KeyValue rows={[
+            ['Gas used', fmt(h.gas_used)],
+            ['Base fee', `${fmt(h.base_fee)} wei`],
+            ['Transactions root', shorten(toHex(h.extrinsics_root), 12), true],
+            ['Previous block signers', b.last_commit?.precommits ? String(b.last_commit.precommits.length) : '—'],
+          ]} />
         </div>
-      </div>
+        {txs.length > 0 && (
+          <div className="border-t border-slate-100 dark:border-slate-800">
+            <div className="px-5 sm:px-6 pt-4 pb-2 text-xs font-medium uppercase tracking-wider text-slate-500">Transactions</div>
+            <ul className="divide-y divide-slate-100 dark:divide-slate-800">
+              {txs.slice(0, 50).map((t, i) => (
+                <li key={i} className="px-5 sm:px-6 py-2.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                  <span className="font-mono text-xs text-slate-500 w-28 truncate">{shorten(toHex(t.sender), 8)}</span>
+                  <span className="text-slate-400">→</span>
+                  <span className="font-mono text-xs text-slate-500 w-28 truncate">{t.to ? shorten(toHex(t.to), 8) : t.payload?.length ? 'contract / action' : '—'}</span>
+                  <span className="ml-auto tabular-nums text-slate-900 dark:text-white">{weiToNbl(String(t.value || 0))} NBL</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </Card>
     )
   }
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between px-1">
-        <div>
-          <h3 className="text-sm font-semibold text-slate-700 dark:text-slate-300">Blocks</h3>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-0.5">{tip != null ? `Live from tip #{fmt(tip)}` : 'Fetching…'}</p>
-        </div>
-        <div className="flex items-center gap-2">
-          <button onClick={goOlder} disabled={loadingMore || !cursor || cursor <= 1}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl glass text-xs font-medium text-slate-600 dark:text-slate-300 hover:-translate-y-0.5 transition-all disabled:opacity-40 disabled:hover:translate-y-0">
-            <ChevronLeft className="w-3.5 h-3.5" /> Older
-          </button>
-          <button onClick={goNewer} disabled={loadingMore || !cursor || !tip || cursor >= tip}
-            className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl glass text-xs font-medium text-slate-600 dark:text-slate-300 hover:-translate-y-0.5 transition-all disabled:opacity-40 disabled:hover:translate-y-0">
-            Newer <ChevronRight className="w-3.5 h-3.5" />
-          </button>
-          {loadingMore && <RefreshCw className="w-3.5 h-3.5 text-slate-400 animate-spin" />}
-        </div>
-      </div>
-
+    <Card
+      title="Blocks"
+      description={tip != null ? `Newest first · tip #${fmt(tip)}` : 'Fetching…'}
+      padded={false}
+      actions={
+        <>
+          {loadingMore && <RefreshCw className="w-4 h-4 text-slate-400 animate-spin" />}
+          <Button variant="secondary" size="sm" icon={ChevronLeft} onClick={goOlder} disabled={loadingMore || !cursor || cursor <= 1}>Older</Button>
+          <Button variant="secondary" size="sm" onClick={goNewer} disabled={loadingMore || !cursor || !tip || cursor >= tip}>Newer <ChevronRight className="w-4 h-4" /></Button>
+        </>
+      }
+    >
+      {jumpError && <div className="px-5 sm:px-6 pb-3"><Notice type="err">{jumpError}</Notice></div>}
       {error ? (
-        <div className="p-8 rounded-2xl glass-strong text-center">
-          <p className="text-sm text-red-400">{error}</p>
-        </div>
+        <EmptyState icon={Blocks} title="Node unreachable">{error}</EmptyState>
       ) : loading && blocks.length === 0 ? (
-        <div className="space-y-2">
-          {[...Array(5)].map((_, i) => (
-            <div key={i} className="h-16 rounded-2xl glass-strong animate-pulse" />
-          ))}
-        </div>
+        <div className="p-5 space-y-2">{[...Array(5)].map((_, i) => <div key={i} className="h-11 rounded-xl bg-slate-100 dark:bg-slate-800/60 animate-pulse" />)}</div>
       ) : (
-        <div className="space-y-2">
+        <div>
+          <div className="hidden sm:grid grid-cols-[1fr_1.4fr_70px_110px_80px] gap-4 px-5 sm:px-6 py-2.5 text-[11px] uppercase tracking-wider text-slate-500 border-y border-slate-100 dark:border-slate-800">
+            <span>Block</span><span>Proposer</span><span className="text-right">Txs</span><span className="text-right">Gas used</span><span className="text-right">Signers</span>
+          </div>
           {blocks.map((b) => {
             const h = b.header
             return (
-              <button key={h.slot} onClick={() => setSelected(b)}
-                className="w-full text-left p-3 rounded-2xl glass hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
-                <div className="flex items-center gap-3 flex-wrap">
-                  <div className="w-9 h-9 shrink-0 rounded-xl bg-gradient-to-br from-blue-500/20 to-cyan-600/20 border border-blue-500/20 flex items-center justify-center text-blue-500 dark:text-cyan-400">
-                    <Blocks className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="font-mono text-sm font-bold text-slate-900 dark:text-white">#{fmt(h.slot)}</div>
-                    <div className="text-xs text-slate-400 dark:text-slate-500 truncate">parent {shorten(toHex(h.parent_hash))}</div>
-                  </div>
-                  <div className="hidden sm:flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400">
-                    <span className="flex items-center gap-1"><Coins className="w-3 h-3" /> {fmt(h.base_fee)}</span>
-                    <span className="flex items-center gap-1"><Fuel className="w-3 h-3" /> {fmt(h.gas_used)}</span>
-                    <span className="flex items-center gap-1"><Layers className="w-3 h-3" /> {b.extrinsics?.length ?? 0} tx</span>
-                  </div>
-                </div>
+              <button key={h.slot} type="button" onClick={() => setSelected(b)}
+                className="w-full grid grid-cols-[1fr_auto] sm:grid-cols-[1fr_1.4fr_70px_110px_80px] gap-4 px-5 sm:px-6 py-3 text-left text-sm border-b last:border-0 border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                <span className="font-mono font-medium text-slate-900 dark:text-white">#{fmt(h.slot)}</span>
+                <span className="hidden sm:block font-mono text-xs text-slate-500 truncate self-center">{shorten(toHex(h.proposer), 10)}</span>
+                <span className="text-right tabular-nums">{b.extrinsics?.length ?? 0}<span className="sm:hidden text-slate-400"> tx</span></span>
+                <span className="hidden sm:block text-right tabular-nums text-slate-500">{fmt(h.gas_used)}</span>
+                <span className="hidden sm:block text-right tabular-nums text-slate-500">{b.commit?.precommits?.length ?? '—'}</span>
               </button>
             )
           })}
         </div>
       )}
-    </div>
+    </Card>
   )
 }

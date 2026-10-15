@@ -81,7 +81,7 @@ impl BatchVerifier {
         self.proofs.push(proof);
     }
 
-    pub fn verify_batch(&self, prover: &ZkProver) -> Vec<bool> {
+    pub fn verify_batch(&self, _prover: &ZkProver) -> Vec<bool> {
         use rayon::prelude::*;
         self.proofs
             .par_iter()
@@ -145,7 +145,8 @@ impl ZkProver {
         tx_hash: [u8; 32],
         block_hash: [u8; 32],
     ) -> Result<Vec<u8>> {
-        let cache_key = self.compute_cache_key(&prev_state_root, &new_state_root, &tx_hash);
+        let cache_key =
+            self.compute_cache_key(&prev_state_root, &new_state_root, &tx_hash, &block_hash);
         if let Some(cached) = self.proof_cache.get(&cache_key) {
             debug!("Using cached proof");
             return Ok(cached.clone());
@@ -165,18 +166,21 @@ impl ZkProver {
         Ok(proof)
     }
 
-    /// Verify a state transition proof
+    /// Verify a state transition proof. Must commit to exactly the same fields,
+    /// in the same order, as `prove_state_transition`.
     pub fn verify_state_transition(
         &self,
         proof: &[u8],
         prev_state_root: [u8; 32],
         new_state_root: [u8; 32],
         tx_hash: [u8; 32],
+        block_hash: [u8; 32],
     ) -> Result<bool> {
-        let mut data = Vec::with_capacity(96);
+        let mut data = Vec::with_capacity(128);
         data.extend_from_slice(&prev_state_root);
         data.extend_from_slice(&new_state_root);
         data.extend_from_slice(&tx_hash);
+        data.extend_from_slice(&block_hash);
         self.verify(proof, &data)
     }
 
@@ -195,13 +199,20 @@ impl ZkProver {
         self.aggregator.aggregate().unwrap_or(None)
     }
 
-    fn compute_cache_key(&self, prev: &[u8; 32], new: &[u8; 32], tx: &[u8; 32]) -> u64 {
+    fn compute_cache_key(
+        &self,
+        prev: &[u8; 32],
+        new: &[u8; 32],
+        tx: &[u8; 32],
+        block: &[u8; 32],
+    ) -> u64 {
         let mut hasher = Sha256::new();
         hasher.update(prev);
         hasher.update(new);
         hasher.update(tx);
+        hasher.update(block);
         let hash = hasher.finalize();
-        u64::from_le_bytes(hash[..8].try_into().unwrap())
+        u64::from_le_bytes(<[u8; 8]>::try_from(&hash[..8]).unwrap_or_default())
     }
 
     pub fn clear_cache(&mut self) {
@@ -253,10 +264,37 @@ mod tests {
         let proof = prover.prove_state_transition(prev_root, new_root, tx_hash, block_hash);
         assert!(proof.is_ok());
 
-        let verification =
-            prover.verify_state_transition(&proof.unwrap(), prev_root, new_root, tx_hash);
+        let verification = prover.verify_state_transition(
+            &proof.unwrap(),
+            prev_root,
+            new_root,
+            tx_hash,
+            block_hash,
+        );
         assert!(verification.is_ok());
         assert!(verification.unwrap());
+    }
+
+    #[test]
+    fn test_proof_is_bound_to_block_hash() {
+        let mut prover = ZkProver::new();
+        let (prev, new, tx) = ([1u8; 32], [2u8; 32], [3u8; 32]);
+
+        let proof = prover
+            .prove_state_transition(prev, new, tx, [4u8; 32])
+            .unwrap();
+        assert!(prover
+            .verify_state_transition(&proof, prev, new, tx, [4u8; 32])
+            .unwrap());
+        assert!(!prover
+            .verify_state_transition(&proof, prev, new, tx, [5u8; 32])
+            .unwrap());
+
+        // Same transition in another block must not reuse the cached proof.
+        let other = prover
+            .prove_state_transition(prev, new, tx, [5u8; 32])
+            .unwrap();
+        assert_ne!(proof, other);
     }
 
     #[test]

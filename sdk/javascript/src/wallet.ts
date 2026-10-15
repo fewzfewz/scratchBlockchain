@@ -6,11 +6,56 @@ import { Provider } from "./types/provider";
 import { TransactionRequest, Transaction } from "./types/client";
 import { ModularClient } from "./client";
 
-function uint64LE(value: number): Uint8Array {
+function uint64LE(value: number | bigint): Uint8Array {
   const buf = new ArrayBuffer(8);
   const view = new DataView(buf);
   view.setBigUint64(0, BigInt(value), true);
   return new Uint8Array(buf);
+}
+
+function concatBytes(parts: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(parts.reduce((n, p) => n + p.length, 0));
+  let offset = 0;
+  for (const p of parts) {
+    out.set(p, offset);
+    offset += p.length;
+  }
+  return out;
+}
+
+const TX_DOMAIN = new TextEncoder().encode("NEBULA_TX_V1");
+
+/**
+ * Bytes whose SHA-256 is signed — must match Rust `Transaction::hash`
+ * (common/src/types.rs): a domain tag, a length-prefixed payload, and
+ * presence tags on `chainId` / `to` so no two transactions share an encoding.
+ */
+export function transactionSigningBytes(tx: {
+  sender: Uint8Array;
+  nonce: number;
+  publicKey: Uint8Array;
+  payload: Uint8Array;
+  gasLimit: number;
+  maxFeePerGas: number;
+  maxPriorityFeePerGas: number;
+  chainId: number | null;
+  to: Uint8Array | null;
+  value: number;
+}): Uint8Array {
+  return concatBytes([
+    TX_DOMAIN,
+    tx.sender,
+    uint64LE(tx.nonce),
+    tx.publicKey,
+    uint64LE(tx.payload.length),
+    tx.payload,
+    uint64LE(tx.gasLimit),
+    uint64LE(tx.maxFeePerGas),
+    uint64LE(tx.maxPriorityFeePerGas),
+    tx.chainId !== null ? concatBytes([Uint8Array.of(1), uint64LE(tx.chainId)]) : Uint8Array.of(0),
+    tx.to !== null ? concatBytes([Uint8Array.of(1), tx.to]) : Uint8Array.of(0),
+    uint64LE(tx.value),
+  ]);
 }
 
 export class Wallet {
@@ -68,33 +113,29 @@ export class Wallet {
       : new Uint8Array();
     const gasLimit = Number(tx.gasLimit ?? 21000);
     const maxFeePerGas = Number(tx.maxFeePerGas ?? 1000000000);
-    const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 100000000);
-    const chainId = tx.chainId ?? null;
+    // Node mempools reject priority fees below 1 gwei.
+    const maxPriorityFeePerGas = Number(tx.maxPriorityFeePerGas ?? 1000000000);
+    // The node requires a chain ID (replay protection); default to the devnet's.
+    const chainId = tx.chainId ?? 1;
     const to = tx.to ?? null;
     const value = Number(tx.value ?? 0);
 
-    // Serialize matching Rust Transaction::hash() exactly:
-    // Sha256(sender(20) + nonce(8LE) + payload(var) + gas_limit(8LE)
-    //   + max_fee(8LE) + max_priority_fee(8LE)
-    //   + [chain_id(8LE)] + [to(20)] + value(8LE))
-    const parts: Uint8Array[] = [
-      hexToBytes(sender.startsWith("0x") ? sender.slice(2) : sender),
-      uint64LE(nonce),
-      rawPayload,
-      uint64LE(gasLimit),
-      uint64LE(maxFeePerGas),
-      uint64LE(maxPriorityFeePerGas),
-    ];
-    if (chainId !== null) parts.push(uint64LE(chainId));
-    if (to !== null) {
-      parts.push(hexToBytes(to.startsWith("0x") ? to.slice(2) : to));
-    }
-    parts.push(uint64LE(value));
-
-    const total = parts.reduce((sum, p) => sum + p.length, 0);
-    const message = new Uint8Array(total);
-    let offset = 0;
-    for (const p of parts) { message.set(p, offset); offset += p.length; }
+    const senderBytes = hexToBytes(sender.startsWith("0x") ? sender.slice(2) : sender);
+    const pubKeyBytes = hexToBytes(this.publicKey);
+    const toBytes =
+      to !== null ? hexToBytes(to.startsWith("0x") ? to.slice(2) : to) : null;
+    const message = transactionSigningBytes({
+      sender: senderBytes,
+      nonce,
+      publicKey: pubKeyBytes,
+      payload: rawPayload,
+      gasLimit,
+      maxFeePerGas,
+      maxPriorityFeePerGas,
+      chainId,
+      to: toBytes,
+      value,
+    });
 
     const hash = sha256(message);
     const signatureBytes = ed25519.sign(hash, this.privateKey);
@@ -102,6 +143,7 @@ export class Wallet {
     return {
       sender,
       nonce,
+      publicKey: "0x" + this.publicKey,
       payload: "0x" + bytesToHex(rawPayload),
       signature: "0x" + bytesToHex(signatureBytes),
       gasLimit,
@@ -175,13 +217,9 @@ export class ConnectedWallet {
   /** Submit a signed governance action (propose / vote) via POST /submit_tx. */
   async submitGovernanceAction(action: Record<string, unknown>): Promise<any> {
     const nonce = await this.getNonce();
-    const pubKey = hexToBytes(this.wallet.getPublicKey());
     const body = new TextEncoder().encode(JSON.stringify(action));
-    const payload = new Uint8Array(pubKey.length + body.length);
-    payload.set(pubKey, 0);
-    payload.set(body, pubKey.length);
     return this.sendTransaction({
-      data: "0x" + bytesToHex(payload),
+      data: "0x" + bytesToHex(body),
       gasLimit: 21000,
       chainId: 1,
       nonce,
@@ -203,6 +241,20 @@ export class ConnectedWallet {
       version: req.version,
       hash: req.hash,
     });
+  }
+
+  /** Register this account as a validator, bonding `stake` wei from its balance. */
+  async registerValidator(stake: string, commissionRate: number = 10): Promise<any> {
+    return this.submitGovernanceAction({
+      action: "register_validator",
+      stake,
+      commission_rate: commissionRate,
+    });
+  }
+
+  /** Bond `amount` wei from this account to a registered validator. */
+  async delegate(validator: string, amount: string): Promise<any> {
+    return this.submitGovernanceAction({ action: "delegate", validator, amount });
   }
 
   async vote(proposalId: number, choice: "yes" | "no" | "abstain"): Promise<any> {

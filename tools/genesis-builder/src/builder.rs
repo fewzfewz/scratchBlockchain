@@ -21,6 +21,8 @@ pub struct GenesisOutput {
     pub accounts: Vec<AccountOutput>,
     pub precompiles: Vec<PrecompileOutput>,
     pub app_state: AppState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bridge: Option<crate::config::BridgeConfig>,
 }
 
 /// Consensus parameters for the node
@@ -222,6 +224,7 @@ impl GenesisBuilder {
                 total_stake,
                 version: env!("CARGO_PKG_VERSION").to_string(),
             },
+            bridge: config.bridge.clone(),
         })
     }
 
@@ -238,6 +241,24 @@ impl GenesisBuilder {
 
         if genesis.validators.is_empty() {
             return Err(anyhow!("No validators in genesis"));
+        }
+
+        if let Some(bridge) = &genesis.bridge {
+            if bridge.threshold == 0 || bridge.threshold as usize > bridge.relayers.len() {
+                return Err(anyhow!(
+                    "Bridge threshold {} must be between 1 and the {} relayers",
+                    bridge.threshold,
+                    bridge.relayers.len()
+                ));
+            }
+            for relayer in &bridge.relayers {
+                if hex::decode(relayer).map(|b| b.len() != 32).unwrap_or(true) {
+                    return Err(anyhow!(
+                        "Bridge relayer {} is not a 32-byte hex key",
+                        relayer
+                    ));
+                }
+            }
         }
 
         if genesis.accounts.is_empty() {

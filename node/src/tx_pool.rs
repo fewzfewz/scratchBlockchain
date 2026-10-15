@@ -4,7 +4,8 @@ use common::types::Transaction;
 use execution::account_abstraction::{AccountAbstractionExecutor, UserOperation};
 use mempool::{MempoolConfig, MevMempool};
 use mev::{DecryptionShare, EncryptedTransaction};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 const AA_MAX_BUNDLE: usize = 32;
 
@@ -24,21 +25,20 @@ impl TxPool {
     pub fn add_transaction(&self, tx: Transaction) -> Result<(), String> {
         self.mev
             .lock()
-            .unwrap()
             .add_transaction(tx)
             .map_err(|e| e.to_string())
     }
 
     pub fn remove_transactions(&self, txs: &[Transaction]) {
-        self.mev.lock().unwrap().remove_transactions(txs);
+        self.mev.lock().remove_transactions(txs);
     }
 
     pub fn size(&self) -> usize {
-        self.mev.lock().unwrap().size() + self.aa.lock().unwrap().pending_operations()
+        self.mev.lock().size() + self.aa.lock().pending_operations()
     }
 
     pub fn mempool_snapshot(&self, max: usize) -> Vec<Transaction> {
-        self.mev.lock().unwrap().get_transactions(max)
+        self.mev.lock().get_transactions(max)
     }
 
     /// Transactions ready for block inclusion: AA bundles first, then MEV-ready pool.
@@ -48,17 +48,12 @@ impl TxPool {
             return out;
         }
         {
-            let mut aa = self.aa.lock().unwrap();
+            let mut aa = self.aa.lock();
             out.extend(aa.get_bundled_transactions(max));
         }
         let remaining = max.saturating_sub(out.len());
         if remaining > 0 {
-            out.extend(
-                self.mev
-                    .lock()
-                    .unwrap()
-                    .get_all_ready_transactions(remaining),
-            );
+            out.extend(self.mev.lock().get_all_ready_transactions(remaining));
         }
         out
     }
@@ -67,14 +62,13 @@ impl TxPool {
         let hash = op.hash();
         self.aa
             .lock()
-            .unwrap()
             .submit_operation(op)
             .map_err(|e| e.to_string())?;
         Ok(hash)
     }
 
     pub fn pending_user_operations(&self) -> usize {
-        self.aa.lock().unwrap().pending_operations()
+        self.aa.lock().pending_operations()
     }
 
     pub fn submit_committed(
@@ -87,7 +81,6 @@ impl TxPool {
     ) -> [u8; 32] {
         self.mev
             .lock()
-            .unwrap()
             .submit_committed(tx_hash, secret, sender, nonce, current_height)
     }
 
@@ -100,15 +93,14 @@ impl TxPool {
     ) -> Result<Transaction, String> {
         self.mev
             .lock()
-            .unwrap()
             .reveal_transaction(tx, secret, commitment, current_height)
     }
 
     pub fn submit_encrypted(&self, encrypted: EncryptedTransaction) -> Result<(), String> {
-        self.mev.lock().unwrap().submit_encrypted(encrypted)
+        self.mev.lock().submit_encrypted(encrypted)
     }
 
     pub fn submit_decryption_share(&self, share: DecryptionShare) -> Result<(), String> {
-        self.mev.lock().unwrap().submit_decryption_share(share)
+        self.mev.lock().submit_decryption_share(share)
     }
 }
