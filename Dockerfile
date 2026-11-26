@@ -76,10 +76,11 @@ RUN apt-get update && \
 # Create app user
 RUN useradd -m -s /bin/sh appuser
 
-# Copy binary and default Render config/genesis
+# Copy binary and default Render config/genesis/validator key
 COPY --from=builder /build/target/release/node /usr/local/bin/modular-node
 COPY config/render.toml /etc/nebula/config.toml
-COPY deployment/local/configs/genesis.json /etc/nebula/genesis.json
+COPY config/render-genesis.json /etc/nebula/genesis.json
+COPY deployment/local/configs/validator1_key.json /data/validator_key.json
 
 # Create data directory with proper permissions
 RUN mkdir -p /data && chown -R appuser:appuser /data /etc/nebula
