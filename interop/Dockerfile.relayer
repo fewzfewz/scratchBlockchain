@@ -1,0 +1,16 @@
+FROM node:20-bookworm-slim
+
+WORKDIR /app/interop
+
+COPY interop/package.json ./
+RUN npm install --omit=dev
+
+COPY interop/contracts ./contracts
+COPY interop/hardhat.config.js ./
+COPY interop/scripts ./scripts
+COPY interop/artifacts ./artifacts
+
+RUN useradd -m -s /bin/sh appuser && chown -R appuser:appuser /app
+USER appuser
+
+CMD ["node", "scripts/eth-relayer-daemon.js"]

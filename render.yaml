@@ -103,3 +103,79 @@ services:
         sync: false
       - key: ETH_BRIDGE_ADDRESS
         sync: false
+
+  # ETH -> Nebula relayer #1 (signs TokensLocked attestations and submits bridge_mint)
+  - type: worker
+    name: nebula-relayer-1
+    runtime: docker
+    dockerfilePath: ./relayer/Dockerfile
+    plan: starter
+    region: oregon
+    disk:
+      name: relayer1-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: NEBULA_RPC_URLS
+        value: http://nebula-rpc:8545
+      - key: NEBULA_CHAIN_ID
+        value: "1"
+      - key: ETH_CONFIRMATIONS
+        value: "2"
+      - key: RELAYER_STATE_FILE
+        value: /data/relayer-state.json
+      - key: ETH_RPC_URL
+        sync: false
+      - key: ETH_BRIDGE_ADDRESS
+        sync: false
+      - key: RELAYER_KEY
+        sync: false
+
+  # ETH -> Nebula relayer #2 (meets 2-of-3 attestation threshold)
+  - type: worker
+    name: nebula-relayer-2
+    runtime: docker
+    dockerfilePath: ./relayer/Dockerfile
+    plan: starter
+    region: oregon
+    disk:
+      name: relayer2-data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: NEBULA_RPC_URLS
+        value: http://nebula-rpc:8545
+      - key: NEBULA_CHAIN_ID
+        value: "1"
+      - key: ETH_CONFIRMATIONS
+        value: "2"
+      - key: RELAYER_STATE_FILE
+        value: /data/relayer-state.json
+      - key: ETH_RPC_URL
+        sync: false
+      - key: ETH_BRIDGE_ADDRESS
+        sync: false
+      - key: RELAYER_KEY
+        sync: false
+
+  # Nebula -> ETH unlock relayer (submits Bridge.unlockTokens on Sepolia/Ethereum)
+  - type: worker
+    name: nebula-eth-unlock-relayer
+    runtime: docker
+    dockerfilePath: ./interop/Dockerfile.relayer
+    dockerContext: .
+    plan: starter
+    region: oregon
+    envVars:
+      - key: NEBULA_RPC_URL
+        value: http://nebula-rpc:8545
+      - key: ETH_RPC_URL
+        sync: false
+      - key: ETH_BRIDGE_ADDRESS
+        sync: false
+      - key: RELAYER_PRIVATE_KEYS
+        sync: false

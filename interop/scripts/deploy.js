@@ -5,17 +5,34 @@ const path = require("path");
 async function main() {
   console.log("Deploying Bridge contract...");
 
-  // Get signers
-  const [deployer, relayer1, relayer2, relayer3] = await hre.ethers.getSigners();
-  
+  // Get signers (live networks like Sepolia may only configure 1 deployer key)
+  const signers = await hre.ethers.getSigners();
+  const deployer = signers[0];
+  if (!deployer) {
+    throw new Error("No deployer account configured. Set PRIVATE_KEY for live networks.");
+  }
+
   console.log("Deploying with account:", deployer.address);
   console.log("Account balance:", (await hre.ethers.provider.getBalance(deployer.address)).toString());
 
   // Deploy parameters
-  const chainId = 1; // Ethereum mainnet ID
-  const destChainId = 100; // Modular blockchain ID
-  const relayers = [relayer1.address, relayer2.address, relayer3.address];
-  const requiredSignatures = 2;
+  const network = await hre.ethers.provider.getNetwork();
+  const chainId = Number(process.env.ETH_CHAIN_ID || network.chainId);
+  const destChainId = Number(process.env.NEBULA_CHAIN_ID || 1);
+  const envRelayers = (process.env.BRIDGE_RELAYERS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const relayers =
+    envRelayers.length >= 2
+      ? envRelayers
+      : signers.slice(1, 4).map((s) => s.address);
+  if (relayers.length < 2) {
+    throw new Error(
+      "Bridge.sol requires at least 2 unique relayer addresses. Set BRIDGE_RELAYERS=0xAddr1,0xAddr2"
+    );
+  }
+  const requiredSignatures = Number(process.env.BRIDGE_REQUIRED_SIGNATURES || 2);
 
   // Deploy Bridge
   const Bridge = await hre.ethers.getContractFactory("Bridge");
@@ -78,8 +95,8 @@ async function main() {
   console.log(`\nSaved: ${deployOut}`);
   console.log(`Saved: ${frontendOut}`);
 
-  // Verify contracts on Etherscan (if not localhost)
-  if (hre.network.name !== "localhost" && hre.network.name !== "hardhat") {
+  // Verify contracts on Etherscan (if not localhost and ETHERSCAN_API_KEY is set)
+  if (hre.network.name !== "localhost" && hre.network.name !== "hardhat" && process.env.ETHERSCAN_API_KEY) {
     console.log("\nWaiting for block confirmations...");
     await bridge.deploymentTransaction().wait(6);
     
