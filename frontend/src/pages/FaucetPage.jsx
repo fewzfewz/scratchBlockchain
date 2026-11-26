@@ -1,12 +1,12 @@
 import { useState, useEffect } from 'react'
 import { Droplets, Clock, Wallet, History, RefreshCw } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { getApiUrl, walletAddress } from '../lib/chain.js'
+import { adminHeaders, getApiUrl, walletAddress } from '../lib/chain.js'
 import { Page, PageHeader, Card, Field, Button, Notice, Stat, StatGrid, LiveBadge, EmptyState, inputClass } from '../components/ui.jsx'
 
 const DRIP_AMOUNT = 10 // node caps a drip at 10 NBL (one transfer)
-// Local dev: 60s cooldown (matches node RPC). Production UI can use 24h.
-const COOLDOWN_MS = import.meta.env.DEV ? 60 * 1000 : 24 * 60 * 60 * 1000
+// Matches node RPC FAUCET_COOLDOWN_SECS (60s)
+const COOLDOWN_MS = 60 * 1000
 
 const TEST_ADDRESSES = [
   '0x742d35Cc6634C0532925a3b844Bc9e7595f2bD18',
@@ -126,12 +126,15 @@ export default function FaucetPage() {
       if (backendOnline) {
         const res = await window.fetch(`${getApiUrl()}/faucet/request`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: adminHeaders(),
           body: JSON.stringify({ address }),
         })
         const data = await res.json()
         if (data.error) {
-          throw new Error(data.error)
+          if (data.retry_after_secs) {
+            setCooldownEnd(Date.now() + Number(data.retry_after_secs) * 1000)
+          }
+          throw new Error(data.retry_after_secs ? `${data.error} (${data.retry_after_secs}s)` : data.error)
         }
       } else {
         throw new Error('Node not reachable')
@@ -183,7 +186,7 @@ export default function FaucetPage() {
 
       <StatGrid>
         <Stat icon={Droplets} label="Per request" value={`${DRIP_AMOUNT} NBL`} />
-        <Stat icon={Clock} label="Cooldown" value={import.meta.env.DEV ? '60 s' : '24 h'} sub="per address" />
+        <Stat icon={Clock} label="Cooldown" value="60 s" sub="per address" />
         <Stat label="Requests left" value={`${remaining} / 10`} sub="this address, this browser" />
         <Stat label="Sent from here" value={`${fmt(totalDistributed)} NBL`} />
       </StatGrid>
