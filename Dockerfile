@@ -76,11 +76,13 @@ RUN apt-get update && \
 # Create app user
 RUN useradd -m -s /bin/sh appuser
 
-# Copy binary from builder
+# Copy binary and default Render config/genesis
 COPY --from=builder /build/target/release/node /usr/local/bin/modular-node
+COPY config/render.toml /etc/nebula/config.toml
+COPY deployment/local/configs/genesis.json /etc/nebula/genesis.json
 
 # Create data directory with proper permissions
-RUN mkdir -p /data && chown -R appuser:appuser /data
+RUN mkdir -p /data && chown -R appuser:appuser /data /etc/nebula
 
 WORKDIR /data
 
@@ -91,4 +93,4 @@ EXPOSE 26656 26657 8545 9090
 USER appuser
 
 ENTRYPOINT ["modular-node"]
-CMD ["start"]
+CMD ["start", "--config", "/etc/nebula/config.toml", "--genesis", "/etc/nebula/genesis.json"]
