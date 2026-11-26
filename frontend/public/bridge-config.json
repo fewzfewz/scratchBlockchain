@@ -1,7 +1,7 @@
 {
-  "bridge": "0x5FbDB2315678afecb367f032d93F642f64180aa3",
-  "ethRpcUrl": "http://127.0.0.1:9545",
-  "usdc": "0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512",
-  "usdt": "0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0",
+  "bridge": "0xB06192dE5F3e7B9e577E88F17b26015D8D645a74",
+  "ethRpcUrl": "https://rpc.sepolia.org",
+  "usdc": "0x4c27CeD3514C56f4E7b5908D8cA20D959032B76c",
+  "usdt": "0x9cA89ba1E364490AdE8A514C894b02eD779cC140",
   "deployed": true
 }

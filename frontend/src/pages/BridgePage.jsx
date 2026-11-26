@@ -164,8 +164,12 @@ export default function BridgePage() {
   useEffect(() => {
     if (nebulaAddr) setRecipient((r) => r || nebulaAddr)
     loadBridgeConfig().then((cfg) => {
-      if (cfg?.ethRpcUrl) setEthRpc(cfg.ethRpcUrl)
-      if (cfg?.bridge) setBridgeAddr(cfg.bridge)
+      if (cfg?.ethRpcUrl) {
+        setEthRpc((cur) => (cur && !isLocalEthRpc(cur) ? cur : cfg.ethRpcUrl))
+      }
+      if (cfg?.bridge) {
+        setBridgeAddr((cur) => cur || cfg.bridge)
+      }
     })
     refresh()
     const t = setInterval(refresh, 10000)
