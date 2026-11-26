@@ -322,6 +322,10 @@ export function encodeTransfer(to, amountWei) {
   return SELECTORS.transfer + padAddr(to) + amountWei.toString(16).padStart(64, '0')
 }
 
+export function encodeApprove(spender, amountWei) {
+  return SELECTORS.approve + padAddr(spender) + amountWei.toString(16).padStart(64, '0')
+}
+
 export function encodeMint(to, tokenId) {
   return SELECTORS.mint + padAddr(to) + BigInt(tokenId).toString(16).padStart(64, '0')
 }
