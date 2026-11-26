@@ -210,7 +210,7 @@ pub(super) async fn handle_call_wasm(
     req: CallWasmRequest,
     chain_store: Arc<ChainStore>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    let registry = crate::wasm_registry::WasmRegistry::new(chain_store);
+    let registry = crate::wasm_registry::WasmRegistry::new(chain_store.clone());
     let wasm = match registry.get(&req.name) {
         Ok(Some(b)) => b,
         Ok(None) => {
@@ -235,7 +235,12 @@ pub(super) async fn handle_call_wasm(
             })));
         }
     };
-    match executor.execute_i32(&wasm, &req.func, req.arg) {
+    let storage = Arc::new(crate::wasm_registry::ChainWasmStorage::new(
+        chain_store,
+        req.name,
+        true,
+    ));
+    match executor.execute_i32_with_storage(&wasm, &req.func, req.arg, storage) {
         Ok((result, gas_used)) => Ok(warp::reply::json(&serde_json::json!({
             "status": "success",
             "result": result,

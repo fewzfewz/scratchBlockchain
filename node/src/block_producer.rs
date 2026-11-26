@@ -138,12 +138,17 @@ impl BlockExecutor {
                 };
             }
         };
+        let storage = Arc::new(crate::wasm_registry::ChainWasmStorage::new(
+            chain_store.clone(),
+            name,
+            false,
+        ));
         match execution::WasmExecutor::new() {
-            Ok(exec) => match exec.execute_i32(&wasm, func, arg) {
-                Ok((_result, gas)) => TransactionReceipt {
+            Ok(exec) => match exec.execute_i32_with_storage(&wasm, func, arg, storage) {
+                Ok((result, gas)) => TransactionReceipt {
                     success: true,
                     gas_used: gas.max(21_000),
-                    output: vec![],
+                    output: result.to_le_bytes().to_vec(),
                     created_address: None,
                     revert_reason: None,
                     logs: vec![],

@@ -35,9 +35,21 @@ pub const WASM_TX_PREFIX: &[u8] = b"WASM:";
 /// Deploy a WASM module: payload `WASMDEPLOY:<name>:<module bytes>`.
 pub const WASM_DEPLOY_PREFIX: &[u8] = b"WASMDEPLOY:";
 ///
+/// Host key-value storage exposed to WASM contracts (`env.storage_get` / `env.storage_set`).
+pub trait WasmStorage: Send + Sync {
+    fn get(&self, key: i32) -> i32;
+    fn set(&self, key: i32, value: i32);
+}
+
+struct NoopWasmStorage;
+impl WasmStorage for NoopWasmStorage {
+    fn get(&self, _key: i32) -> i32 {
+        0
+    }
+    fn set(&self, _key: i32, _value: i32) {}
+}
+
 /// This allows running WASM-based contracts (alternative to EVM).
-/// Currently a placeholder - will be fully implemented when contract
-/// language is finalized.
 pub struct WasmExecutor {
     engine: Engine,
     fuel_limit: u64,
@@ -72,10 +84,40 @@ impl WasmExecutor {
 
     /// Execute a WASM function with a single i32 argument and return value.
     pub fn execute_i32(&self, wasm_binary: &[u8], func_name: &str, arg: i32) -> Result<(i32, u64)> {
+        self.execute_i32_with_storage(
+            wasm_binary,
+            func_name,
+            arg,
+            std::sync::Arc::new(NoopWasmStorage),
+        )
+    }
+
+    /// Execute a WASM function with host storage (`env.storage_get`, `env.storage_set`).
+    pub fn execute_i32_with_storage(
+        &self,
+        wasm_binary: &[u8],
+        func_name: &str,
+        arg: i32,
+        storage: std::sync::Arc<dyn WasmStorage>,
+    ) -> Result<(i32, u64)> {
         let module = Module::new(&self.engine, wasm_binary)?;
-        let mut store = Store::new(&self.engine, ());
+        let mut store = Store::new(&self.engine, storage);
         store.set_fuel(self.fuel_limit)?;
-        let linker = Linker::new(&self.engine);
+        let mut linker = Linker::new(&self.engine);
+        linker.func_wrap(
+            "env",
+            "storage_get",
+            |caller: wasmtime::Caller<'_, std::sync::Arc<dyn WasmStorage>>, key: i32| -> i32 {
+                caller.data().get(key)
+            },
+        )?;
+        linker.func_wrap(
+            "env",
+            "storage_set",
+            |caller: wasmtime::Caller<'_, std::sync::Arc<dyn WasmStorage>>, key: i32, val: i32| {
+                caller.data().set(key, val);
+            },
+        )?;
         let instance = linker.instantiate(&mut store, &module)?;
         let fuel_before = store.get_fuel().unwrap_or(self.fuel_limit);
         let func = instance.get_typed_func::<i32, i32>(&mut store, func_name)?;
