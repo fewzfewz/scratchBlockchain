@@ -66,8 +66,26 @@ jobs:
         run: npm run build
         working-directory: sdk/javascript
 
-      - name: Publish to npm
-        run: npm publish --access public --workspaces=false
+      - name: Publish SDK to npm (if version not yet published)
         working-directory: sdk/javascript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if npm view "nebula-chain-sdk@${VER}" version >/dev/null 2>&1; then
+            echo "nebula-chain-sdk@${VER} already published, skipping"
+          else
+            npm publish --access public --workspaces=false
+          fi
+
+      - name: Publish CLI to npm (if version not yet published)
+        working-directory: sdk/javascript/cli
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          VER=$(node -p "require('./package.json').version")
+          if npm view "nebula-chain-cli@${VER}" version >/dev/null 2>&1; then
+            echo "nebula-chain-cli@${VER} already published, skipping"
+          else
+            npm publish --access public --workspaces=false
+          fi
