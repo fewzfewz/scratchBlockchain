@@ -1,6 +1,6 @@
 # Smart Contract Templates
 
-Ready-to-use Solidity smart contract templates for the Modular Blockchain.
+Ready-to-use Solidity smart contract templates for Nebula Blockchain.
 
 ## Contracts
 
@@ -29,7 +29,7 @@ npx @modular-blockchain/sdk-cli deploy ERC20 --args "MyToken,MTK,1000000"
 
 Or via the SDK:
 ```ts
-import { Wallet, HttpProvider } from "@modular-blockchain/sdk";
+import { Wallet, HttpProvider } from "nebula-chain-sdk";
 import { deployContract } from "@modular-blockchain/sdk/cli";
 
 const provider = new HttpProvider("http://localhost:8545");

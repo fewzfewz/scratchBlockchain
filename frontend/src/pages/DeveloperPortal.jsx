@@ -135,8 +135,8 @@ export default function DeveloperPortal() {
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">JavaScript SDK</h2>
               <p className="text-slate-500 dark:text-slate-400 mb-6">Connect, transact, and build with the Nebula SDK.</p>
               <div className="space-y-4 mb-6">
-                <CodeBlock lang="bash" code={'npm install @modular-blockchain/sdk'} />
-                <CodeBlock lang="ts" code={`import { ModularClient, HttpProvider, Wallet } from '@modular-blockchain/sdk';
+                <CodeBlock lang="bash" code={'npm install nebula-chain-sdk'} />
+                <CodeBlock lang="ts" code={`import { ModularClient, HttpProvider, Wallet } from 'nebula-chain-sdk';
 
 const client = new ModularClient(
   new HttpProvider('${getApiUrl()}')

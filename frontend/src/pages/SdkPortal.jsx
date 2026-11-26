@@ -173,9 +173,9 @@ console.log("Tx hash:", receipt.hash);` },
               <p className="text-slate-500 dark:text-slate-400 mb-6">Everything you need to build on Nebula.</p>
               <div className="grid md:grid-cols-3 gap-4">
                 {[
-                  { icon: Package, title: '@modular-blockchain/sdk', desc: 'TypeScript SDK with wallet management, transaction building, and providers.', tags: ['TypeScript', 'Node.js'], chip: 'from-blue-600 to-cyan-600', install: 'npm install @modular-blockchain/sdk' },
-                  { icon: Terminal, title: '@modular-blockchain/sdk-cli', desc: 'CLI for scaffolding projects, deploying contracts, and managing wallets.', tags: ['CLI', 'Scaffold'], chip: 'from-emerald-600 to-teal-600', install: 'npm install -g @modular-blockchain/sdk-cli' },
-                  { icon: Boxes, title: 'Smart Contract Templates', desc: 'Battle-tested templates for ERC-20, ERC-721, and DAO contracts.', tags: ['Solidity', 'Open Source'], chip: 'from-violet-600 to-purple-600', install: 'npm i @modular-blockchain/templates' },
+                  { icon: Package, title: 'nebula-chain-sdk (npm)', desc: 'TypeScript SDK with wallet management, transaction building, and providers.', tags: ['TypeScript', 'Node.js'], chip: 'from-blue-600 to-cyan-600', install: 'npm install nebula-chain-sdk' },
+                  { icon: Package, title: 'nebula-chain-sdk (PyPI)', desc: 'Lightweight Python SDK for RPC queries, AI agents, and Ed25519 signing.', tags: ['Python', 'PyPI'], chip: 'from-emerald-600 to-teal-600', install: 'pip install nebula-chain-sdk' },
+                  { icon: Boxes, title: 'Smart Contract Templates', desc: 'Solidity templates for ERC-20, ERC-721, and DAO contracts in the repo.', tags: ['Solidity', 'Open Source'], chip: 'from-violet-600 to-purple-600', install: 'npx @modular-blockchain/sdk-cli' },
                 ].map(({ icon: Icon, title, desc, tags, chip, install }) => (
                   <div key={title} className="p-5 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
                     <div className="flex items-center gap-3 mb-4">

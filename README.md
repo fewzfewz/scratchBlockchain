@@ -1,10 +1,10 @@
-# Nebula: High-Performance Modular Blockchain
+# Nebula Blockchain
 
 [![Rust](https://img.shields.io/badge/built_with-Rust-dca282.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ready-blue)](deployment/local/docker-compose.yml)
 
-**Nebula** is a modular blockchain with BFT consensus, EVM + WASM execution, built-in React UI (3D dashboard), cross-chain Ethereum bridge, DeFi/NFT pages, and a full Docker testnet.
+**Nebula** is a modular blockchain with BFT consensus, EVM + WASM execution, built-in React UI (3D dashboard), cross-chain Ethereum bridge, DeFi/NFT pages, and published JavaScript (`npm install nebula-chain-sdk`) & Python (`pip install nebula-chain-sdk`) SDKs.
 
 ---
 

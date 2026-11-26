@@ -1,7 +1,7 @@
 {
   "name": "nebula-chain-sdk",
   "version": "1.0.0",
-  "description": "Official TypeScript/JavaScript SDK for Modular Blockchain",
+  "description": "Official TypeScript/JavaScript SDK for Nebula Blockchain",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "module": "dist/index.mjs",
@@ -38,7 +38,7 @@
     "rust",
     "sdk"
   ],
-  "author": "Modular Blockchain Team",
+  "author": "Nebula Team",
   "license": "MIT",
   "repository": {
     "type": "git",

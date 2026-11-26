@@ -1,4 +1,4 @@
-# Modular Blockchain JavaScript/TypeScript SDK
+# Nebula JavaScript/TypeScript SDK (`nebula-chain-sdk`)
 
 Official TypeScript/JavaScript SDK for Nebula — Ed25519 signing, EIP-1559 gas, full RPC coverage, HTTP/WebSocket providers.
 
@@ -11,14 +11,14 @@ Official TypeScript/JavaScript SDK for Nebula — Ed25519 signing, EIP-1559 gas,
 
 ## Installation
 ```bash
-npm install @modular-blockchain/sdk
+npm install nebula-chain-sdk
 # or from repo:
 cd sdk/javascript && npm install && npm run build
 ```
 
 ## Quick Start
 ```ts
-import { ModularClient, HttpProvider, Wallet } from "@modular-blockchain/sdk";
+import { ModularClient, HttpProvider, Wallet } from "nebula-chain-sdk";
 
 const client = new ModularClient(new HttpProvider("http://localhost:8545"));
 await client.connect();

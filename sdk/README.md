@@ -1,6 +1,6 @@
 # SDK
 
-TypeScript/JavaScript SDK (`@modular-blockchain/sdk`) for Nebula.
+TypeScript/JavaScript SDK (`nebula-chain-sdk` on npm) and Python SDK (`nebula-chain-sdk` on PyPI) for Nebula.
 
 ## Structure
 
