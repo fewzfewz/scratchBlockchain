@@ -4,7 +4,7 @@ import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, C
 import { signAndSubmit, waitForReceipt, walletAddress, getApiUrl, nblToWei } from '../lib/chain.js'
 import { Page, PageHeader, Card, Field, Button, Notice, Badge, KeyValue, buttonClass, inputClass } from '../components/ui.jsx'
 
-const GRAFANA_URL = 'http://localhost:3002/d/validator-onboarding/validator-onboarding'
+const GRAFANA_URL = import.meta.env.VITE_GRAFANA_URL || (import.meta.env.DEV ? 'http://localhost:3002/d/validator-onboarding/validator-onboarding' : '')
 const ONBOARDING_DOC = 'https://github.com/fewzfewz/scratchBlockchain/blob/main/docs/validator-onboarding.md'
 
 const fmtNbl = (wei) => `${(Number(wei || 0) / 1e18).toLocaleString(undefined, { maximumFractionDigits: 4 })} NBL`
@@ -135,13 +135,13 @@ export default function ValidatorOnboardPage() {
 
 
   const steps = [
-    { n: 1, title: 'Provision hardware', body: '4+ CPU cores, 16 GB RAM, 500 GB SSD. Open P2P 26656 and metrics 26657.' },
-    { n: 2, title: 'Build the node', body: 'cargo build -p node --release' },
-    { n: 3, title: 'Generate keys', body: 'Use scripts/setup-validator.sh or import an Ed25519 keypair.' },
-    { n: 4, title: 'Configure genesis', body: 'Point --genesis at genesis.json and set data_dir in node config.' },
-    { n: 5, title: 'Join the network', body: 'POST /connect_peer with bootstrap multiaddrs from deployment/local.' },
+    { n: 1, title: 'Provision hardware or Render', body: '4+ CPU cores, 16 GB RAM, 500 GB SSD (or Render Private Service). Open P2P 26656, RPC 8545, and metrics 9090.' },
+    { n: 2, title: 'Build the node', body: 'cargo build -p node --release (or use Dockerfile / ghcr.io image).' },
+    { n: 3, title: 'Generate keys', body: 'Run modular-node key-gen --output validator_key.json (or mount via Render Secret Files).' },
+    { n: 4, title: 'Configure genesis', body: 'Point --genesis at the shared genesis.json and set data_dir = "/data" in node config.' },
+    { n: 5, title: 'Join the network', body: 'Set bootstrap_nodes in config.toml or call POST /connect_peer with peer multiaddrs.' },
     { n: 6, title: 'Register stake', body: 'Submit a signed register_validator transaction (bonds min 1 NBL), or a delegate transaction, via POST /submit_tx.' },
-    { n: 7, title: 'Monitor & alert', body: 'Watch Grafana Validator Onboarding dashboard; Alertmanager fires on validator down / stalled consensus.' },
+    { n: 7, title: 'Monitor & alert', body: 'Scrape :9090/metrics in Prometheus/Grafana; Alertmanager fires on ValidatorDown / ConsensusStalled.' },
   ]
 
   const myAddr = walletAddress()
@@ -153,7 +153,9 @@ export default function ValidatorOnboardPage() {
         description="Check your node, register with a signed staking transaction, and watch it in the validator set."
         actions={<>
           <a href={ONBOARDING_DOC} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}><BookOpen className="w-4 h-4" /> Guide</a>
-          <a href={GRAFANA_URL} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}><ExternalLink className="w-4 h-4" /> Grafana</a>
+          {GRAFANA_URL && (
+            <a href={GRAFANA_URL} target="_blank" rel="noopener noreferrer" className={buttonClass('secondary', 'sm')}><ExternalLink className="w-4 h-4" /> Grafana</a>
+          )}
         </>} />
 
       <div className="grid lg:grid-cols-2 gap-6 mb-6 items-start">
