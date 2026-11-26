@@ -1,17 +1,31 @@
-# Nebula Python SDK
+# Nebula Python SDK (`nebula-chain-sdk`)
 
-Minimal stdlib-only client for the Nebula node RPC.
+Minimal stdlib-only client for the Nebula modular blockchain RPC.
+
+## Install
 
 ```bash
-pip install -e sdk/python
+pip install nebula-chain-sdk
 ```
+
+With optional Ed25519 signing support:
+
+```bash
+pip install "nebula-chain-sdk[signing]"
+```
+
+## Quick Start (Live Network)
 
 ```python
 from nebula import NebulaClient
+from nebula.wallet import Wallet
 
-client = NebulaClient("http://localhost:8545")
+client = NebulaClient("https://scratchblockchain.onrender.com")
 print(client.status())
-print(client.governance())
+print(client.validators())
+
+wallet = Wallet.generate()
+print("Address:", wallet.address)
 ```
 
-Governance writes still require a signed `POST /submit_tx` payload (use the JavaScript SDK or `tests/localhost/scripts/lib/gov-tx.js` for signing).
+See [examples/agent_micropay.py](examples/agent_micropay.py) for an AI-agent micro-payment & validator status example.

@@ -42,12 +42,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/modular-blockchain.git"
+    "url": "git+https://github.com/fewzfewz/scratchBlockchain.git"
   },
   "bugs": {
-    "url": "https://github.com/your-org/modular-blockchain/issues"
+    "url": "https://github.com/fewzfewz/scratchBlockchain/issues"
   },
-  "homepage": "https://github.com/your-org/modular-blockchain#readme",
+  "homepage": "https://github.com/fewzfewz/scratchBlockchain#readme",
   "dependencies": {
     "@noble/curves": "^1.9.7",
     "@noble/hashes": "^1.8.0",

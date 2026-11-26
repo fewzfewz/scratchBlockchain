@@ -136,14 +136,14 @@ export default function SdkPortal() {
               <p className="text-slate-500 dark:text-slate-400 mb-6">Get connected and send your first transaction in 30 seconds.</p>
               <div className="space-y-6">
                 {[
-                  { num: '1', title: 'Install the SDK', code: 'npm install @modular-blockchain/sdk' },
-                  { num: '2', title: 'Connect to a node', code: `import { ModularClient, HttpProvider } from "@modular-blockchain/sdk";
+                  { num: '1', title: 'Install the SDK', code: 'npm install nebula-chain-sdk' },
+                  { num: '2', title: 'Connect to a node', code: `import { ModularClient, HttpProvider } from "nebula-chain-sdk";
 
 const provider = new HttpProvider("${getApiUrl()}");
 const client = new ModularClient(provider);
 const status = await client.getNodeStatus();
 console.log("Height:", status.height);` },
-                  { num: '3', title: 'Create a wallet', code: `import { Wallet } from "@modular-blockchain/sdk";
+                  { num: '3', title: 'Create a wallet', code: `import { Wallet } from "nebula-chain-sdk";
 
 const wallet = Wallet.generate();
 console.log("Address:", wallet.address); // 0x...` },
@@ -195,6 +195,45 @@ console.log("Tx hash:", receipt.hash);` },
                       <CopyBtn text={install} />
                     </div>
                   </div>
+                ))}
+              </div>
+            </section>
+
+            {/* ── Python SDK & Earning Flows ───────────────────────── */}
+            <section>
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">Python SDK & AI Agent Micro-Payments</h2>
+              <p className="text-slate-500 dark:text-slate-400 mb-6">
+                Install the published PyPI package to connect Python bots, AI agents, and backend services directly to Nebula.
+              </p>
+              <CodeBlock code={`pip install nebula-chain-sdk
+
+python3 -c '
+from nebula import NebulaClient
+from nebula.wallet import Wallet
+
+client = NebulaClient("${getApiUrl()}")
+print("Status:", client.status())
+agent = Wallet.generate()
+print("Agent address:", agent.address)
+'`} lang="bash" />
+              <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
+                {[
+                  { to: '/validators', title: 'Staking Rewards', desc: 'Register a validator or stake NBL to earn block rewards & fee share.' },
+                  { to: '/defi', title: 'AMM Liquidity', desc: 'Deploy pools, provide liquidity, and earn swap fees on SimpleAMM.' },
+                  { to: '/bridge', title: 'Cross-Chain Bridge', desc: 'Move assets between Ethereum and Nebula via relayer attestations.' },
+                  { to: '/faucet', title: 'Testnet Faucet', desc: 'Fund agent wallets with NBL to test transactions and contracts.' },
+                ].map(({ to, title, desc }) => (
+                  <Link
+                    key={to}
+                    to={to}
+                    className="p-4 rounded-xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all block"
+                  >
+                    <h3 className="text-slate-800 dark:text-white font-semibold text-sm mb-1 flex items-center justify-between">
+                      {title}
+                      <ArrowRight className="w-3.5 h-3.5 text-cyan-400" />
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">{desc}</p>
+                  </Link>
                 ))}
               </div>
             </section>
