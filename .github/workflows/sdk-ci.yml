@@ -72,7 +72,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VER=$(node -p "require('./package.json').version")
-          if npm view "nebula-chain-sdk@${VER}" version >/dev/null 2>&1; then
+          if [ -n "$(npm view "nebula-chain-sdk@${VER}" version 2>/dev/null)" ]; then
             echo "nebula-chain-sdk@${VER} already published, skipping"
           else
             npm publish --access public --workspaces=false
@@ -84,7 +84,7 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           VER=$(node -p "require('./package.json').version")
-          if npm view "nebula-chain-cli@${VER}" version >/dev/null 2>&1; then
+          if [ -n "$(npm view "nebula-chain-cli@${VER}" version 2>/dev/null)" ]; then
             echo "nebula-chain-cli@${VER} already published, skipping"
           else
             npm publish --access public --workspaces=false
