@@ -16,7 +16,7 @@ const fmt = (v) => v == null || isNaN(Number(v)) ? '--' : Number(v).toLocaleStri
 const STATS = [
   { icon: Server, label: 'Endpoints', value: String(ENDPOINT_COUNT), sub: 'REST + JSON-RPC', chip: 'from-blue-600 to-cyan-600' },
   { icon: Layers, label: 'Spec', value: 'OpenAPI 3.0', sub: 'docs/openapi.yaml', chip: 'from-indigo-600 to-violet-600' },
-  { icon: Terminal, label: 'Base URL', value: 'localhost:8545', sub: 'HTTP JSON-RPC', chip: 'from-emerald-600 to-teal-600' },
+  { icon: Terminal, label: 'Base URL', value: getApiUrl().replace(/^https?:\/\//, ''), sub: 'HTTP JSON-RPC', chip: 'from-emerald-600 to-teal-600' },
   { icon: Zap, label: 'Auth', value: 'None', sub: 'Public testnet', chip: 'from-amber-500 to-orange-600' },
 ]
 
@@ -86,18 +86,26 @@ export default function ApiDocs() {
             <ArrowLeft className="w-3.5 h-3.5" />
             Back to docs
           </Link>
-          <a
-            href="/docs"
+          <Link
+            to="/docs"
             className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl glass text-xs font-medium text-slate-600 dark:text-slate-300 hover:-translate-y-0.5 transition-all"
           >
             <BookOpen className="w-3.5 h-3.5" />
             Read the guide
-          </a>
+          </Link>
         </div>
 
         {/* ── Swagger UI ────────────────────────────────────────── */}
         <div className="swagger-ui-wrapper">
-          <SwaggerUI url="/openapi.yaml" />
+          <SwaggerUI
+            url="/openapi.yaml"
+            requestInterceptor={(req) => {
+              if (req.url?.startsWith('http://localhost:8545')) {
+                req.url = req.url.replace('http://localhost:8545', getApiUrl())
+              }
+              return req
+            }}
+          />
         </div>
       </div>
     </div>

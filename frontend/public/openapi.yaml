@@ -9,6 +9,8 @@ info:
     name: Nebula Team
 
 servers:
+  - url: https://scratchblockchain.onrender.com
+    description: Live Nebula Devnet (Render)
   - url: http://localhost:8545
     description: Local node
 

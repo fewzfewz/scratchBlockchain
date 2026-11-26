@@ -139,7 +139,7 @@ export default function DeveloperPortal() {
                 <CodeBlock lang="ts" code={`import { ModularClient, HttpProvider, Wallet } from '@modular-blockchain/sdk';
 
 const client = new ModularClient(
-  new HttpProvider('http://localhost:8545')
+  new HttpProvider('${getApiUrl()}')
 );
 
 // Generate a wallet
