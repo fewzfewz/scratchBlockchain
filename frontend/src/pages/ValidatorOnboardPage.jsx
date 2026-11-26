@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, Compass, Activity, Server, BellRing, LogOut, Unlock, UserCheck } from 'lucide-react'
-import { signAndSubmit, waitForReceipt, walletAddress, getApiUrl, nblToWei } from '../lib/chain.js'
+import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, Activity, Server, BellRing, LogOut, Unlock, UserCheck, Download, Link2 } from 'lucide-react'
+import { adminHeaders, signAndSubmit, waitForReceipt, walletAddress, loadWalletKeyPair, toHex, getApiUrl, nblToWei } from '../lib/chain.js'
 import { Page, PageHeader, Card, Field, Button, Notice, Badge, KeyValue, buttonClass, inputClass } from '../components/ui.jsx'
 
 const GRAFANA_URL = import.meta.env.VITE_GRAFANA_URL || (import.meta.env.DEV ? 'http://localhost:3002/d/validator-onboarding/validator-onboarding' : '')
@@ -42,6 +42,9 @@ export default function ValidatorOnboardPage() {
   const [unbondNbl, setUnbondNbl] = useState('')
   const [actionMsg, setActionMsg] = useState({ type: 'info', text: '' })
   const [acting, setActing] = useState('')
+  const [peerMultiaddr, setPeerMultiaddr] = useState('')
+  const [peerMsg, setPeerMsg] = useState({ type: 'info', text: '' })
+  const [connectingPeer, setConnectingPeer] = useState(false)
 
   const loadMine = async () => {
     const me = walletAddress()
@@ -144,6 +147,83 @@ export default function ValidatorOnboardPage() {
     { n: 7, title: 'Monitor & alert', body: 'Scrape :9090/metrics in Prometheus/Grafana; Alertmanager fires on ValidatorDown / ConsensusStalled.' },
   ]
 
+  const connectPeer = async (e) => {
+    e.preventDefault()
+    const multiaddr = peerMultiaddr.trim()
+    if (!multiaddr) return
+    setConnectingPeer(true)
+    setPeerMsg({ type: 'info', text: 'Dialing peer…' })
+    try {
+      const r = await window.fetch(`${getApiUrl()}/connect_peer`, {
+        method: 'POST',
+        headers: adminHeaders(),
+        body: JSON.stringify({ multiaddr }),
+      })
+      const d = await r.json()
+      if (d.status !== 'success') throw new Error(d.error || 'Failed to connect peer')
+      setPeerMsg({ type: 'ok', text: `Dialing ${multiaddr}` })
+      setPeerMultiaddr('')
+      runChecks()
+    } catch (err) {
+      setPeerMsg({ type: 'err', text: err.message })
+    } finally {
+      setConnectingPeer(false)
+    }
+  }
+
+  const downloadValidatorKey = () => {
+    const kp = loadWalletKeyPair()
+    if (!kp) return
+    const payload = {
+      secret_key: toHex(kp.secretKey.slice(0, 32)),
+      public_key: toHex(kp.publicKey),
+      key_type: 'ed25519',
+    }
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'validator_key.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  const downloadValidatorToml = () => {
+    const toml = `[network]
+chain_id = "modular-testnet-1"
+p2p_port = 26656
+rpc_port = 26657
+bootstrap_nodes = []
+
+[consensus]
+block_time_ms = 3000
+max_validators = 100
+
+[validator]
+enabled = true
+commission_rate = "${commission || '10'}"
+
+[storage]
+data_dir = "/data"
+
+[api]
+enabled = true
+address = "0.0.0.0:8545"
+cors_origins = ["*"]
+
+[metrics]
+enabled = true
+address = "0.0.0.0:9090"
+`
+    const blob = new Blob([toml], { type: 'text/plain' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'validator.toml'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const myAddr = walletAddress()
   const regKind = /^Registered/.test(registerMsg) || /submitted/.test(registerMsg) ? 'ok' : /fail|Error|first|least|percentage/.test(registerMsg) ? 'err' : 'info'
 
@@ -176,6 +256,15 @@ export default function ValidatorOnboardPage() {
               )
             })}
           </ul>
+          <form onSubmit={connectPeer} className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2">
+            <Field label="Connect P2P peer">
+              <div className="flex gap-2">
+                <input value={peerMultiaddr} onChange={(e) => setPeerMultiaddr(e.target.value)} placeholder="/dns4/nebula-validator-1/tcp/26656" className={`${inputClass} font-mono text-xs`} />
+                <Button type="submit" variant="secondary" icon={Link2} loading={connectingPeer}>Dial</Button>
+              </div>
+            </Field>
+            <Notice type={peerMsg.type}>{peerMsg.text}</Notice>
+          </form>
         </Card>
 
         <Card title="Register" icon={Shield} description="Bonds your stake from this wallet. Proposer turns are proportional to stake.">
@@ -189,6 +278,16 @@ export default function ValidatorOnboardPage() {
             </div>
             <Notice type="warn">Only register if you will run a node with this key: until it joins, your proposer turns time out and slow the chain.</Notice>
             <Button icon={Shield} loading={registering} onClick={registerValidator} className="w-full">Register my wallet as validator</Button>
+            {myAddr && (
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                <div className="text-xs text-slate-500">Export your wallet key &amp; config to run a real node behind this validator:</div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Button type="button" variant="secondary" size="sm" icon={Download} onClick={downloadValidatorKey}>validator_key.json</Button>
+                  <Button type="button" variant="secondary" size="sm" icon={Download} onClick={downloadValidatorToml}>validator.toml</Button>
+                </div>
+                <pre className="text-[11px] font-mono bg-slate-50 dark:bg-slate-950/50 border border-slate-100 dark:border-slate-800 rounded-xl p-2.5 overflow-x-auto">docker run -d -p 26656:26656 -p 8545:8545 -v ./validator_key.json:/data/validator_key.json -v ./validator.toml:/etc/nebula/config.toml ghcr.io/fewzfewz/nebula-node:main</pre>
+              </div>
+            )}
             <Notice type={regKind}>{registerMsg}</Notice>
           </div>
         </Card>
