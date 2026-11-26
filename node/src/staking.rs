@@ -166,7 +166,10 @@ pub async fn begin_block(
         let next = registry_set(&load_validators(trie).await?);
         if next.is_empty() {
             // Never rotate to an empty set (the chain could not continue).
-            warn!("Epoch at block {}: registry has no eligible validator, keeping the old set", slot);
+            warn!(
+                "Epoch at block {}: registry has no eligible validator, keeping the old set",
+                slot
+            );
         } else {
             if validator_set_hash(&next) != validator_set_hash(&certifying) {
                 info!(
@@ -266,7 +269,11 @@ async fn queue_unbonding(
 /// or by the key that signed the tx (genesis validators carry placeholder
 /// addresses that are not derived from their keys, so they could otherwise
 /// never unbond or unjail).
-fn own_index(validators: &[ValidatorEntry], sender: &Address, public_key: &[u8; 32]) -> Option<usize> {
+fn own_index(
+    validators: &[ValidatorEntry],
+    sender: &Address,
+    public_key: &[u8; 32],
+) -> Option<usize> {
     let me = hex_addr(sender);
     let pk = hex::encode(public_key);
     validators
@@ -292,7 +299,9 @@ pub async fn unbond(
         .checked_sub(amount)
         .ok_or_else(|| format!("cannot unbond {} of {} staked", amount, current))?;
     if rest != 0 && rest < MIN_SELF_STAKE {
-        return Err("remaining stake would be below the 1 NBL minimum; unbond all of it to leave".into());
+        return Err(
+            "remaining stake would be below the 1 NBL minimum; unbond all of it to leave".into(),
+        );
     }
     let was_eligible = is_eligible(&validators[idx]);
     validators[idx].stake = serde_json::Value::String(rest.to_string());
@@ -449,16 +458,17 @@ pub async fn apply_evidence(
     // unbonding right before getting caught does not escape the penalty.
     let mut queue = load_unbonding(trie).await?;
     let mut queued_penalty = 0u128;
-    for e in queue
-        .iter_mut()
-        .filter(|e| e.validator.eq_ignore_ascii_case(&address) && e.owner.eq_ignore_ascii_case(&address))
-    {
+    for e in queue.iter_mut().filter(|e| {
+        e.validator.eq_ignore_ascii_case(&address) && e.owner.eq_ignore_ascii_case(&address)
+    }) {
         let amount: u128 = e.amount.parse().unwrap_or(0);
         let cut = amount.saturating_mul(DOUBLE_SIGN_SLASH_BPS) / 10_000;
         e.amount = (amount - cut).to_string();
         queued_penalty += cut;
     }
-    slashed = slashed.saturating_add(penalty).saturating_add(queued_penalty);
+    slashed = slashed
+        .saturating_add(penalty)
+        .saturating_add(queued_penalty);
     if let Some(entry) = validators
         .iter_mut()
         .find(|v| v.address.eq_ignore_ascii_case(&address))
@@ -495,7 +505,9 @@ pub async fn record_turn(
     // BFT height h finalizes the block at slot h - 1; round 0's proposer is
     // the one scheduled.
     let expected = common::consensus_types::select_proposer(
-        certifying.iter().map(|v| (v.public_key.as_slice(), v.stake)),
+        certifying
+            .iter()
+            .map(|v| (v.public_key.as_slice(), v.stake)),
         slot.saturating_add(1),
         0,
     )
@@ -519,7 +531,8 @@ pub async fn record_turn(
             }
             entry.missed_in_row = entry.missed_in_row.saturating_add(1);
             let sustained = slot.saturating_sub(entry.missed_since) >= MIN_DOWNTIME_BLOCKS;
-            if entry.missed_in_row >= MAX_MISSED_TURNS && sustained && !entry.jailed && eligible > 1 {
+            if entry.missed_in_row >= MAX_MISSED_TURNS && sustained && !entry.jailed && eligible > 1
+            {
                 entry.jailed = true;
                 entry.jailed_until = slot.saturating_add(JAIL_BLOCKS);
                 warn!(
@@ -598,10 +611,15 @@ mod tests {
         // First block snapshots the registry.
         let predicted = next_validators_hash(&trie, 1).await.unwrap();
         begin_block(&trie, &cs, 1).await.unwrap();
-        assert_eq!(validator_set_hash(&consensus_set(&trie).await.unwrap()), predicted);
+        assert_eq!(
+            validator_set_hash(&consensus_set(&trie).await.unwrap()),
+            predicted
+        );
 
         // A validator leaves mid-epoch: consensus keeps the old set.
-        unbond(&trie, &address(2), &pubkey(2), 10 * NBL, 1).await.unwrap();
+        unbond(&trie, &address(2), &pubkey(2), 10 * NBL, 1)
+            .await
+            .unwrap();
         for slot in 2..EPOCH_BLOCKS {
             let predicted = next_validators_hash(&trie, slot).await.unwrap();
             begin_block(&trie, &cs, slot).await.unwrap();
@@ -621,11 +639,17 @@ mod tests {
     async fn unbonded_stake_returns_after_the_unbonding_period() {
         let (trie, cs) = setup();
         seed(&trie, &[(1, 10 * NBL), (2, 10 * NBL)]).await;
-        unbond(&trie, &address(1), &pubkey(1), 4 * NBL, 5).await.unwrap();
+        unbond(&trie, &address(1), &pubkey(1), 4 * NBL, 5)
+            .await
+            .unwrap();
         // Below the minimum without leaving entirely is refused.
-        assert!(unbond(&trie, &address(1), &pubkey(1), 5 * NBL + 1, 5).await.is_err());
+        assert!(unbond(&trie, &address(1), &pubkey(1), 5 * NBL + 1, 5)
+            .await
+            .is_err());
 
-        begin_block(&trie, &cs, 5 + UNBONDING_BLOCKS - 1).await.unwrap();
+        begin_block(&trie, &cs, 5 + UNBONDING_BLOCKS - 1)
+            .await
+            .unwrap();
         assert_eq!(crate::accounts::load(&cs, &address(1)).0, 0);
         begin_block(&trie, &cs, 5 + UNBONDING_BLOCKS).await.unwrap();
         assert_eq!(crate::accounts::load(&cs, &address(1)).0, 4 * NBL);
@@ -648,11 +672,20 @@ mod tests {
                 0,
             )
             .unwrap();
-            let actual = if expected == victim { misses += 1; other.to_vec() } else { expected };
+            let actual = if expected == victim {
+                misses += 1;
+                other.to_vec()
+            } else {
+                expected
+            };
             record_turn(&trie, &set, slot, &actual).await.unwrap();
         }
         assert!(misses >= 3, "test needs several misses, got {}", misses);
-        assert!(load_validators(&trie).await.unwrap().iter().all(|v| !v.jailed));
+        assert!(load_validators(&trie)
+            .await
+            .unwrap()
+            .iter()
+            .all(|v| !v.jailed));
     }
 
     #[tokio::test]
@@ -662,16 +695,22 @@ mod tests {
         let mut vals = load_validators(&trie).await.unwrap();
         vals[1].address = format!("0x{}", "22".repeat(20));
         persist_validators(&trie, &vals).await.unwrap();
-        unbond(&trie, &address(2), &pubkey(2), NBL, 4).await.unwrap();
+        unbond(&trie, &address(2), &pubkey(2), NBL, 4)
+            .await
+            .unwrap();
         // Another key cannot act for it.
-        assert!(unbond(&trie, &address(3), &pubkey(3), NBL, 4).await.is_err());
+        assert!(unbond(&trie, &address(3), &pubkey(3), NBL, 4)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
     async fn last_validator_cannot_leave() {
         let (trie, _) = setup();
         seed(&trie, &[(1, 10 * NBL)]).await;
-        assert!(unbond(&trie, &address(1), &pubkey(1), 10 * NBL, 3).await.is_err());
+        assert!(unbond(&trie, &address(1), &pubkey(1), 10 * NBL, 3)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -710,16 +749,25 @@ mod tests {
         assert!(registry_set(&load_validators(&trie).await.unwrap()).len() == 2);
         // Genesis validators have placeholder addresses: unjail works by key.
 
-        assert!(unjail(&trie, &address(3), &pubkey(3), slot + 1).await.is_err());
-        unjail(&trie, &address(3), &pubkey(3), slot + JAIL_BLOCKS).await.unwrap();
-        assert_eq!(registry_set(&load_validators(&trie).await.unwrap()).len(), 3);
+        assert!(unjail(&trie, &address(3), &pubkey(3), slot + 1)
+            .await
+            .is_err());
+        unjail(&trie, &address(3), &pubkey(3), slot + JAIL_BLOCKS)
+            .await
+            .unwrap();
+        assert_eq!(
+            registry_set(&load_validators(&trie).await.unwrap()).len(),
+            3
+        );
     }
 
     #[tokio::test]
     async fn double_sign_evidence_slashes_and_tombstones() {
         let (trie, _) = setup();
         seed(&trie, &[(1, 100 * NBL), (2, 100 * NBL)]).await;
-        unbond(&trie, &address(2), &pubkey(2), 20 * NBL, 10).await.unwrap();
+        unbond(&trie, &address(2), &pubkey(2), 20 * NBL, 10)
+            .await
+            .unwrap();
         let k = key(2);
         let evidence = DoubleSignEvidence {
             first: vote(&k, 12, 1),
@@ -736,11 +784,19 @@ mod tests {
             .unwrap();
         assert!(entry.tombstoned);
         assert_eq!(own_stake(&entry), 76 * NBL);
-        assert_eq!(load_unbonding(&trie).await.unwrap()[0].amount, (19 * NBL).to_string());
+        assert_eq!(
+            load_unbonding(&trie).await.unwrap()[0].amount,
+            (19 * NBL).to_string()
+        );
         // Same evidence again, or unjailing, does nothing.
         assert!(apply_evidence(&trie, &evidence, 16).await.is_err());
-        assert!(unjail(&trie, &address(2), &pubkey(2), u64::MAX - 1).await.is_err());
-        assert_eq!(registry_set(&load_validators(&trie).await.unwrap()).len(), 1);
+        assert!(unjail(&trie, &address(2), &pubkey(2), u64::MAX - 1)
+            .await
+            .is_err());
+        assert_eq!(
+            registry_set(&load_validators(&trie).await.unwrap()).len(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -749,15 +805,26 @@ mod tests {
         seed(&trie, &[(1, 100 * NBL), (2, 100 * NBL)]).await;
         let k = key(2);
         // Same block twice is not equivocation.
-        let same = DoubleSignEvidence { first: vote(&k, 12, 1), second: vote(&k, 12, 1) };
+        let same = DoubleSignEvidence {
+            first: vote(&k, 12, 1),
+            second: vote(&k, 12, 1),
+        };
         assert!(apply_evidence(&trie, &same, 15).await.is_err());
         // Signed by someone else.
-        let mut forged = DoubleSignEvidence { first: vote(&k, 12, 1), second: vote(&key(1), 12, 2) };
+        let mut forged = DoubleSignEvidence {
+            first: vote(&k, 12, 1),
+            second: vote(&key(1), 12, 2),
+        };
         forged.second.voter = forged.first.voter.clone();
         assert!(apply_evidence(&trie, &forged, 15).await.is_err());
         // Too old.
-        let old = DoubleSignEvidence { first: vote(&k, 12, 1), second: vote(&k, 12, 2) };
-        assert!(apply_evidence(&trie, &old, 13 + UNBONDING_BLOCKS).await.is_err());
+        let old = DoubleSignEvidence {
+            first: vote(&k, 12, 1),
+            second: vote(&k, 12, 2),
+        };
+        assert!(apply_evidence(&trie, &old, 13 + UNBONDING_BLOCKS)
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -769,8 +836,12 @@ mod tests {
         crate::governance_store::apply_delegate(&trie, &cs, delegator, address(1), 5 * NBL)
             .await
             .unwrap();
-        assert!(undelegate(&trie, &cs, &delegator, &address(1), 6 * NBL, 2).await.is_err());
-        undelegate(&trie, &cs, &delegator, &address(1), 5 * NBL, 2).await.unwrap();
+        assert!(undelegate(&trie, &cs, &delegator, &address(1), 6 * NBL, 2)
+            .await
+            .is_err());
+        undelegate(&trie, &cs, &delegator, &address(1), 5 * NBL, 2)
+            .await
+            .unwrap();
         let v = &load_validators(&trie).await.unwrap()[0];
         assert_eq!(v.total_delegated, "0");
         assert_eq!(v.delegator_count, 0);

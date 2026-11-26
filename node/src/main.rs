@@ -940,7 +940,10 @@ impl Node {
                         first,
                         second,
                     );
-                    if self.reported_equivocators.insert(evidence.first.voter.clone()) {
+                    if self
+                        .reported_equivocators
+                        .insert(evidence.first.voter.clone())
+                    {
                         if let Err(e) = self.submit_evidence(&evidence).await {
                             warn!("Could not submit double-sign evidence: {}", e);
                             self.reported_equivocators.remove(&evidence.first.voter);
@@ -993,7 +996,8 @@ impl Node {
                             (engine.height, keys)
                         };
                         let proposal_key = (proposal.height, proposal.block.hash());
-                        self.validated_proposals.retain(|(h, _)| *h >= engine_height);
+                        self.validated_proposals
+                            .retain(|(h, _)| *h >= engine_height);
                         if proposal.height == engine_height
                             && !self.validated_proposals.contains(&proposal_key)
                         {
@@ -1313,12 +1317,9 @@ impl Node {
 
         // Epoch rotation and matured unbonding, before the block's own
         // transactions (so the next set is fixed by the state before it).
-        let certifying = node::staking::begin_block(
-            &self.state_trie,
-            &self.chain_store,
-            block.header.slot,
-        )
-        .await?;
+        let certifying =
+            node::staking::begin_block(&self.state_trie, &self.chain_store, block.header.slot)
+                .await?;
 
         let exec_started = Instant::now();
         let receipts = self.block_executor.lock().await.execute_and_commit(block)?;
@@ -1374,8 +1375,7 @@ impl Node {
                     let Some(i) = block.extrinsics.iter().position(|t| t.hash() == hash) else {
                         continue;
                     };
-                    let receipt =
-                        node::block_producer::BlockExecutor::failed_receipt(reason);
+                    let receipt = node::block_producer::BlockExecutor::failed_receipt(reason);
                     self.chain_store
                         .put_receipt(&hash, &serde_json::to_vec(&receipt)?)?;
                     receipts[i] = receipt;

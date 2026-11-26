@@ -962,8 +962,13 @@ mod tests {
             .iter()
             .flat_map(|v| engine.handle_vote(v.vote(height, 0, Step::Precommit, Some(hash))))
             .collect();
-        assert!(events.iter().any(|e| matches!(e, BftEvent::FinalizeBlock(..))));
-        assert_eq!((engine.height, engine.round, engine.step), (height + 1, 0, Step::Propose));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, BftEvent::FinalizeBlock(..))));
+        assert_eq!(
+            (engine.height, engine.round, engine.step),
+            (height + 1, 0, Step::Propose)
+        );
         assert_eq!(engine.timeout_step, Some(Step::Propose));
         assert!(engine.current_timeout.is_some());
     }
@@ -985,7 +990,12 @@ mod tests {
         // Expired: reported exactly once.
         let fired = engine.check_timeout().expect("expired timeout fires");
         assert!(engine.check_timeout().is_none());
-        let BftEvent::Timeout { step, height: h, round } = fired else {
+        let BftEvent::Timeout {
+            step,
+            height: h,
+            round,
+        } = fired
+        else {
             panic!("expected a timeout, got {:?}", fired);
         };
         assert_eq!((step, h, round), (Step::Propose, height, 0));
@@ -996,10 +1006,14 @@ mod tests {
         assert!(engine.handle_timeout(step, h, round).is_empty());
         assert_eq!((engine.height, engine.round), (height + 1, 0));
         // A timeout for another step of the current round is stale too.
-        assert!(engine.handle_timeout(Step::Precommit, height + 1, 0).is_empty());
+        assert!(engine
+            .handle_timeout(Step::Precommit, height + 1, 0)
+            .is_empty());
         assert_eq!(engine.round, 0);
         // The current one is handled.
-        assert!(!engine.handle_timeout(Step::Propose, height + 1, 0).is_empty());
+        assert!(!engine
+            .handle_timeout(Step::Propose, height + 1, 0)
+            .is_empty());
     }
 
     #[test]

@@ -67,8 +67,8 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes =
-            common::wire::encode(&req).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let bytes = common::wire::encode(&req)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_length_prefixed(io, &bytes).await
     }
 
@@ -81,8 +81,8 @@ impl Codec for BlockExchangeCodec {
     where
         T: AsyncWrite + Unpin + Send,
     {
-        let bytes =
-            common::wire::encode(&res).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let bytes = common::wire::encode(&res)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         write_length_prefixed(io, &bytes).await
     }
 }

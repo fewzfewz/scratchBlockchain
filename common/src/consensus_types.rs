@@ -283,7 +283,11 @@ mod validator_set_hash_tests {
     use super::*;
 
     fn v(k: u8, stake: u128) -> ValidatorInfo {
-        ValidatorInfo { public_key: vec![k; 32], stake, slashed: false }
+        ValidatorInfo {
+            public_key: vec![k; 32],
+            stake,
+            slashed: false,
+        }
     }
 
     #[test]

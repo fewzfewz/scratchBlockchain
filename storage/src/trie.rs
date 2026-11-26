@@ -964,8 +964,14 @@ mod prefix_key_tests {
         let mut trie = PatriciaTrie::new(std::sync::Arc::new(crate::MemDb::new())).unwrap();
         trie.insert(b"validators", b"short").unwrap();
         trie.insert(b"validators/epoch", b"long").unwrap();
-        assert_eq!(trie.get(b"validators").unwrap().as_deref(), Some(&b"short"[..]));
-        assert_eq!(trie.get(b"validators/epoch").unwrap().as_deref(), Some(&b"long"[..]));
+        assert_eq!(
+            trie.get(b"validators").unwrap().as_deref(),
+            Some(&b"short"[..])
+        );
+        assert_eq!(
+            trie.get(b"validators/epoch").unwrap().as_deref(),
+            Some(&b"long"[..])
+        );
     }
 
     /// Random keys drawn from a tiny alphabet (so prefixes and shared paths
@@ -983,7 +989,9 @@ mod prefix_key_tests {
         };
         for i in 0..2_000u32 {
             let len = (next() % 5) as usize;
-            let key: Vec<u8> = (0..len).map(|_| [0x00, 0x01, 0x10, 0x11][(next() % 4) as usize]).collect();
+            let key: Vec<u8> = (0..len)
+                .map(|_| [0x00, 0x01, 0x10, 0x11][(next() % 4) as usize])
+                .collect();
             let value = i.to_le_bytes().to_vec();
             trie.insert(&key, &value).unwrap();
             model.insert(key, value);
@@ -1002,7 +1010,10 @@ mod prefix_key_tests {
         trie.gc_orphan_nodes().unwrap();
         // Lands in an empty child slot of the root branch.
         trie.insert(b"staking/unbonding", b"c").unwrap();
-        assert_eq!(trie.get(b"staking/unbonding").unwrap().as_deref(), Some(&b"c"[..]));
+        assert_eq!(
+            trie.get(b"staking/unbonding").unwrap().as_deref(),
+            Some(&b"c"[..])
+        );
         assert_eq!(trie.get(b"validators").unwrap().as_deref(), Some(&b"a"[..]));
     }
 
@@ -1011,7 +1022,13 @@ mod prefix_key_tests {
         let mut trie = PatriciaTrie::new(std::sync::Arc::new(crate::MemDb::new())).unwrap();
         trie.insert(b"validators/epoch", b"long").unwrap();
         trie.insert(b"validators", b"short").unwrap();
-        assert_eq!(trie.get(b"validators").unwrap().as_deref(), Some(&b"short"[..]));
-        assert_eq!(trie.get(b"validators/epoch").unwrap().as_deref(), Some(&b"long"[..]));
+        assert_eq!(
+            trie.get(b"validators").unwrap().as_deref(),
+            Some(&b"short"[..])
+        );
+        assert_eq!(
+            trie.get(b"validators/epoch").unwrap().as_deref(),
+            Some(&b"long"[..])
+        );
     }
 }

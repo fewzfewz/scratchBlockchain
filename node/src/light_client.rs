@@ -180,7 +180,9 @@ impl LightClient {
         &mut self,
         validators: Vec<ValidatorInfo>,
     ) -> Result<(), LightClientError> {
-        let expected = self.pending_set.ok_or(LightClientError::ValidatorSetMismatch)?;
+        let expected = self
+            .pending_set
+            .ok_or(LightClientError::ValidatorSetMismatch)?;
         if validator_set_hash(&validators) != expected {
             return Err(LightClientError::ValidatorSetMismatch);
         }
@@ -263,12 +265,18 @@ mod tests {
         b1.header.next_validators_hash = validator_set_hash(&set(&new));
         certify(&mut b1, &old);
         lc.verify_next(&b1).unwrap();
-        assert_eq!(lc.pending_validator_set(), Some(validator_set_hash(&set(&new))));
+        assert_eq!(
+            lc.pending_validator_set(),
+            Some(validator_set_hash(&set(&new)))
+        );
 
         let mut b2 = child(&b1, 2);
         b2.header.next_validators_hash = validator_set_hash(&set(&new));
         certify(&mut b2, &new);
-        assert!(matches!(lc.verify_next(&b2), Err(LightClientError::NeedValidatorSet(_))));
+        assert!(matches!(
+            lc.verify_next(&b2),
+            Err(LightClientError::NeedValidatorSet(_))
+        ));
         // The old set (or any other) does not satisfy the commitment.
         assert_eq!(
             lc.supply_next_validators(set(&old)),

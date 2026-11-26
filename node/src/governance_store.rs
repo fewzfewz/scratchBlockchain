@@ -688,7 +688,6 @@ pub async fn record_block_stats(
     crate::staking::record_turn(trie, certifying, slot, proposer_pubkey).await
 }
 
-
 /// Load active validators for BFT / finality hot-reload (stake + delegated).
 pub async fn load_consensus_validators(
     trie: &Arc<Mutex<PatriciaTrie>>,
@@ -748,7 +747,9 @@ mod tests {
                 0,
             )
             .unwrap();
-            record_block_stats(&trie, &engine_set, slot, &proposer).await.unwrap();
+            record_block_stats(&trie, &engine_set, slot, &proposer)
+                .await
+                .unwrap();
         }
         let after = load_validators(&trie).await.unwrap();
         assert!(after.iter().all(|v| v.blocks_missed == 0));
