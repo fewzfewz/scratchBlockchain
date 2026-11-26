@@ -26,3 +26,29 @@ def test_wallet_generate_and_hash():
     }
     digest = Wallet.hash_tx(tx)
     assert len(digest) == 32
+
+
+def test_client_helper_routes(monkeypatch):
+    client = NebulaClient("https://example.com")
+    calls = []
+
+    def fake_request(method, path, body=None):
+        calls.append((method, path, body))
+        return {"ok": True}
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    client.block(10)
+    client.latest_block()
+    client.tx("0xabc")
+    client.tx_history("0x1234", limit=5)
+    client.gas_price()
+    client.faucet("0x1234", amount="100")
+
+    assert calls == [
+        ("GET", "/block/10", None),
+        ("GET", "/block/latest", None),
+        ("GET", "/tx/0xabc", None),
+        ("GET", "/txs/1234?limit=5", None),
+        ("GET", "/gas_price", None),
+        ("POST", "/faucet/request", {"address": "0x1234", "amount": "100"}),
+    ]

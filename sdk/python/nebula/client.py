@@ -70,6 +70,28 @@ class NebulaClient:
         addr = address.removeprefix("0x")
         return self.get(f"/balance/{addr}")
 
+    def block(self, height: int) -> Any:
+        return self.get(f"/block/{int(height)}")
+
+    def latest_block(self) -> Any:
+        return self.get("/block/latest")
+
+    def tx(self, tx_hash: str) -> Any:
+        return self.get(f"/tx/{tx_hash}")
+
+    def tx_history(self, address: str, limit: int = 20) -> Any:
+        addr = address.removeprefix("0x")
+        return self.get(f"/txs/{addr}?limit={int(limit)}")
+
+    def gas_price(self) -> Any:
+        return self.get("/gas_price")
+
+    def faucet(self, address: str, amount: Optional[str] = None) -> Any:
+        body: dict[str, Any] = {"address": address}
+        if amount is not None:
+            body["amount"] = amount
+        return self.post("/faucet/request", body)
+
     def runtime_version(self) -> Any:
         return self.get("/runtime/version")
 

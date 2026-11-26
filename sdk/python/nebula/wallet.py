@@ -11,7 +11,7 @@ try:
     import nacl.signing
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "Install PyNaCl for signing: pip install 'nebula-sdk[signing]'"
+        "Install PyNaCl for signing: pip install 'nebula-chain-sdk[signing]'"
     ) from exc
 
 from nebula.client import NebulaClient
@@ -88,6 +88,37 @@ class Wallet:
             "payload": payload,
             "chain_id": 1,
             "to": None,
+            "signature": [],
+        }
+        return client.submit_tx(self.sign_tx(tx))
+
+    def send_nbl(
+        self,
+        client: NebulaClient,
+        to: str,
+        amount_nbl: float | str,
+        chain_id: int = 1,
+    ) -> Any:
+        """Sign and submit a native NBL transfer in one call."""
+        from decimal import Decimal
+
+        bal = client.balance(self.address)
+        nonce = int(bal.get("nonce", 0))
+        gas_info = client.gas_price()
+        base_fee = int(gas_info.get("base_fee", 1_000_000_000)) if isinstance(gas_info, dict) else 1_000_000_000
+        value_wei = int(Decimal(str(amount_nbl)) * Decimal(10**18))
+        sender = bytes.fromhex(self.address.removeprefix("0x"))
+        recipient = bytes.fromhex(to.removeprefix("0x"))
+        tx = {
+            "sender": list(sender),
+            "nonce": nonce,
+            "value": value_wei,
+            "gas_limit": 21_000,
+            "max_fee_per_gas": max(base_fee * 2, 1_000_000_000),
+            "max_priority_fee_per_gas": 1_000_000_000,
+            "payload": [],
+            "chain_id": chain_id,
+            "to": list(recipient),
             "signature": [],
         }
         return client.submit_tx(self.sign_tx(tx))
