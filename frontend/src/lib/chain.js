@@ -330,6 +330,10 @@ export function encodeOwnerOf(tokenId) {
   return SELECTORS.ownerOf + BigInt(tokenId).toString(16).padStart(64, '0')
 }
 
+export function encodeTransferFrom(from, to, tokenId) {
+  return SELECTORS.transferFrom + padAddr(from) + padAddr(to) + BigInt(tokenId).toString(16).padStart(64, '0')
+}
+
 export function encodeBridgePayload(destChain, recipient) {
   const text = `BRIDGE:${destChain}:${recipient}`
   return Array.from(new TextEncoder().encode(text))
@@ -382,18 +386,42 @@ export async function nftOwner(contract, tokenId, from) {
   return '0x' + raw.slice(-40)
 }
 
-export async function loadNftsFromChain(contract, viewer) {
-  const addr = viewer || walletAddress()
-  if (!contract || !addr) return []
-  const nfts = []
-  for (let id = 1; id <= 24; id++) {
-    try {
-      const owner = await nftOwner(contract, id, addr)
-      if (owner && owner.toLowerCase() !== '0x' + '0'.repeat(40)) {
-        nfts.push({ tokenId: id, owner, contract, name: `Token #${id}` })
+export async function loadNftsFromChain(contract, viewer, extraIds = []) {
+  if (!contract) return []
+  const caller = viewer || walletAddress() || '0x0000000000000000000000000000000000000001'
+  let maxId = 50
+  try {
+    const sup = await callContract(caller, contract, SELECTORS.totalSupply)
+    if (sup.success && sup.result) {
+      const total = Number(decodeUint256(sup.result))
+      if (Number.isFinite(total) && total > 0) {
+        maxId = Math.min(Math.max(total + 10, 50), 200)
       }
-    } catch {
-      break
+    }
+  } catch {
+    /* contract may not implement totalSupply */
+  }
+
+  const ids = new Set()
+  for (let id = 1; id <= maxId; id++) ids.add(id)
+  for (const id of extraIds) {
+    const n = Number(id)
+    if (Number.isFinite(n) && n >= 0) ids.add(n)
+  }
+
+  const allIds = Array.from(ids).sort((a, b) => a - b)
+  const nfts = []
+  const BATCH = 10
+  for (let i = 0; i < allIds.length; i += BATCH) {
+    const chunk = allIds.slice(i, i + BATCH)
+    const owners = await Promise.all(
+      chunk.map((id) => nftOwner(contract, id, caller).catch(() => null)),
+    )
+    for (let j = 0; j < chunk.length; j++) {
+      const owner = owners[j]
+      if (owner && owner.toLowerCase() !== '0x' + '0'.repeat(40)) {
+        nfts.push({ tokenId: chunk[j], owner, contract, name: `Token #${chunk[j]}` })
+      }
     }
   }
   return nfts
