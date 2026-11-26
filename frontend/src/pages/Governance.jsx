@@ -95,10 +95,10 @@ function mapProposals(raw, deposit) {
 function mapValidators(raw) {
   const vals = Array.isArray(raw) ? raw : raw?.validators || [];
   return vals.map(v => ({
-    address: Array.isArray(v.public_key) ? `0x${toHex(v.public_key)}` : v.public_key,
+    address: v.address || (Array.isArray(v.public_key) ? `0x${toHex(v.public_key)}` : v.public_key),
     publicKey: v.public_key,
     stake: String(v.stake || 0),
-    isActive: !v.slashed,
+    isActive: v.is_active !== false && !v.slashed && !v.jailed && !v.tombstoned,
   }));
 }
 
@@ -1046,10 +1046,10 @@ export default function Governance() {
   const [loading, setLoading] = useState(true);
   const [backendOnline, setBackendOnline] = useState(true);
   const [network, setNetwork] = useState(null);
-  const [proposals, setProposals] = useState(PROPOSALS_MOCK);
-  const [treasury, setTreasury] = useState(TREASURY_MOCK);
-  const [govParams, setGovParams] = useState(GOV_PARAMS_MOCK);
-  const [validators, setValidators] = useState(VALIDATORS_MOCK);
+  const [proposals, setProposals] = useState([]);
+  const [treasury, setTreasury] = useState({ balance: "0", totalCollected: "0", totalSpent: "0", recentTransactions: [] });
+  const [govParams, setGovParams] = useState({ votingPeriod: 300, quorum: 33.4, proposalDeposit: "0", maxActions: 10, timelockPeriod: 100, minVotingPower: "0" });
+  const [validators, setValidators] = useState([]);
   const [wallet, setWallet] = useState(null);
 
   const activeProposals = useMemo(() => proposals.filter(p => p.status === "Active"), [proposals]);
