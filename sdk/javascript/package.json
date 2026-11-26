@@ -1,5 +1,5 @@
 {
-  "name": "@modular-blockchain/sdk",
+  "name": "nebula-chain-sdk",
   "version": "1.0.0",
   "description": "Official TypeScript/JavaScript SDK for Modular Blockchain",
   "main": "dist/index.js",

@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nebula-sdk"
+name = "nebula-chain-sdk"
 version = "0.1.0"
 description = "Minimal Python client for the Nebula chain RPC"
 readme = "README.md"
