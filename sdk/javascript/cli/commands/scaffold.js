@@ -29,7 +29,7 @@ module.exports = async function scaffold(options) {
       "start": "tsx src/index.ts",
     },
     dependencies: {
-      "@modular-blockchain/sdk": "^1.0.0",
+      "nebula-chain-sdk": "^1.0.0",
       "hardhat": "^2.19.0",
     },
     devDependencies: {
@@ -81,7 +81,7 @@ contract ${name.replace(/-/g, "").replace(/^\w/, c => c.toUpperCase())} {
 
 async function main() {
   const Greeter = await ethers.getContractFactory("Greeter");
-  const greeter = await Greeter.deploy("Hello, Modular Blockchain!");
+  const greeter = await Greeter.deploy("Hello, Nebula Blockchain!");
   await greeter.waitForDeployment();
   console.log("Greeter deployed:", await greeter.getAddress());
 }
@@ -91,7 +91,7 @@ main().catch(console.error);
   fs.writeFileSync(path.join(outDir, "scripts", "deploy.ts"), deployScript);
 
   // SDK client entry
-  const sdkEntry = `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
+  const sdkEntry = `import { Wallet, HttpProvider, ModularClient } from "nebula-chain-sdk";
 import * as dotenv from "dotenv";
 
 dotenv.config();
@@ -103,7 +103,7 @@ async function main() {
   const client = new ModularClient(provider);
 
   const status = await client.getNodeStatus();
-  console.log("Connected to Modular Blockchain");
+  console.log("Connected to Nebula Blockchain");
   console.log("Block height:", status.height);
 
   // Interact with deployed contract

@@ -1,6 +1,6 @@
 # Validator Onboarding Guide
 
-This guide covers everything you need to know to run a validator on the Modular Blockchain testnet.
+This guide covers everything you need to know to run a validator on the Nebula Blockchain testnet. (For Render Blueprint multi-validator deployment, see [deployment/render/README.md](../deployment/render/README.md).)
 
 ---
 
@@ -71,7 +71,7 @@ This guide covers everything you need to know to run a validator on the Modular 
 
 ### Accounts
 - An account with at least 100,000 NBL for the validator stake
-- Testnet tokens available from the [faucet](https://faucet.testnet.modular-blockchain.io)
+- Testnet tokens available from the [Nebula Faucet](https://nebulafrontend.vercel.app/faucet)
 
 ---
 

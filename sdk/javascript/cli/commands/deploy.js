@@ -43,7 +43,7 @@ module.exports = async function deploy(options) {
 
   // Deploy via SDK
   try {
-    const { Wallet, HttpProvider, ModularClient } = require("@modular-blockchain/sdk");
+    const { Wallet, HttpProvider, ModularClient } = require("nebula-chain-sdk");
     const provider = new HttpProvider(rpcUrl);
     const client = new ModularClient(provider);
     const wallet = privateKey ? Wallet.fromPrivateKey(privateKey) : Wallet.generate();

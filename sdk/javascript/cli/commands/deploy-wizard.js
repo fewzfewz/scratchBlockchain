@@ -2,7 +2,7 @@ const fs = require("fs");
 const path = require("path");
 
 module.exports = async function deployWizard() {
-  console.log("\n📦 Modular Blockchain — Contract Deployment Wizard\n");
+  console.log("\n📦 Nebula Blockchain — Contract Deployment Wizard\n");
 
   // Step 1: Choose contract type
   console.log("Step 1: Select a contract template");

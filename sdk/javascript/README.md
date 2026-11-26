@@ -44,8 +44,8 @@ const out = await client.callWasm("counter", "increment", 1);
 
 ## CLI
 ```bash
-npx @modular-blockchain/sdk-cli wallet --generate
-npx @modular-blockchain/sdk-cli deploy --contract ERC20 --args "Token,TOK,1000000"
+npx nebula-chain-cli wallet --generate
+npx nebula-chain-cli deploy --contract ERC20 --args "Token,TOK,1000000"
 ```
 
 ## ModularClient API (selected)

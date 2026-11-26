@@ -25,7 +25,7 @@ module.exports = async function init(options) {
       test: "jest",
     },
     dependencies: {
-      "@modular-blockchain/sdk": "^1.0.0",
+      "nebula-chain-sdk": "^1.0.0",
       "dotenv": "^16.3.1",
     },
     devDependencies: {
@@ -83,7 +83,7 @@ module.exports = async function init(options) {
 };
 
 function getDefaultTemplate(name) {
-  return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
+  return `import { Wallet, HttpProvider, ModularClient } from "nebula-chain-sdk";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
@@ -92,7 +92,7 @@ async function main() {
   const client = new ModularClient(provider);
 
   const status = await client.getNodeStatus();
-  console.log("Connected to Modular Blockchain");
+  console.log("Connected to Nebula Blockchain");
   console.log("Height:", status.height);
   console.log("Peers:", status.peer_count);
 
@@ -106,7 +106,7 @@ main().catch(console.error);
 }
 
 function getDefiTemplate(name) {
-  return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
+  return `import { Wallet, HttpProvider, ModularClient } from "nebula-chain-sdk";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
@@ -127,7 +127,7 @@ main().catch(console.error);
 }
 
 function getNFTTemplate(name) {
-  return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
+  return `import { Wallet, HttpProvider, ModularClient } from "nebula-chain-sdk";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 
@@ -145,7 +145,7 @@ main().catch(console.error);
 }
 
 function getDAOTemplate(name) {
-  return `import { Wallet, HttpProvider, ModularClient } from "@modular-blockchain/sdk";
+  return `import { Wallet, HttpProvider, ModularClient } from "nebula-chain-sdk";
 
 const RPC_URL = process.env.RPC_URL || "http://localhost:8545";
 

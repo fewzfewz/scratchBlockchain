@@ -200,7 +200,7 @@ const result = await client.sendTransaction(tx);`} />
             <section>
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">CLI Tool</h2>
               <p className="text-slate-500 dark:text-slate-400 mb-6">Command-line tools for development and deployment.</p>
-              <CodeBlock lang="bash" code={'npm install -g @modular-blockchain/cli'} />
+              <CodeBlock lang="bash" code={'npm install -g nebula-chain-cli'} />
               <div className="grid md:grid-cols-3 gap-3">
                 {[
                   { cmd: 'modular init my-dapp --kit token', desc: 'Scaffold a new project from a template.' },

@@ -24,7 +24,7 @@ contract MyToken is ERC20 {
 
 Use the CLI to deploy:
 ```bash
-npx @modular-blockchain/sdk-cli deploy ERC20 --args "MyToken,MTK,1000000"
+npx nebula-chain-cli deploy ERC20 --args "MyToken,MTK,1000000"
 ```
 
 Or via the SDK:

@@ -1,8 +1,9 @@
 {
-  "name": "@modular-blockchain/sdk-cli",
+  "name": "nebula-chain-cli",
   "version": "1.0.0",
-  "description": "CLI for scaffolding, deploying, and managing Modular Blockchain projects",
+  "description": "CLI for scaffolding, deploying, and managing Nebula Blockchain projects",
   "bin": {
+    "nebula": "./bin/modular.js",
     "modular": "./bin/modular.js"
   },
   "scripts": {
@@ -11,7 +12,7 @@
   "keywords": ["blockchain", "modular", "cli", "scaffold"],
   "license": "MIT",
   "dependencies": {
-    "@modular-blockchain/sdk": "file:..",
+    "nebula-chain-sdk": "file:..",
     "axios": "^1.16.1",
     "chalk": "^5.6.2",
     "commander": "^11.1.0",

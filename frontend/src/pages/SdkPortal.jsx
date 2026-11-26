@@ -175,7 +175,7 @@ console.log("Tx hash:", receipt.hash);` },
                 {[
                   { icon: Package, title: 'nebula-chain-sdk (npm)', desc: 'TypeScript SDK with wallet management, transaction building, and providers.', tags: ['TypeScript', 'Node.js'], chip: 'from-blue-600 to-cyan-600', install: 'npm install nebula-chain-sdk' },
                   { icon: Package, title: 'nebula-chain-sdk (PyPI)', desc: 'Lightweight Python SDK for RPC queries, AI agents, and Ed25519 signing.', tags: ['Python', 'PyPI'], chip: 'from-emerald-600 to-teal-600', install: 'pip install nebula-chain-sdk' },
-                  { icon: Boxes, title: 'Smart Contract Templates', desc: 'Solidity templates for ERC-20, ERC-721, and DAO contracts in the repo.', tags: ['Solidity', 'Open Source'], chip: 'from-violet-600 to-purple-600', install: 'npx @modular-blockchain/sdk-cli' },
+                  { icon: Boxes, title: 'Smart Contract Templates', desc: 'Solidity templates for ERC-20, ERC-721, and DAO contracts in the repo.', tags: ['Solidity', 'Open Source'], chip: 'from-violet-600 to-purple-600', install: 'npx nebula-chain-cli' },
                 ].map(({ icon: Icon, title, desc, tags, chip, install }) => (
                   <div key={title} className="p-5 rounded-2xl glass-strong hover:-translate-y-0.5 hover:shadow-lg hover:shadow-blue-500/5 transition-all">
                     <div className="flex items-center gap-3 mb-4">
@@ -243,7 +243,7 @@ print("Agent address:", agent.address)
               <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2">CLI Tool</h2>
               <p className="text-slate-500 dark:text-slate-400 mb-6">Scaffold, deploy, and manage your dApps from the terminal.</p>
               <CodeBlock code={`# Install
-npm install -g @modular-blockchain/sdk-cli
+npm install -g nebula-chain-cli
 
 # Generate wallet
 modular wallet --generate

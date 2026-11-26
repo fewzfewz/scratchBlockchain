@@ -4,7 +4,7 @@ const { program } = require("commander");
 
 program
   .name("modular")
-  .description("Modular Blockchain Developer CLI")
+  .description("Nebula Blockchain Developer CLI")
   .version("1.0.0");
 
 program

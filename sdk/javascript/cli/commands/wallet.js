@@ -1,5 +1,5 @@
 module.exports = async function wallet(options) {
-  const { Wallet } = require("@modular-blockchain/sdk");
+  const { Wallet } = require("nebula-chain-sdk");
 
   if (options.generate) {
     const w = Wallet.generate();
