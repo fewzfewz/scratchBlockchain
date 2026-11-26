@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
 import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Sliders, Droplets, Plus, History, ArrowRight } from 'lucide-react'
 import { Page, PageHeader, Card, Field, Button, Notice, LiveBadge, Badge, EmptyState, Modal, inputClass, buttonClass } from '../components/ui.jsx'
-import { signTx, txHash } from '../lib/chain.js'
+import { getApiUrl, signTx, txHash } from '../lib/chain.js'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b }
@@ -29,7 +29,7 @@ const inputCls = inputClass
 const iconBtnCls = 'shrink-0 h-11 w-11 inline-flex items-center justify-center rounded-xl border border-slate-200 dark:border-slate-800 text-slate-500 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors'
 
 export default function WalletPage() {
-  const [apiUrl, setApiUrl] = useState(() => localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545')
+  const [apiUrl, setApiUrl] = useState(() => getApiUrl())
   const [keyPair, setKeyPair] = useState(null)
   const [pubKey, setPubKey] = useState('')
   const [address, setAddress] = useState('')

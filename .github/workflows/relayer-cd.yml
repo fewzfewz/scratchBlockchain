@@ -1,0 +1,90 @@
+name: Relayer CI/CD (Rust + Docker)
+
+on:
+  push:
+    branches: [main]
+    tags: ["relayer-v*"]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "common/**"
+      - "relayer/**"
+      - ".github/workflows/relayer-cd.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "common/**"
+      - "relayer/**"
+      - ".github/workflows/relayer-cd.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: relayer-cd-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt -p nebula-relayer -- --check
+
+      - name: Clippy (nebula-relayer)
+        run: cargo clippy -p nebula-relayer --all-targets -- -D warnings
+
+      - name: Test (nebula-relayer)
+        run: cargo test -p nebula-relayer
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/nebula-relayer
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}},prefix=relayer-v
+            type=sha,prefix=sha-
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: relayer/Dockerfile
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

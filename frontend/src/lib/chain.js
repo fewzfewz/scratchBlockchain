@@ -1,6 +1,7 @@
 import nacl from 'tweetnacl'
 
-export const getApiUrl = () => localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
+export const getApiUrl = () =>
+  localStorage.getItem('nebula_rpc_url') || import.meta.env.VITE_NEBULA_RPC || 'http://localhost:8545'
 
 export const toHex = (buf) =>
   Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('')

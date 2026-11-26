@@ -1,28 +1,30 @@
 # Multi-stage build for optimized Rust blockchain node
-FROM rust:1.90-slim as builder
+FROM rust:1.90-slim AS builder
 
 # Set non-interactive mode for apt
 ENV DEBIAN_FRONTEND=noninteractive
 
 WORKDIR /build
 
-# Copy only necessary files for building
-COPY Cargo.toml Cargo.lock ./
-COPY common/Cargo.toml common/Cargo.lock common/
-COPY storage/Cargo.toml storage/Cargo.lock storage/
-COPY consensus/Cargo.toml consensus/Cargo.lock consensus/
-COPY execution/Cargo.toml execution/Cargo.lock execution/
-COPY network/Cargo.toml network/Cargo.lock network/
-COPY mempool/Cargo.toml mempool/Cargo.lock mempool/
-COPY governance/Cargo.toml governance/Cargo.lock governance/
-COPY da/Cargo.toml da/Cargo.lock da/
-COPY mev/Cargo.toml mev/Cargo.lock mev/
-COPY interop/Cargo.toml interop/Cargo.lock interop/
-COPY zk/Cargo.toml zk/Cargo.lock zk/
-COPY runtime/Cargo.toml runtime/Cargo.lock runtime/
-COPY monitoring/Cargo.toml monitoring/Cargo.lock monitoring/
-COPY node/Cargo.toml node/Cargo.lock node/
-COPY tools/genesis-builder/Cargo.toml tools/genesis-builder/Cargo.lock tools/genesis-builder/
+# Copy workspace manifests (Cargo.lock is gitignored, so Cargo generates it at build time)
+COPY Cargo.toml ./
+COPY common/Cargo.toml common/
+COPY storage/Cargo.toml storage/
+COPY consensus/Cargo.toml consensus/
+COPY execution/Cargo.toml execution/
+COPY network/Cargo.toml network/
+COPY mempool/Cargo.toml mempool/
+COPY governance/Cargo.toml governance/
+COPY da/Cargo.toml da/
+COPY mev/Cargo.toml mev/
+COPY interop/Cargo.toml interop/
+COPY zk/Cargo.toml zk/
+COPY runtime/Cargo.toml runtime/
+COPY monitoring/Cargo.toml monitoring/
+COPY node/Cargo.toml node/
+COPY relayer/Cargo.toml relayer/
+COPY benchmarks/Cargo.toml benchmarks/
+COPY tools/genesis-builder/Cargo.toml tools/genesis-builder/
 COPY interop/fuzz/Cargo.toml interop/fuzz/
 COPY consensus/fuzz/Cargo.toml consensus/fuzz/
 
@@ -41,6 +43,9 @@ COPY zk/src zk/src/
 COPY runtime/src runtime/src/
 COPY monitoring/src monitoring/src/
 COPY node/src node/src/
+COPY relayer/src relayer/src/
+COPY benchmarks/src benchmarks/src/
+COPY benchmarks/benches benchmarks/benches/
 COPY tools/genesis-builder/src tools/genesis-builder/src/
 COPY interop/fuzz/fuzz_targets interop/fuzz/fuzz_targets/
 COPY consensus/fuzz/fuzz_targets consensus/fuzz/fuzz_targets/

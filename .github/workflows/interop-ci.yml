@@ -1,0 +1,40 @@
+name: Interop Contracts CI (Hardhat)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "interop/**"
+      - ".github/workflows/interop-ci.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "interop/**"
+      - ".github/workflows/interop-ci.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: interop-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hardhat:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: interop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Compile Solidity contracts
+        run: npx hardhat compile
+
+      - name: Run Hardhat tests
+        run: npx hardhat test

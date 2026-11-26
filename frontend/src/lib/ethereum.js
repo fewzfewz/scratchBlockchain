@@ -10,7 +10,7 @@ import {
 } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { mainnet, sepolia, hardhat } from 'viem/chains'
-import { adminHeaders } from './chain.js'
+import { adminHeaders, getApiUrl } from './chain.js'
 
 export const BRIDGE_ABI = [
   {
@@ -149,7 +149,7 @@ export async function fetchEthBlockNumber(rpcUrl) {
 }
 
 export async function requestNebulaMint({ recipient, amount, ethTxHash, ethRpcUrl, ethBridgeAddress }) {
-  const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
+  const base = getApiUrl()
   const r = await window.fetch(`${base}/bridge/mint`, {
     method: 'POST',
     headers: adminHeaders(),
@@ -167,7 +167,7 @@ export async function requestNebulaMint({ recipient, amount, ethTxHash, ethRpcUr
 }
 
 export async function fetchBridgeStatus() {
-  const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
+  const base = getApiUrl()
   const r = await window.fetch(`${base}/bridge/status`)
   if (!r.ok) throw new Error('Bridge status unavailable')
   return r.json()
@@ -175,7 +175,7 @@ export async function fetchBridgeStatus() {
 
 /** Relayer attestations pooled on the node for one Ethereum lock. */
 export async function fetchLockAttestations(ethTxHash) {
-  const base = localStorage.getItem('nebula_rpc_url') || 'http://localhost:8545'
+  const base = getApiUrl()
   const r = await window.fetch(`${base}/bridge/attestations/${ethTxHash}`)
   if (!r.ok) throw new Error('Attestation status unavailable')
   return r.json()
