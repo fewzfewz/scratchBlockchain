@@ -498,3 +498,16 @@ export async function mevCommit({ txHash, secret, sender, nonce }) {
   if (d.commitment && !d.commitment.startsWith('0x')) d.commitment = `0x${d.commitment}`
   return d
 }
+
+export async function mevReveal({ transaction, secret, commitment }) {
+  const r = await window.fetch(`${getApiUrl()}/mev/reveal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      transaction,
+      secret: secret.startsWith('0x') ? secret : `0x${secret}`,
+      commitment: commitment.startsWith('0x') ? commitment : `0x${commitment}`,
+    }),
+  })
+  return r.json()
+}

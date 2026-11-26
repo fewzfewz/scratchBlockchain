@@ -6,8 +6,14 @@ import {
   loadWalletKeyPair, signAndSubmit, waitForReceipt, walletAddress, shorten,
 } from '../lib/chain.js'
 
-/** Sample module: `(func (export "double") (param i32) (result i32) ...)` */
+/** Sample modules: stateless double(i32) and stateful counter inc(i32)/get(i32). */
 const SAMPLE_WASM = 'AGFzbQEAAAABBgFgAX8BfwMCAQAHCgEGZG91YmxlAAAKCQEHACAAQQJsCw=='
+const COUNTER_WASM = 'AGFzbQEAAAABCwJgAX8Bf2ACf38AAiUCA2VudgtzdG9yYWdlX2dldAAAA2VudgtzdG9yYWdlX3NldAABAwMCAAAHDQIDaW5jAAIDZ2V0AAMKHwIWAQF/QQAQACAAaiIBGkEAIAEQASABCwYAIAAQAAs='
+
+const PRESETS = {
+  double: { name: 'double-demo', wasm: SAMPLE_WASM, func: 'double', arg: '21' },
+  counter: { name: 'counter-demo', wasm: COUNTER_WASM, func: 'inc', arg: '1' },
+}
 
 function b64ToHex(b64) {
   const bin = atob(b64)
@@ -164,6 +170,14 @@ export default function WasmPage() {
       <div className="grid lg:grid-cols-2 gap-6 items-start">
         <Card title="Deploy a module" icon={Upload} description={hasWallet ? 'Signed with your wallet and stored on-chain.' : 'Uses node dev signer when no wallet is connected.'}>
           <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={() => {
+                setName(PRESETS.double.name); setWasmB64(PRESETS.double.wasm); setFunc(PRESETS.double.func); setArg(PRESETS.double.arg)
+              }}>Preset: Double</Button>
+              <Button type="button" variant="secondary" size="sm" onClick={() => {
+                setName(PRESETS.counter.name); setWasmB64(PRESETS.counter.wasm); setFunc(PRESETS.counter.func); setArg(PRESETS.counter.arg)
+              }}>Preset: Stateful Counter</Button>
+            </div>
             <Field label="Contract name"><input value={name} onChange={(e) => setName(e.target.value)} className={`${inputClass} font-mono`} /></Field>
             <Field label="Module (base64)" hint="Supports env.storage_get(i32)->i32 and env.storage_set(i32,i32).">
               <textarea value={wasmB64} onChange={(e) => setWasmB64(e.target.value)} rows={3} className={`${textareaClass} font-mono text-xs`} />
