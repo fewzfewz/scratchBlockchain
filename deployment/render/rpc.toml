@@ -1,0 +1,30 @@
+[network]
+chain_id = "modular-testnet-1"
+p2p_port = 26656
+rpc_port = 26657
+bootstrap_nodes = [
+  "/dns4/nebula-validator-1/tcp/26656",
+  "/dns4/nebula-validator-2/tcp/26656",
+  "/dns4/nebula-validator-3/tcp/26656",
+  "/dns4/nebula-validator-4/tcp/26656"
+]
+
+[consensus]
+block_time_ms = 3000
+
+[validator]
+enabled = false
+
+[storage]
+data_dir = "/data"
+
+[api]
+enabled = true
+address = "0.0.0.0:8545"
+cors_origins = ["*"]
+# Set NODE_API_DEV_MODE, NODE_API_ADMIN_TOKEN, and NODE_API_DEV_FUNDING_KEY in Render env vars
+dev_mode = true
+
+[metrics]
+enabled = true
+address = "0.0.0.0:9090"

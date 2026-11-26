@@ -1,0 +1,105 @@
+# Render Blueprint for a 4-validator Nebula BFT network + public RPC node.
+# Note: Private Services (pserv) and Persistent Disks require a paid Render plan (Starter+).
+# After deploying the Blueprint:
+#   1. Upload each validator's unique key as a Render Secret File at /data/validator_key.json
+#      matching the 4 public_keys in deployment/local/configs/genesis.json.
+#   2. Set NODE_API_ADMIN_TOKEN and (optionally) NODE_API_DEV_FUNDING_KEY on nebula-rpc.
+
+services:
+  - type: pserv
+    name: nebula-validator-1
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: start --config /etc/nebula/render/validator.toml --genesis /etc/nebula/multi-genesis.json
+    plan: starter
+    region: oregon
+    disk:
+      name: validator1-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: NODE_VALIDATOR_ENABLED
+        value: "true"
+
+  - type: pserv
+    name: nebula-validator-2
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: start --config /etc/nebula/render/validator.toml --genesis /etc/nebula/multi-genesis.json
+    plan: starter
+    region: oregon
+    disk:
+      name: validator2-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: NODE_VALIDATOR_ENABLED
+        value: "true"
+
+  - type: pserv
+    name: nebula-validator-3
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: start --config /etc/nebula/render/validator.toml --genesis /etc/nebula/multi-genesis.json
+    plan: starter
+    region: oregon
+    disk:
+      name: validator3-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: NODE_VALIDATOR_ENABLED
+        value: "true"
+
+  - type: pserv
+    name: nebula-validator-4
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: start --config /etc/nebula/render/validator.toml --genesis /etc/nebula/multi-genesis.json
+    plan: starter
+    region: oregon
+    disk:
+      name: validator4-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: RUST_LOG
+        value: info
+      - key: NODE_VALIDATOR_ENABLED
+        value: "true"
+
+  - type: web
+    name: nebula-rpc
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: start --config /etc/nebula/render/rpc.toml --genesis /etc/nebula/multi-genesis.json
+    plan: starter
+    region: oregon
+    healthCheckPath: /health
+    disk:
+      name: rpc-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: PORT
+        value: "8545"
+      - key: RUST_LOG
+        value: info
+      - key: NODE_VALIDATOR_ENABLED
+        value: "false"
+      - key: NODE_API_DEV_MODE
+        value: "true"
+      - key: NODE_API_ADMIN_TOKEN
+        sync: false
+      - key: NODE_API_DEV_FUNDING_KEY
+        sync: false
+      - key: ETH_RPC_URL
+        sync: false
+      - key: ETH_BRIDGE_ADDRESS
+        sync: false
