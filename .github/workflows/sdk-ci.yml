@@ -67,7 +67,7 @@ jobs:
         working-directory: sdk/javascript
 
       - name: Publish to npm
-        run: npm publish --access public
+        run: npm publish --access public --workspaces=false
         working-directory: sdk/javascript
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
