@@ -1,6 +1,7 @@
 import { useEffect, useState, lazy, Suspense } from 'react'
 import { Link } from 'react-router-dom'
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion } from 'framer-motion'
+import { TabGroup, TabList, Tab, TabPanels, TabPanel } from '@headlessui/react'
 import {
   Compass, Wallet, Droplets, Vote, BookOpen, FileCode, ArrowRight, Shield, Zap, Layers,
   Cpu, GitBranch, Image, Rocket, Package, FileJson, CheckCircle2, Timer, Network,
@@ -112,7 +113,7 @@ export default function Home() {
   const [validators, setValidators] = useState(null)
   const [baseFeeGwei, setBaseFeeGwei] = useState(null)
   const [blocks, setBlocks] = useState([])
-  const [activeTab, setActiveTab] = useState('js')
+  const [activeTab, setActiveTab] = useState(0)
   const [copiedCmd, setCopiedCmd] = useState(false)
   const hasWallet = !!walletAddress()
   const apiUrl = getApiUrl()
@@ -212,7 +213,7 @@ docker run -d -p 26656:26656 -p 8545:8545 \\
     },
   ]
 
-  const currentTab = devTabs.find((t) => t.id === activeTab) || devTabs[0]
+  const currentTab = devTabs[activeTab] || devTabs[0]
 
   const copyInstall = () => {
     navigator.clipboard.writeText(currentTab.install)
@@ -326,82 +327,80 @@ docker run -d -p 26656:26656 -p 8545:8545 \\
           transition={{ duration: 0.45 }}
           className="rounded-3xl glass-strong p-6 sm:p-8 border border-slate-200/80 dark:border-slate-800/90"
         >
-          <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-            <div>
-              <div className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 mb-1">
-                <Sparkles className="w-3.5 h-3.5" /> Developer &amp; Operator Stack
+          <TabGroup selectedIndex={activeTab} onChange={setActiveTab}>
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+              <div>
+                <div className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 mb-1">
+                  <Sparkles className="w-3.5 h-3.5" /> Developer &amp; Operator Stack
+                </div>
+                <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">Ship apps, AI agents, or validators in minutes</h2>
               </div>
-              <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">Ship apps, AI agents, or validators in minutes</h2>
-            </div>
 
-            <div className="flex flex-wrap gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800">
-              {devTabs.map(({ id, label, icon: Icon }) => {
-                const selected = id === activeTab
-                return (
-                  <button
+              <TabList className="flex flex-wrap gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800">
+                {devTabs.map(({ id, label, icon: Icon }) => (
+                  <Tab
                     key={id}
-                    type="button"
-                    onClick={() => setActiveTab(id)}
-                    className={`relative px-3.5 py-2 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
-                      selected ? 'text-white' : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
-                    }`}
+                    className={({ selected }) =>
+                      `relative px-3.5 py-2 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 outline-none transition-colors ${
+                        selected ? 'text-white' : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                      }`
+                    }
                   >
-                    {selected && (
-                      <motion.span
-                        layoutId="homeDevTab"
-                        transition={{ type: 'spring', stiffness: 420, damping: 32 }}
-                        className="absolute inset-0 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-500 shadow-sm"
-                      />
+                    {({ selected }) => (
+                      <>
+                        {selected && (
+                          <motion.span
+                            layoutId="homeDevTab"
+                            transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                            className="absolute inset-0 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-500 shadow-sm"
+                          />
+                        )}
+                        <Icon className="relative z-10 w-3.5 h-3.5" />
+                        <span className="relative z-10">{label}</span>
+                      </>
                     )}
-                    <Icon className="relative z-10 w-3.5 h-3.5" />
-                    <span className="relative z-10">{label}</span>
-                  </button>
-                )
-              })}
+                  </Tab>
+                ))}
+              </TabList>
             </div>
-          </div>
 
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={currentTab.id}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-              transition={{ duration: 0.2 }}
-              className="grid lg:grid-cols-[1fr_1.6fr] gap-5 items-stretch"
-            >
-              <div className="rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 p-5 flex flex-col justify-between gap-4">
-                <div>
-                  <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Package / Command</div>
-                  <div className="flex items-center justify-between gap-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3.5 py-2.5">
-                    <code className="text-xs sm:text-sm font-mono text-slate-800 dark:text-cyan-300 truncate">{currentTab.install}</code>
-                    <button
-                      type="button"
-                      onClick={copyInstall}
-                      className="shrink-0 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
-                      aria-label="Copy command"
-                    >
-                      {copiedCmd ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
-                    </button>
+            <TabPanels>
+              {devTabs.map((tab) => (
+                <TabPanel key={tab.id} className="grid lg:grid-cols-[1fr_1.6fr] gap-5 items-stretch outline-none">
+                  <div className="rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 p-5 flex flex-col justify-between gap-4">
+                    <div>
+                      <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Package / Command</div>
+                      <div className="flex items-center justify-between gap-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3.5 py-2.5">
+                        <code className="text-xs sm:text-sm font-mono text-slate-800 dark:text-cyan-300 truncate">{tab.install}</code>
+                        <button
+                          type="button"
+                          onClick={copyInstall}
+                          className="shrink-0 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
+                          aria-label="Copy command"
+                        >
+                          {copiedCmd ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                      <span className="text-xs text-slate-500 dark:text-slate-400">Live RPC: <code className="font-mono">{apiUrl}</code></span>
+                      <Link
+                        to={tab.ctaTo}
+                        className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 transition"
+                      >
+                        {tab.ctaLabel} <ArrowRight className="w-3.5 h-3.5" />
+                      </Link>
+                    </div>
                   </div>
-                </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
-                  <span className="text-xs text-slate-500 dark:text-slate-400">Live RPC: <code className="font-mono">{apiUrl}</code></span>
-                  <Link
-                    to={currentTab.ctaTo}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 transition"
-                  >
-                    {currentTab.ctaLabel} <ArrowRight className="w-3.5 h-3.5" />
-                  </Link>
-                </div>
-              </div>
-
-              <pre className="rounded-2xl bg-slate-950 text-slate-200 border border-slate-800 p-5 text-xs sm:text-sm font-mono overflow-x-auto leading-relaxed">
-                <code>{currentTab.code}</code>
-              </pre>
-            </motion.div>
-          </AnimatePresence>
+                  <pre className="rounded-2xl bg-slate-950 text-slate-200 border border-slate-800 p-5 text-xs sm:text-sm font-mono overflow-x-auto leading-relaxed">
+                    <code>{tab.code}</code>
+                  </pre>
+                </TabPanel>
+              ))}
+            </TabPanels>
+          </TabGroup>
         </motion.div>
       </section>
 
