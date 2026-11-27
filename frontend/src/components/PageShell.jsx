@@ -1,5 +1,9 @@
-// Page wrapper. The background glow lives on <body> (index.css), so pages
-// sit on one calm, static canvas instead of their own animated blobs.
+// Shared Web3 page wrapper with subtle cyber-grid backdrop across all routes.
 export default function PageShell({ children, className = '' }) {
-  return <div className={`relative min-h-screen ${className}`}>{children}</div>
+  return (
+    <div className={`relative min-h-screen overflow-x-hidden ${className}`}>
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-[560px] bg-grid opacity-80 dark:opacity-60" aria-hidden />
+      <div className="relative z-10">{children}</div>
+    </div>
+  )
 }

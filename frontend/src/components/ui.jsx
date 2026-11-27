@@ -1,6 +1,7 @@
 // Shared UI kit for the "Aurora" design system. Pages compose these instead
 // of hand-rolling headers, cards, inputs and buttons, so they stay consistent.
 import { Loader2, CheckCircle2, AlertCircle, Info, X } from 'lucide-react'
+import { motion } from 'framer-motion'
 import PageShell from './PageShell.jsx'
 
 export const inputClass =
@@ -42,25 +43,30 @@ export function Page({ children, width = 'max-w-6xl' }) {
 /** Left-aligned page header: eyebrow, title, description, actions. */
 export function PageHeader({ icon: Icon, eyebrow, title, description, actions, children }) {
   return (
-    <header className="flex flex-wrap items-end justify-between gap-6 mb-8">
+    <motion.header
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3 }}
+      className="flex flex-wrap items-end justify-between gap-6 mb-8 pb-6 border-b border-slate-200/70 dark:border-slate-800/80"
+    >
       <div className="min-w-0">
         {eyebrow && (
-          <div className="flex items-center gap-2 text-sm font-medium text-blue-600 dark:text-blue-300">
-            {Icon && <Icon className="w-4 h-4" />} {eyebrow}
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-blue-500/10 border border-blue-500/20 text-xs font-semibold uppercase tracking-wider text-blue-600 dark:text-cyan-400">
+            {Icon && <Icon className="w-3.5 h-3.5" />} {eyebrow}
           </div>
         )}
-        <h1 className="mt-2 text-3xl sm:text-4xl font-semibold text-slate-900 dark:text-white">{title}</h1>
-        {description && <p className="mt-2 text-slate-500 max-w-2xl">{description}</p>}
+        <h1 className="mt-3 text-3xl sm:text-4xl font-bold tracking-tight text-slate-900 dark:text-white">{title}</h1>
+        {description && <p className="mt-2 text-slate-500 dark:text-slate-400 max-w-2xl">{description}</p>}
         {children}
       </div>
       {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
-    </header>
+    </motion.header>
   )
 }
 
 export function Card({ title, description, actions, children, className = '', padded = true, icon: Icon }) {
   return (
-    <section className={`rounded-2xl glass-strong ${padded ? 'p-5 sm:p-6' : ''} ${className}`}>
+    <section className={`rounded-2xl glass-strong hover:border-cyan-500/25 transition-colors ${padded ? 'p-5 sm:p-6' : ''} ${className}`}>
       {(title || actions) && (
         <div className={`flex flex-wrap items-start justify-between gap-3 ${padded ? 'mb-4' : 'p-5 sm:p-6 pb-0 mb-4'}`}>
           <div className="min-w-0">
