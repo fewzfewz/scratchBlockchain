@@ -10,6 +10,7 @@ import {
 } from '../lib/chain.js'
 import simpleAmm from '../lib/simpleAmm.json'
 
+const DEFAULT_AMM_ADDRESS = import.meta.env.VITE_AMM_ADDRESS || '0xb65dba4b46bdaf9588904dedc58959fa4033e6cf'
 const isAddress = (a) => /^0x[a-fA-F0-9]{40}$/.test((a || '').trim())
 const u256Hex = (v) => BigInt(v).toString(16).padStart(64, '0')
 const AMM_SEL = {
@@ -43,7 +44,7 @@ export default function DeFiPage() {
   const [submitting, setSubmitting] = useState(false)
 
   // SimpleAMM state
-  const [ammAddress, setAmmAddress] = useState(() => localStorage.getItem('nebula_amm_address') || '')
+  const [ammAddress, setAmmAddress] = useState(() => localStorage.getItem('nebula_amm_address') || DEFAULT_AMM_ADDRESS)
   const [deployToken0, setDeployToken0] = useState('')
   const [deployToken1, setDeployToken1] = useState('')
   const [ammState, setAmmState] = useState({ token0: '', token1: '', reserve0: 0n, reserve1: 0n })
@@ -311,8 +312,15 @@ export default function DeFiPage() {
           <Card title="Swap via SimpleAMM" icon={Repeat}>
             <div className="space-y-4">
               <Field label="SimpleAMM contract" hint={ammState.token0 ? `Pair: ${shorten(ammState.token0, 6, 4)} / ${shorten(ammState.token1, 6, 4)}` : 'Paste an existing SimpleAMM address or deploy one on the right.'}>
-                <input value={ammAddress} onChange={(e) => { setAmmAddress(e.target.value); localStorage.setItem('nebula_amm_address', e.target.value) }}
-                  placeholder="0x…" className={`${inputClass} font-mono text-xs`} />
+                <div className="flex gap-2">
+                  <input value={ammAddress} onChange={(e) => { setAmmAddress(e.target.value); localStorage.setItem('nebula_amm_address', e.target.value) }}
+                    placeholder="0x…" className={`${inputClass} font-mono text-xs`} />
+                  {ammAddress.toLowerCase() !== DEFAULT_AMM_ADDRESS.toLowerCase() && (
+                    <Button type="button" variant="secondary" size="sm" onClick={() => { setAmmAddress(DEFAULT_AMM_ADDRESS); localStorage.setItem('nebula_amm_address', DEFAULT_AMM_ADDRESS) }}>
+                      Official Pool
+                    </Button>
+                  )}
+                </div>
               </Field>
               <Tabs value={ammDir} onChange={setAmmDir} tabs={[
                 { id: '0to1', label: 'Token0 → Token1' },
