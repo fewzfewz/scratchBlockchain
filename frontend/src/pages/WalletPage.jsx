@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import nacl from 'tweetnacl'
-import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Sliders, Droplets, Plus, History, ArrowRight } from 'lucide-react'
+import { Wallet, Key, Eye, EyeOff, Copy, RefreshCw, Trash2, Send, Settings, Sliders, Droplets, Plus, History, ArrowRight, Link2, GitBranch } from 'lucide-react'
 import { Page, PageHeader, Card, Field, Button, Notice, LiveBadge, Badge, EmptyState, Modal, inputClass, buttonClass } from '../components/ui.jsx'
 import { getApiUrl, signTx, txHash } from '../lib/chain.js'
+import { connectMetaMask, addAndSwitchNebulaChain } from '../lib/ethereum.js'
 
 const toHex = (buf) => Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 const fromHex = (hex) => { const b = new Uint8Array(hex.length / 2); for (let i = 0; i < hex.length; i += 2) b[i / 2] = parseInt(hex.substr(i, 2), 16); return b }
@@ -57,6 +58,44 @@ export default function WalletPage() {
   const [txHistory, setTxHistory] = useState([])
   const [showHistory] = useState(true)
   const [historyLoading, setHistoryLoading] = useState(false)
+
+  // External MetaMask / EIP-1193 wallet
+  const [mmAddress, setMmAddress] = useState('')
+  const [mmBalance, setMmBalance] = useState('0.0000')
+  const [mmStatus, setMmStatus] = useState({ type: 'info', text: '' })
+  const [mmBusy, setMmBusy] = useState(false)
+
+  const handleConnectMetaMask = async () => {
+    setMmBusy(true)
+    setMmStatus({ type: 'info', text: 'Connecting MetaMask…' })
+    try {
+      const { address: ethAddr } = await connectMetaMask()
+      setMmAddress(ethAddr)
+      const r = await window.fetch(`${apiUrl}/balance/${ethAddr.replace(/^0x/, '')}`)
+      if (r.ok) {
+        const d = await r.json()
+        setMmBalance(weiToNbl(d.balance || '0'))
+      }
+      setMmStatus({ type: 'ok', text: `Connected ${ethAddr.slice(0, 8)}…${ethAddr.slice(-4)}` })
+    } catch (e) {
+      setMmStatus({ type: 'err', text: e.message })
+    } finally {
+      setMmBusy(false)
+    }
+  }
+
+  const handleSwitchToNebula = async () => {
+    setMmBusy(true)
+    setMmStatus({ type: 'info', text: 'Adding Nebula (NBL) network in MetaMask…' })
+    try {
+      await addAndSwitchNebulaChain(1)
+      setMmStatus({ type: 'ok', text: 'MetaMask switched to Nebula (NBL)!' })
+    } catch (e) {
+      setMmStatus({ type: 'err', text: e.message })
+    } finally {
+      setMmBusy(false)
+    }
+  }
 
   // Tokens tab
 
@@ -404,15 +443,36 @@ export default function WalletPage() {
       )}
 
       {!keyPair ? (
-        <Card className="max-w-xl">
-          <div className="text-center py-6">
-            <div className="mx-auto w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 text-white flex items-center justify-center"><Wallet className="w-6 h-6" /></div>
-            <h2 className="mt-4 text-xl font-semibold text-slate-900 dark:text-white">Create your wallet</h2>
-            <p className="mt-2 text-sm text-slate-500 max-w-sm mx-auto">A new Ed25519 key pair is generated in your browser. Then get test NBL from the faucet and start sending.</p>
-            <Button icon={Plus} className="mt-6" onClick={() => { setNewAccountName(''); setShowNewAccount(true) }}>Generate a new wallet</Button>
-          </div>
-          <Notice type="ok" className="mt-2">{status}</Notice>
-        </Card>
+        <div className="grid md:grid-cols-2 gap-6 max-w-4xl">
+          <Card>
+            <div className="text-center py-6">
+              <div className="mx-auto w-12 h-12 rounded-2xl bg-gradient-to-br from-blue-600 to-cyan-600 text-white flex items-center justify-center"><Wallet className="w-6 h-6" /></div>
+              <h2 className="mt-4 text-xl font-semibold text-slate-900 dark:text-white">Create Nebula wallet</h2>
+              <p className="mt-2 text-sm text-slate-500 max-w-sm mx-auto">Generates an Ed25519 key pair in your browser for native transfers, staking, and governance.</p>
+              <Button icon={Plus} className="mt-6" onClick={() => { setNewAccountName(''); setShowNewAccount(true) }}>Generate a new wallet</Button>
+            </div>
+            <Notice type="ok" className="mt-2">{status}</Notice>
+          </Card>
+          <Card title="Or connect MetaMask (NBL)" icon={Link2} description="Switch MetaMask to Nebula (NBL), check balance, or bridge ETH → NBL.">
+            <div className="space-y-3 py-2">
+              {mmAddress && (
+                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-1">
+                  <div className="flex justify-between text-xs"><span className="text-slate-500">Account</span><span className="font-mono">{mmAddress.slice(0, 8)}…{mmAddress.slice(-6)}</span></div>
+                  <div className="flex justify-between text-xs"><span className="text-slate-500">Balance</span><span className="font-mono font-semibold text-cyan-500">{mmBalance} NBL</span></div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <Button type="button" size="sm" icon={Link2} loading={mmBusy} onClick={handleConnectMetaMask}>{mmAddress ? 'Refresh' : 'Connect MetaMask'}</Button>
+                <Button type="button" variant="secondary" size="sm" icon={RefreshCw} loading={mmBusy} onClick={handleSwitchToNebula}>Switch to NBL</Button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <Link to="/faucet" className={buttonClass('secondary', 'sm')}><Droplets className="w-3.5 h-3.5" /> Free NBL</Link>
+                <Link to="/bridge" className={buttonClass('secondary', 'sm')}><GitBranch className="w-3.5 h-3.5" /> Bridge ETH→NBL</Link>
+              </div>
+              <Notice type={mmStatus.type}>{mmStatus.text}</Notice>
+            </div>
+          </Card>
+        </div>
       ) : (
         <div className="grid lg:grid-cols-[1.3fr_1fr] gap-6">
           <div className="space-y-6">
@@ -511,6 +571,39 @@ export default function WalletPage() {
                   </div>
                 </Field>
                 <Notice type="warn">Keys live in this browser's local storage — fine for a devnet, never for real funds.</Notice>
+              </div>
+            </Card>
+
+            <Card title="MetaMask & External Wallets (NBL)" icon={Link2} description="Connect MetaMask, switch native coin to NBL, or bridge ETH if you have 0 NBL.">
+              <div className="space-y-3">
+                {mmAddress ? (
+                  <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 space-y-1.5">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500">MetaMask Account</span>
+                      <span className="font-mono text-slate-900 dark:text-white">{mmAddress.slice(0, 8)}…{mmAddress.slice(-6)}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-slate-500">Nebula Balance</span>
+                      <span className="font-mono font-semibold text-cyan-600 dark:text-cyan-400">{mmBalance} NBL</span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-500">Connect MetaMask to switch its network to Nebula (NBL), check your NBL balance, or bridge ETH → NBL.</p>
+                )}
+                <div className="grid grid-cols-2 gap-2">
+                  <Button type="button" size="sm" icon={Link2} loading={mmBusy} onClick={handleConnectMetaMask}>
+                    {mmAddress ? 'Refresh MetaMask' : 'Connect MetaMask'}
+                  </Button>
+                  <Button type="button" variant="secondary" size="sm" icon={RefreshCw} loading={mmBusy} onClick={handleSwitchToNebula}>
+                    Switch to NBL
+                  </Button>
+                </div>
+                <div className="grid grid-cols-2 gap-2 pt-1">
+                  <Link to="/faucet" className={buttonClass('secondary', 'sm')}><Droplets className="w-3.5 h-3.5" /> Free NBL</Link>
+                  <Link to="/bridge" className={buttonClass('secondary', 'sm')}><GitBranch className="w-3.5 h-3.5" /> Bridge ETH→NBL</Link>
+                </div>
+                <p className="text-[11px] text-slate-500">Note: Native staking &amp; consensus transactions use Ed25519 keys (above). MetaMask works for receiving NBL, bridging ETH → NBL, and EVM contracts.</p>
+                <Notice type={mmStatus.type}>{mmStatus.text}</Notice>
               </div>
             </Card>
 

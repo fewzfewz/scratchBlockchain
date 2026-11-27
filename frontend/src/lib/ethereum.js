@@ -180,3 +180,34 @@ export async function fetchLockAttestations(ethTxHash) {
   if (!r.ok) throw new Error('Attestation status unavailable')
   return r.json()
 }
+
+/** Add or switch MetaMask / EIP-1193 wallet to the Nebula (NBL) network. */
+export async function addAndSwitchNebulaChain(chainIdDec = 1) {
+  if (!window.ethereum) throw new Error('MetaMask or an EIP-1193 wallet is not installed')
+  const chainIdHex = '0x' + Number(chainIdDec).toString(16)
+  const rpcUrl = getApiUrl()
+  try {
+    await window.ethereum.request({
+      method: 'wallet_addEthereumChain',
+      params: [
+        {
+          chainId: chainIdHex,
+          chainName: 'Nebula Blockchain',
+          nativeCurrency: { name: 'Nebula', symbol: 'NBL', decimals: 18 },
+          rpcUrls: [rpcUrl],
+          blockExplorerUrls: [`${window.location.origin}/explorer`],
+        },
+      ],
+    })
+  } catch (err) {
+    if (err?.code === 4902 || /already/i.test(err?.message || '')) {
+      await window.ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: chainIdHex }],
+      })
+    } else {
+      throw err
+    }
+  }
+  return { chainId: chainIdDec, rpcUrl }
+}

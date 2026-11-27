@@ -238,6 +238,39 @@ address = "0.0.0.0:9090"
           )}
         </>} />
 
+      <Card
+        title="How to test & become a validator (Quick Guide)"
+        icon={BookOpen}
+        className="mb-6"
+        description="New to Nebula? Follow these 3 steps to get test NBL, launch your node, and start earning rewards."
+      >
+        <div className="grid md:grid-cols-3 gap-4 mb-4">
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200/80 dark:border-slate-800">
+            <div className="text-xs font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 mb-1">1. Get Wallet &amp; NBL</div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Create a Nebula wallet on <Link to="/wallet" className="underline font-medium">/wallet</Link> (or connect MetaMask to switch to NBL / bridge ETH on <Link to="/bridge" className="underline font-medium">/bridge</Link>), then claim free test NBL on <Link to="/faucet" className="underline font-medium">/faucet</Link> (min <strong>1 NBL</strong> stake).
+            </p>
+          </div>
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200/80 dark:border-slate-800">
+            <div className="text-xs font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 mb-1">2. Start Your Node</div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Download <code className="font-mono">validator_key.json</code> and <code className="font-mono">validator.toml</code> below, then run the Docker command with ports <code className="font-mono">26656</code> &amp; <code className="font-mono">8545</code> open before registering.
+            </p>
+          </div>
+          <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200/80 dark:border-slate-800">
+            <div className="text-xs font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 mb-1">3. Register &amp; Earn</div>
+            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+              Submit <strong>Register my wallet as validator</strong> below. You join at the next epoch and earn block rewards + gas fees + delegator commission.
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link to="/wallet" className={buttonClass('secondary', 'sm')}>Open Wallet / MetaMask</Link>
+          <Link to="/faucet" className={buttonClass('secondary', 'sm')}>Claim Free NBL</Link>
+          <Link to="/bridge" className={buttonClass('secondary', 'sm')}>Bridge ETH → NBL</Link>
+        </div>
+      </Card>
+
       <div className="grid lg:grid-cols-2 gap-6 mb-6 items-start">
         <Card title="Pre-flight checks" icon={Activity} description={getApiUrl()}
           actions={<Button variant="ghost" size="sm" icon={RefreshCw} loading={loading} onClick={runChecks}>Run checks</Button>}>
