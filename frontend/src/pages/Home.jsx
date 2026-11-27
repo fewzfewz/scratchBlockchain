@@ -1,9 +1,10 @@
 import { useEffect, useState, lazy, Suspense } from 'react'
 import { Link } from 'react-router-dom'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   Compass, Wallet, Droplets, Vote, BookOpen, FileCode, ArrowRight, Shield, Zap, Layers,
   Cpu, GitBranch, Image, Rocket, Package, FileJson, CheckCircle2, Timer, Network,
-  Sparkles, Terminal, Activity, Copy, Check,
+  Sparkles, Terminal, Activity, Copy, Check, Bot, Coins,
 } from 'lucide-react'
 import PageShell from '../components/PageShell.jsx'
 import { getApiUrl, walletAddress, shorten } from '../lib/chain.js'
@@ -12,12 +13,54 @@ import { getApiUrl, walletAddress, shorten } from '../lib/chain.js'
 const BlockchainScene = lazy(() => import('../components/BlockchainScene.jsx'))
 
 const PRODUCTS = [
-  { to: '/explorer', icon: Compass, title: 'Live Explorer', desc: 'Inspect finalized blocks, transactions, validators, and state in real time.', tag: 'Real-time' },
-  { to: '/validators', icon: Shield, title: 'Staking & Validators', desc: 'Delegate NBL or onboard a validator node to earn block rewards and fees.', tag: 'Earn Yield' },
-  { to: '/defi', icon: Layers, title: 'DeFi & SimpleAMM', desc: 'Deploy pools, provide liquidity, and swap tokens with sub-second finality.', tag: 'AMM DEX' },
-  { to: '/bridge', icon: GitBranch, title: 'Ethereum Bridge', desc: 'Lock ETH and mint NBL via 2-of-3 independent relayer attestations.', tag: 'Cross-chain' },
-  { to: '/deploy', icon: Rocket, title: 'EVM & WASM Deploy', desc: 'Ship Solidity ERC-20/721 contracts or high-speed Rust/WASM modules.', tag: 'Dual VM' },
-  { to: '/governance', icon: Vote, title: 'On-Chain Governance', desc: 'Create proposals, vote with staked NBL, and execute treasury grants.', tag: 'DAO' },
+  {
+    to: '/explorer',
+    icon: Compass,
+    title: 'Live Explorer',
+    desc: 'Inspect finalized blocks, transactions, validators, and state roots in real time.',
+    tag: 'Real-time',
+    chip: 'from-blue-600 to-cyan-500',
+  },
+  {
+    to: '/validators',
+    icon: Shield,
+    title: 'Staking & Validators',
+    desc: 'Delegate NBL or run a validator node to earn block rewards and gas fees.',
+    tag: 'Earn Yield',
+    chip: 'from-emerald-600 to-teal-500',
+  },
+  {
+    to: '/defi',
+    icon: Layers,
+    title: 'DeFi & SimpleAMM',
+    desc: 'Deploy liquidity pools, provide tokens, and swap with sub-second finality.',
+    tag: 'AMM DEX',
+    chip: 'from-violet-600 to-indigo-500',
+  },
+  {
+    to: '/bridge',
+    icon: GitBranch,
+    title: 'Ethereum Bridge',
+    desc: 'Lock ETH and mint NBL via 2-of-3 independent relayer attestations.',
+    tag: 'Cross-chain',
+    chip: 'from-amber-500 to-orange-500',
+  },
+  {
+    to: '/deploy',
+    icon: Rocket,
+    title: 'EVM & WASM Deploy',
+    desc: 'Ship Solidity ERC-20/721 contracts or high-speed Rust/WASM modules.',
+    tag: 'Dual VM',
+    chip: 'from-fuchsia-600 to-pink-500',
+  },
+  {
+    to: '/governance',
+    icon: Vote,
+    title: 'On-Chain Governance',
+    desc: 'Propose upgrades, vote with staked NBL, and execute treasury grants.',
+    tag: 'DAO',
+    chip: 'from-sky-600 to-blue-500',
+  },
 ]
 
 const MORE = [
@@ -40,34 +83,27 @@ const FACTS = [
 const fmt = (v) => (v == null ? '—' : Number(v).toLocaleString())
 const hex = (bytes) => (Array.isArray(bytes) ? '0x' + bytes.map((b) => b.toString(16).padStart(2, '0')).join('') : '')
 
+const fadeUp = {
+  hidden: { opacity: 0, y: 18 },
+  visible: (i = 0) => ({
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.45, delay: i * 0.06, ease: [0.22, 1, 0.36, 1] },
+  }),
+}
+
 function StatCard({ label, value, accent }) {
   return (
-    <div className="rounded-2xl glass px-4 py-3.5 border border-slate-200/70 dark:border-slate-800/80">
+    <motion.div
+      whileHover={{ y: -2 }}
+      transition={{ type: 'spring', stiffness: 360, damping: 26 }}
+      className="rounded-2xl glass px-4 py-3.5 border border-slate-200/70 dark:border-slate-800/80"
+    >
       <div className="text-[11px] uppercase tracking-wider text-slate-500 dark:text-slate-400">{label}</div>
       <div className={`mt-1 font-display text-2xl font-semibold tabular-nums ${accent || 'text-slate-900 dark:text-white'}`}>
         {value}
       </div>
-    </div>
-  )
-}
-
-function CopySnippet({ label, cmd }) {
-  const [copied, setCopied] = useState(false)
-  return (
-    <div className="flex items-center justify-between gap-3 rounded-xl bg-slate-900/5 dark:bg-slate-950/70 border border-slate-200 dark:border-slate-800 px-3.5 py-2.5">
-      <div className="min-w-0">
-        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-semibold">{label}</div>
-        <code className="block truncate text-xs sm:text-sm font-mono text-slate-800 dark:text-cyan-300">{cmd}</code>
-      </div>
-      <button
-        type="button"
-        onClick={() => { navigator.clipboard.writeText(cmd); setCopied(true); setTimeout(() => setCopied(false), 1800) }}
-        className="shrink-0 p-1.5 rounded-lg hover:bg-slate-200/70 dark:hover:bg-slate-800 text-slate-500 dark:text-slate-400 transition-colors"
-        aria-label={`Copy ${label}`}
-      >
-        {copied ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
-      </button>
-    </div>
+    </motion.div>
   )
 }
 
@@ -76,18 +112,20 @@ export default function Home() {
   const [validators, setValidators] = useState(null)
   const [baseFeeGwei, setBaseFeeGwei] = useState(null)
   const [blocks, setBlocks] = useState([])
+  const [activeTab, setActiveTab] = useState('js')
+  const [copiedCmd, setCopiedCmd] = useState(false)
   const hasWallet = !!walletAddress()
+  const apiUrl = getApiUrl()
 
   useEffect(() => {
     let active = true
     const load = async () => {
-      const api = getApiUrl()
       try {
         const [sr, vr, br, gr] = await Promise.all([
-          window.fetch(`${api}/status`),
-          window.fetch(`${api}/validators`),
-          window.fetch(`${api}/block/latest`),
-          window.fetch(`${api}/gas_price`).catch(() => null),
+          window.fetch(`${apiUrl}/status`),
+          window.fetch(`${apiUrl}/validators`),
+          window.fetch(`${apiUrl}/block/latest`),
+          window.fetch(`${apiUrl}/gas_price`).catch(() => null),
         ])
         const [sd, vd, bd] = await Promise.all([sr.json(), vr.json(), br.json()])
         const gd = gr && gr.ok ? await gr.json().catch(() => null) : null
@@ -101,7 +139,7 @@ export default function Home() {
         const recent = await Promise.all(
           Array.from({ length: 6 }, (_, i) => latest - i)
             .filter((s) => s >= 0)
-            .map((s) => window.fetch(`${api}/block/${s}`).then((r) => r.json()).then((d) => d.block).catch(() => null)),
+            .map((s) => window.fetch(`${apiUrl}/block/${s}`).then((r) => r.json()).then((d) => d.block).catch(() => null)),
         )
         if (active) setBlocks(recent.filter(Boolean))
       } catch {
@@ -111,99 +149,260 @@ export default function Home() {
     load()
     const t = setInterval(load, 4000)
     return () => { active = false; clearInterval(t) }
-  }, [])
+  }, [apiUrl])
 
   const online = status?.online
+
+  const devTabs = [
+    {
+      id: 'js',
+      label: 'JavaScript SDK',
+      icon: Package,
+      install: 'npm install nebula-chain-sdk',
+      ctaTo: '/sdk',
+      ctaLabel: 'Explore JS SDK',
+      code: `import { NebulaClient, HttpProvider, Wallet, parseNbl } from "nebula-chain-sdk";
+
+const client = new NebulaClient(new HttpProvider("${apiUrl}"));
+const wallet = Wallet.generate();
+const tx = await wallet.signTransaction({ to: "0x...", value: parseNbl("1.5") });
+const receipt = await client.sendTransaction(tx);`,
+    },
+    {
+      id: 'py',
+      label: 'Python & AI Agents',
+      icon: Bot,
+      install: 'pip install "nebula-chain-sdk[signing]"',
+      ctaTo: '/sdk',
+      ctaLabel: 'Explore Python SDK',
+      code: `from nebula import NebulaClient, Wallet
+
+client = NebulaClient("${apiUrl}")
+print("Height:", client.status()["height"])
+
+agent = Wallet.generate()
+client.faucet(agent.address)
+agent.send_nbl(client, to="0x...", amount_nbl=0.25)`,
+    },
+    {
+      id: 'cli',
+      label: 'Developer CLI',
+      icon: Terminal,
+      install: 'npm install -g nebula-chain-cli',
+      ctaTo: '/deploy',
+      ctaLabel: 'Deploy Contracts',
+      code: `# Scaffold, generate a wallet, and deploy an ERC-20 token
+npx nebula-chain-cli wallet --generate
+npx nebula-chain-cli init --template defi --name my-nebula-app
+npx nebula-chain-cli deploy --contract ERC20 --args "NebulaToken,NBT,1000000"`,
+    },
+    {
+      id: 'stake',
+      label: 'Validator & Yield',
+      icon: Coins,
+      install: 'nebula-testnet-1 · BFT Consensus',
+      ctaTo: '/validators/onboard',
+      ctaLabel: 'Run a Validator',
+      code: `# 1. Claim test NBL on /faucet and generate your validator key
+# 2. Register on-chain via /validators/onboard (min 1 NBL stake)
+# 3. Run your node and earn block rewards + gas fee share:
+docker run -d -p 26656:26656 -p 8545:8545 \\
+  -v ./validator_key.json:/data/validator_key.json \\
+  ghcr.io/fewzfewz/nebula-node:main`,
+    },
+  ]
+
+  const currentTab = devTabs.find((t) => t.id === activeTab) || devTabs[0]
+
+  const copyInstall = () => {
+    navigator.clipboard.writeText(currentTab.install)
+    setCopiedCmd(true)
+    setTimeout(() => setCopiedCmd(false), 1800)
+  }
 
   return (
     <PageShell>
       {/* ── Hero ─────────────────────────────────────────────────── */}
-      <section className="max-w-7xl mx-auto px-4 pt-12 lg:pt-20 pb-14 grid lg:grid-cols-[1.2fr_1fr] gap-10 items-center">
-        <div>
-          <div className="inline-flex items-center gap-2 h-8 px-3.5 rounded-full glass border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 mb-6">
+      <section className="relative max-w-7xl mx-auto px-4 pt-12 lg:pt-20 pb-14 grid lg:grid-cols-[1.15fr_1fr] gap-10 items-center">
+        <motion.div initial="hidden" animate="visible" variants={fadeUp}>
+          <motion.div
+            custom={0}
+            variants={fadeUp}
+            className="inline-flex items-center gap-2 h-8 px-3.5 rounded-full glass border border-slate-200 dark:border-slate-800 text-xs font-medium text-slate-700 dark:text-slate-200 mb-6"
+          >
             <span className={`w-2 h-2 rounded-full ${online ? 'bg-emerald-400 animate-pulse-dot' : status ? 'bg-rose-400' : 'bg-slate-400'}`} />
             {online
               ? <>Nebula Testnet Live <span className="text-slate-400">·</span> <span className="font-mono text-cyan-600 dark:text-cyan-400">Block #{fmt(status.height)}</span></>
               : status ? 'RPC Offline — reconnecting' : 'Connecting to Nebula RPC…'}
-          </div>
+          </motion.div>
 
-          <h1 className="text-4xl sm:text-5xl xl:text-[3.75rem] font-bold tracking-tight leading-[1.06] text-slate-900 dark:text-white">
+          <motion.h1
+            custom={1}
+            variants={fadeUp}
+            className="text-4xl sm:text-5xl xl:text-[3.75rem] font-bold tracking-tight leading-[1.06] text-slate-900 dark:text-white"
+          >
             The Modular Chain<br />
             <span className="text-aurora">Built for Speed &amp; Yield.</span>
-          </h1>
+          </motion.h1>
 
-          <p className="mt-5 text-base sm:text-lg text-slate-600 dark:text-slate-300 max-w-xl leading-relaxed">
+          <motion.p
+            custom={2}
+            variants={fadeUp}
+            className="mt-5 text-base sm:text-lg text-slate-600 dark:text-slate-300 max-w-xl leading-relaxed"
+          >
             Sub-second BFT finality, dual EVM + WASM smart contracts, an on-chain AMM, and published JavaScript &amp; Python SDKs — all connected live to the Nebula network.
-          </p>
+          </motion.p>
 
-          <div className="mt-7 flex flex-wrap gap-3">
-            <Link to="/wallet" className="group inline-flex items-center gap-2 h-11 px-5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white text-sm font-semibold shadow-lg shadow-blue-600/25 hover:opacity-95 transition">
+          <motion.div custom={3} variants={fadeUp} className="mt-7 flex flex-wrap gap-3">
+            <Link
+              to="/wallet"
+              className="group inline-flex items-center gap-2 h-11 px-5 rounded-xl bg-gradient-to-r from-blue-600 to-cyan-500 text-white text-sm font-semibold shadow-lg shadow-blue-600/25 hover:opacity-95 transition"
+            >
               <Wallet className="w-4 h-4" /> {hasWallet ? 'Open Wallet' : 'Create Wallet'}
               <ArrowRight className="w-4 h-4 group-hover:translate-x-0.5 transition-transform" />
             </Link>
-            <Link to="/faucet" className="inline-flex items-center gap-2 h-11 px-5 rounded-xl glass text-sm font-semibold text-slate-900 dark:text-white hover:border-cyan-400/50 transition">
-              <Droplets className="w-4 h-4 text-cyan-500" /> Get Free NBL
+            <Link
+              to="/faucet"
+              className="inline-flex items-center gap-2 h-11 px-5 rounded-xl glass text-sm font-semibold text-slate-900 dark:text-white hover:border-cyan-400/50 transition"
+            >
+              <Droplets className="w-4 h-4 text-cyan-500" /> Claim Free NBL
             </Link>
-            <Link to="/sdk" className="inline-flex items-center gap-2 h-11 px-5 rounded-xl glass text-sm font-semibold text-slate-900 dark:text-white hover:border-blue-400/50 transition">
-              <Terminal className="w-4 h-4 text-blue-500" /> Developer SDKs
+            <Link
+              to="/validators/onboard"
+              className="inline-flex items-center gap-2 h-11 px-5 rounded-xl glass text-sm font-semibold text-slate-900 dark:text-white hover:border-emerald-400/50 transition"
+            >
+              <Shield className="w-4 h-4 text-emerald-500" /> Run Validator
             </Link>
-          </div>
+          </motion.div>
 
-          <div className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl">
+          <motion.div custom={4} variants={fadeUp} className="mt-8 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl">
             <StatCard label="Block Height" value={fmt(status?.height)} accent="text-cyan-600 dark:text-cyan-400" />
             <StatCard label="Validators" value={fmt(validators)} />
             <StatCard label="Base Fee" value={baseFeeGwei != null ? `${baseFeeGwei} gwei` : '—'} />
             <StatCard label="Mempool" value={fmt(status?.mempool_size)} />
-          </div>
-        </div>
+          </motion.div>
+        </motion.div>
 
-        <div className="relative h-[360px] lg:h-[460px] rounded-3xl glass-strong aurora-border overflow-hidden shadow-2xl shadow-blue-500/10">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.97 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ duration: 0.55, ease: [0.22, 1, 0.36, 1] }}
+          className="relative h-[380px] lg:h-[470px] rounded-3xl glass-strong aurora-border overflow-hidden shadow-2xl shadow-blue-500/10"
+        >
           <Suspense fallback={<div className="absolute inset-0 animate-pulse bg-slate-100 dark:bg-slate-900" />}>
             <BlockchainScene className="absolute inset-0" />
           </Suspense>
 
           <div className="absolute top-4 left-4 right-4 flex items-center justify-between pointer-events-none">
-            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/80 dark:bg-slate-950/75 backdrop-blur border border-slate-200/70 dark:border-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-200">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-white/85 dark:bg-slate-950/80 backdrop-blur border border-slate-200/70 dark:border-slate-800 text-[11px] font-medium text-slate-700 dark:text-slate-200">
               <Activity className="w-3.5 h-3.5 text-emerald-500" />
               {online ? `Finalized #${fmt(status?.finalized_height ?? status?.height)}` : 'Awaiting RPC'}
             </span>
-            <span className="px-3 py-1 rounded-full bg-white/80 dark:bg-slate-950/75 backdrop-blur border border-slate-200/70 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-300">
+            <span className="px-3 py-1 rounded-full bg-white/85 dark:bg-slate-950/80 backdrop-blur border border-slate-200/70 dark:border-slate-800 text-[11px] font-mono text-slate-600 dark:text-slate-300">
               Chain ID: {status?.chain_id ?? 1}
             </span>
           </div>
 
-          <div className="absolute bottom-0 inset-x-0 p-5 bg-gradient-to-t from-white/95 via-white/70 dark:from-slate-950/95 dark:via-slate-950/70 to-transparent">
+          <div className="absolute bottom-0 inset-x-0 p-5 bg-gradient-to-t from-white/95 via-white/75 dark:from-slate-950/95 dark:via-slate-950/75 to-transparent">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <div className="text-xs font-semibold text-slate-900 dark:text-white">Live BFT Consensus Ring</div>
-                <div className="text-xs text-slate-500 dark:text-slate-400">EVM + WASM execution · Deterministic finality</div>
+                <div className="text-xs font-semibold text-slate-900 dark:text-white">Interactive 3D Consensus Core</div>
+                <div className="text-xs text-slate-500 dark:text-slate-400">Drag to orbit · BFT validator ring &amp; execution layers</div>
               </div>
               <Link to="/explorer" className="shrink-0 inline-flex items-center gap-1 text-xs font-semibold text-blue-600 dark:text-cyan-400 hover:underline">
                 Explorer <ArrowRight className="w-3.5 h-3.5" />
               </Link>
             </div>
           </div>
-        </div>
+        </motion.div>
       </section>
 
-      {/* ── Live SDK Install Bar ─────────────────────────────────── */}
-      <section className="max-w-7xl mx-auto px-4 pb-14">
-        <div className="rounded-2xl glass-strong p-5 sm:p-6 border border-slate-200/70 dark:border-slate-800/80">
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-cyan-500" />
-              <h2 className="text-sm font-semibold text-slate-900 dark:text-white">Build on Nebula in seconds with published SDKs</h2>
+      {/* ── Interactive Developer & Earning Showcase ─────────────── */}
+      <section className="max-w-7xl mx-auto px-4 pb-16">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.2 }}
+          transition={{ duration: 0.45 }}
+          className="rounded-3xl glass-strong p-6 sm:p-8 border border-slate-200/80 dark:border-slate-800/90"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
+            <div>
+              <div className="inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-cyan-600 dark:text-cyan-400 mb-1">
+                <Sparkles className="w-3.5 h-3.5" /> Developer &amp; Operator Stack
+              </div>
+              <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">Ship apps, AI agents, or validators in minutes</h2>
             </div>
-            <Link to="/sdk" className="text-xs font-semibold text-blue-600 dark:text-cyan-400 hover:underline inline-flex items-center gap-1">
-              Full SDK &amp; AI-Agent Guide <ArrowRight className="w-3.5 h-3.5" />
-            </Link>
+
+            <div className="flex flex-wrap gap-1.5 p-1 rounded-xl bg-slate-100 dark:bg-slate-900/90 border border-slate-200 dark:border-slate-800">
+              {devTabs.map(({ id, label, icon: Icon }) => {
+                const selected = id === activeTab
+                return (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setActiveTab(id)}
+                    className={`relative px-3.5 py-2 rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 transition-colors ${
+                      selected ? 'text-white' : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                    }`}
+                  >
+                    {selected && (
+                      <motion.span
+                        layoutId="homeDevTab"
+                        transition={{ type: 'spring', stiffness: 420, damping: 32 }}
+                        className="absolute inset-0 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-500 shadow-sm"
+                      />
+                    )}
+                    <Icon className="relative z-10 w-3.5 h-3.5" />
+                    <span className="relative z-10">{label}</span>
+                  </button>
+                )
+              })}
+            </div>
           </div>
-          <div className="grid md:grid-cols-3 gap-3">
-            <CopySnippet label="JavaScript / TypeScript (npm)" cmd="npm install nebula-chain-sdk" />
-            <CopySnippet label="Python / AI Agents (PyPI)" cmd="pip install nebula-chain-sdk" />
-            <CopySnippet label="Developer CLI (npm)" cmd="npx nebula-chain-cli" />
-          </div>
-        </div>
+
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={currentTab.id}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.2 }}
+              className="grid lg:grid-cols-[1fr_1.6fr] gap-5 items-stretch"
+            >
+              <div className="rounded-2xl bg-slate-50 dark:bg-slate-900/70 border border-slate-200 dark:border-slate-800 p-5 flex flex-col justify-between gap-4">
+                <div>
+                  <div className="text-[11px] uppercase tracking-wider text-slate-500 font-semibold mb-2">Package / Command</div>
+                  <div className="flex items-center justify-between gap-2 rounded-xl bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 px-3.5 py-2.5">
+                    <code className="text-xs sm:text-sm font-mono text-slate-800 dark:text-cyan-300 truncate">{currentTab.install}</code>
+                    <button
+                      type="button"
+                      onClick={copyInstall}
+                      className="shrink-0 p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-500 transition-colors"
+                      aria-label="Copy command"
+                    >
+                      {copiedCmd ? <Check className="w-4 h-4 text-emerald-500" /> : <Copy className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+                  <span className="text-xs text-slate-500 dark:text-slate-400">Live RPC: <code className="font-mono">{apiUrl}</code></span>
+                  <Link
+                    to={currentTab.ctaTo}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 text-xs font-semibold hover:opacity-90 transition"
+                  >
+                    {currentTab.ctaLabel} <ArrowRight className="w-3.5 h-3.5" />
+                  </Link>
+                </div>
+              </div>
+
+              <pre className="rounded-2xl bg-slate-950 text-slate-200 border border-slate-800 p-5 text-xs sm:text-sm font-mono overflow-x-auto leading-relaxed">
+                <code>{currentTab.code}</code>
+              </pre>
+            </motion.div>
+          </AnimatePresence>
+        </motion.div>
       </section>
 
       {/* ── Get started ──────────────────────────────────────────── */}
@@ -215,8 +414,8 @@ export default function Home() {
             { n: 2, to: '/faucet', title: 'Claim test NBL', desc: 'Get free NBL from the live faucet in under two seconds.' },
             { n: 3, to: '/defi', title: 'Stake, swap, or deploy', desc: 'Provide AMM liquidity, delegate to validators, or launch contracts.' },
           ].map(({ n, to, title, desc, done }) => (
-            <li key={n}>
-              <Link to={to} className="group flex gap-4 p-5 rounded-2xl glass h-full hover:-translate-y-0.5 transition-all">
+            <motion.li key={n} whileHover={{ y: -3 }} transition={{ type: 'spring', stiffness: 350, damping: 25 }}>
+              <Link to={to} className="group flex gap-4 p-5 rounded-2xl glass h-full">
                 <span className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 text-sm font-semibold ${done ? 'bg-emerald-500/15 text-emerald-500' : 'bg-blue-500/10 text-blue-600 dark:text-blue-300'}`}>
                   {done ? <CheckCircle2 className="w-5 h-5" /> : n}
                 </span>
@@ -227,7 +426,7 @@ export default function Home() {
                   <span className="block mt-1 text-sm text-slate-500">{desc}</span>
                 </span>
               </Link>
-            </li>
+            </motion.li>
           ))}
         </ol>
       </section>
@@ -237,7 +436,7 @@ export default function Home() {
         <div className="flex items-end justify-between mb-4">
           <div>
             <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">Latest finalized blocks</h2>
-            <p className="text-sm text-slate-500 mt-1">Streamed directly from {getApiUrl()}</p>
+            <p className="text-sm text-slate-500 mt-1">Streamed directly from <span className="font-mono">{apiUrl}</span></p>
           </div>
           <Link to="/explorer" className="text-sm font-medium text-blue-600 dark:text-blue-300 hover:underline inline-flex items-center gap-1">
             Open Explorer <ArrowRight className="w-3.5 h-3.5" />
@@ -260,7 +459,12 @@ export default function Home() {
                   <tr><td colSpan={5} className="px-5 py-10 text-center text-slate-500">{status && !online ? 'Node offline — waiting for connection.' : 'Loading live blocks…'}</td></tr>
                 )}
                 {blocks.map((b) => (
-                  <tr key={b.header.slot} className="border-b last:border-0 border-slate-100 dark:border-slate-800/70 hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors">
+                  <motion.tr
+                    key={b.header.slot}
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="border-b last:border-0 border-slate-100 dark:border-slate-800/70 hover:bg-slate-50/70 dark:hover:bg-slate-800/30 transition-colors"
+                  >
                     <td className="px-5 py-3 font-mono font-medium">
                       <Link to={`/explorer?block=${b.header.slot}`} className="text-blue-600 dark:text-cyan-400 hover:underline">
                         #{fmt(b.header.slot)}
@@ -270,7 +474,7 @@ export default function Home() {
                     <td className="px-5 py-3 text-right tabular-nums">{b.extrinsics?.length ?? 0}</td>
                     <td className="px-5 py-3 text-right tabular-nums text-slate-500">{fmt(b.header.gas_used)}</td>
                     <td className="px-5 py-3 text-right tabular-nums text-slate-500">{b.commit?.precommits?.length ?? '—'}</td>
-                  </tr>
+                  </motion.tr>
                 ))}
               </tbody>
             </table>
@@ -287,21 +491,23 @@ export default function Home() {
           </div>
         </div>
         <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {PRODUCTS.map(({ to, icon: Icon, title, desc, tag }) => (
-            <Link key={to} to={to} className="group p-6 rounded-2xl glass card-hover-3d border border-slate-200/70 dark:border-slate-800/80">
-              <div className="flex items-center justify-between">
-                <span className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-500/15 to-cyan-500/15 text-blue-600 dark:text-cyan-300 flex items-center justify-center">
-                  <Icon className="w-5 h-5" />
-                </span>
-                <span className="text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                  {tag}
-                </span>
-              </div>
-              <div className="mt-4 flex items-center gap-1.5 font-semibold text-slate-900 dark:text-white">
-                {title}<ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
-              </div>
-              <p className="mt-1.5 text-sm text-slate-500 leading-relaxed">{desc}</p>
-            </Link>
+          {PRODUCTS.map(({ to, icon: Icon, title, desc, tag, chip }) => (
+            <motion.div key={to} whileHover={{ y: -4 }} transition={{ type: 'spring', stiffness: 360, damping: 24 }}>
+              <Link to={to} className="group block h-full p-6 rounded-2xl glass border border-slate-200/70 dark:border-slate-800/80">
+                <div className="flex items-center justify-between">
+                  <span className={`w-10 h-10 rounded-xl bg-gradient-to-br ${chip} text-white shadow-md flex items-center justify-center`}>
+                    <Icon className="w-5 h-5" />
+                  </span>
+                  <span className="text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                    {tag}
+                  </span>
+                </div>
+                <div className="mt-4 flex items-center gap-1.5 font-semibold text-slate-900 dark:text-white">
+                  {title}<ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:translate-x-0.5 transition-transform" />
+                </div>
+                <p className="mt-1.5 text-sm text-slate-500 leading-relaxed">{desc}</p>
+              </Link>
+            </motion.div>
           ))}
         </div>
         <div className="mt-5 flex flex-wrap gap-2">
@@ -315,7 +521,13 @@ export default function Home() {
 
       {/* ── Under the hood ───────────────────────────────────────── */}
       <section className="max-w-7xl mx-auto px-4 pb-8">
-        <div className="rounded-3xl glass-strong p-8 lg:p-10">
+        <motion.div
+          initial={{ opacity: 0, y: 16 }}
+          whileInView={{ opacity: 1, y: 0 }}
+          viewport={{ once: true, amount: 0.2 }}
+          transition={{ duration: 0.45 }}
+          className="rounded-3xl glass-strong p-8 lg:p-10"
+        >
           <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
             <div>
               <h2 className="text-2xl font-semibold text-slate-900 dark:text-white">Under the hood</h2>
@@ -341,7 +553,7 @@ export default function Home() {
             <span>Stake-weighted proposers</span>
             <span>Participation-based rewards</span>
           </div>
-        </div>
+        </motion.div>
       </section>
     </PageShell>
   )
