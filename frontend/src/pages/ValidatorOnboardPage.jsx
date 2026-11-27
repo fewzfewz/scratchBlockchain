@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, Activity, Server, BellRing, LogOut, Unlock, UserCheck, Download, Link2 } from 'lucide-react'
+import { Shield, RefreshCw, CheckCircle2, AlertCircle, ExternalLink, BookOpen, Activity, Server, BellRing, LogOut, Unlock, UserCheck, Download, Link2, Compass } from 'lucide-react'
 import { adminHeaders, signAndSubmit, waitForReceipt, walletAddress, loadWalletKeyPair, toHex, getApiUrl, nblToWei } from '../lib/chain.js'
 import { Page, PageHeader, Card, Field, Button, Notice, Badge, KeyValue, buttonClass, inputClass } from '../components/ui.jsx'
 
@@ -190,7 +190,7 @@ export default function ValidatorOnboardPage() {
 
   const downloadValidatorToml = () => {
     const toml = `[network]
-chain_id = "modular-testnet-1"
+chain_id = "nebula-testnet-1"
 p2p_port = 26656
 rpc_port = 26657
 bootstrap_nodes = []
